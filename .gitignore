@@ -1,0 +1,30 @@
+.build/
+.swiftpm/
+.DS_Store
+dist/
+release/
+*.dmg
+*.zip
+*.log
+
+# Local environment and credentials
+.env
+.env.*
+*.p12
+*.cer
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+
+# Local app/user data
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.portfolix-export.zip
+
+# Python helper caches
+__pycache__/
+*.pyc
