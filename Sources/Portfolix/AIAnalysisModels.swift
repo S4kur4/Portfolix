@@ -855,6 +855,42 @@ struct AIPositionPerformanceContext: Equatable, Sendable {
     let oneMonth: AIPerformanceWindowContext
 }
 
+struct AIFollowUpPortfolioContext: Encodable, Equatable, Sendable {
+    let schemaVersion = "ai-follow-up-portfolio-context.v1"
+    let snapshotDate: String
+    let generatedAt: String
+    let displayCurrency: String
+    let totalValueCNY: String
+    let totalValueDisplay: String
+    let today: AIFollowUpReturnContext
+    let positions: [AIFollowUpPositionContext]
+}
+
+struct AIFollowUpPositionContext: Encodable, Equatable, Sendable {
+    let positionRef: String
+    let displayLabel: String
+    let symbol: String
+    let assetType: String
+    let quoteCurrency: String
+    let quantity: String
+    let latestPrice: String
+    let marketValueCNY: String
+    let allocationPct: Double
+    let today: AIFollowUpReturnContext
+    let oneWeek: AIPerformanceWindowContext
+    let quoteTime: String
+    let fetchedAt: String
+    let source: String
+}
+
+struct AIFollowUpReturnContext: Encodable, Equatable, Sendable {
+    let status: String
+    let profitAmountCNY: String?
+    let profitAmountDisplay: String?
+    let returnRatePct: Double?
+    let calculationBasis: String
+}
+
 struct AIDataQualityContext: Encodable {
     let missingQuoteAllocationPct: Double
     let staleQuoteAllocationPct: Double

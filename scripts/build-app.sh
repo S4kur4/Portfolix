@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR=${0:A:h:h}
 BUILD_DIR="$ROOT_DIR/.build"
 APP_VERSION="0.1.0"
-BUILD_NUMBER="6"
+BUILD_NUMBER="7"
 COPYRIGHT_TEXT="Copyright © 2026 S4kur4. All rights reserved."
 EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/Portfolix"
 HELPER_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixPriceUpdater"

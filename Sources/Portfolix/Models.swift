@@ -1475,12 +1475,14 @@ final class PortfolioStore: ObservableObject {
 
         do {
             let artifacts = try positionRepository?.fetchLatestAIAnalysisArtifacts() ?? nil
+            let followUpContext = makeAIFollowUpPortfolioContext(asOf: Date())
             let result = try await aiAgent.answerFollowUp(
                 question: question,
                 report: report,
                 artifacts: artifacts,
                 chatHistory: aiAnalysisChatItems,
                 positions: positions,
+                portfolioContext: followUpContext,
                 llmConfiguration: aiConfiguration,
                 searchConfiguration: searchConfiguration,
                 progress: { [weak self] progress in
@@ -2178,6 +2180,107 @@ final class PortfolioStore: ObservableObject {
             freshness: .updated
         )
         return true
+    }
+
+    private func makeAIFollowUpPortfolioContext(asOf date: Date) -> AIFollowUpPortfolioContext {
+        let generatedAt = Self.isoDateFormatter.string(from: date)
+        let snapshotDate = Self.aiSnapshotDayFormatter.string(from: date)
+        let positionPerformance = loadAIPositionPerformance(asOf: date)
+        let totalValue = totalValueCNY
+        let totalValueForAllocation = max(totalValue.doubleValue, 0.001)
+        let portfolioTodayProfit = todayProfitCNY(asOf: date)
+        let nonCashPositions = positions.filter { $0.category != .cash }
+        let availableTodayCount = nonCashPositions.filter { todayReturnStatus(for: $0, asOf: date) == "available" }.count
+        let portfolioTodayStatus: String
+        if nonCashPositions.isEmpty {
+            portfolioTodayStatus = "not_applicable_cash"
+        } else if availableTodayCount == nonCashPositions.count {
+            portfolioTodayStatus = "available"
+        } else if availableTodayCount > 0 {
+            portfolioTodayStatus = "partial"
+        } else {
+            portfolioTodayStatus = "unavailable"
+        }
+
+        let positionContexts = positions
+            .sorted { $0.marketValueCNY > $1.marketValueCNY }
+            .map { position in
+                let todayProfit = todayProfitCNY(for: position, asOf: date)
+                let todayStatus = todayReturnStatus(for: position, asOf: date)
+                let baseline = position.marketValueCNY - todayProfit
+                let todayReturnRate = todayStatus == "available" && baseline != 0
+                    ? (todayProfit / baseline * 100).doubleValue
+                    : nil
+                let performance = positionPerformance[position.id]
+                    ?? unavailableFollowUpPerformance(for: position, generatedAt: date)
+                return AIFollowUpPositionContext(
+                    positionRef: "position_\(position.id.uuidString)",
+                    displayLabel: position.name,
+                    symbol: position.symbol,
+                    assetType: position.category.aiCode,
+                    quoteCurrency: position.quoteCurrency.rawValue,
+                    quantity: Self.aiDecimalString(position.quantity),
+                    latestPrice: Self.aiDecimalString(position.latestPrice),
+                    marketValueCNY: Self.aiDecimalString(position.marketValueCNY),
+                    allocationPct: position.marketValueCNY.doubleValue / totalValueForAllocation * 100,
+                    today: AIFollowUpReturnContext(
+                        status: todayStatus,
+                        profitAmountCNY: todayStatus == "available" ? Self.aiDecimalString(todayProfit) : nil,
+                        profitAmountDisplay: todayStatus == "available" ? formatSignedMoney(converted(todayProfit), currency: displayCurrency) : nil,
+                        returnRatePct: todayReturnRate,
+                        calculationBasis: "latest_price_change_from_previous_recorded_price_when_quote_fetched_today"
+                    ),
+                    oneWeek: performance.oneWeek,
+                    quoteTime: position.quoteTime,
+                    fetchedAt: position.fetchedAt,
+                    source: position.source
+                )
+            }
+
+        return AIFollowUpPortfolioContext(
+            snapshotDate: snapshotDate,
+            generatedAt: generatedAt,
+            displayCurrency: displayCurrency.rawValue,
+            totalValueCNY: Self.aiDecimalString(totalValue),
+            totalValueDisplay: formatMoney(converted(totalValue), currency: displayCurrency),
+            today: AIFollowUpReturnContext(
+                status: portfolioTodayStatus,
+                profitAmountCNY: portfolioTodayStatus == "unavailable" ? nil : Self.aiDecimalString(portfolioTodayProfit),
+                profitAmountDisplay: portfolioTodayStatus == "unavailable" ? nil : formatSignedMoney(converted(portfolioTodayProfit), currency: displayCurrency),
+                returnRatePct: portfolioTodayStatus == "unavailable" ? nil : todayProfitRate(asOf: date).doubleValue,
+                calculationBasis: "sum_of_position_today_returns_when_quote_fetched_today"
+            ),
+            positions: positionContexts
+        )
+    }
+
+    private func todayReturnStatus(for position: Position, asOf date: Date) -> String {
+        guard position.category != .cash else { return "not_applicable_cash" }
+        guard position.weeklyTrend.count >= 2, position.wasFetchedOnSameDay(as: date) else {
+            return "unavailable"
+        }
+        return "available"
+    }
+
+    private func unavailableFollowUpPerformance(
+        for position: Position,
+        generatedAt: Date
+    ) -> AIPositionPerformanceContext {
+        func window(days: Int) -> AIPerformanceWindowContext {
+            AIPerformanceWindowContext(
+                status: "insufficient_history",
+                periodDays: days,
+                startDate: nil,
+                endDate: Self.aiSnapshotDayFormatter.string(from: generatedAt),
+                startPrice: nil,
+                endPrice: Self.aiDecimalString(position.latestPrice),
+                profitAmountQuote: nil,
+                returnRatePct: nil,
+                observationDays: nil,
+                calculationBasis: "price_change_times_current_quantity_excludes_trades_fees_fx"
+            )
+        }
+        return AIPositionPerformanceContext(oneWeek: window(days: 7), oneMonth: window(days: 30))
     }
 
     private func loadAIPositionPerformance(asOf date: Date) -> [Position.ID: AIPositionPerformanceContext] {

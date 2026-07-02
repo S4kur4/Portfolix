@@ -240,7 +240,7 @@ enum LLMOutputTokenPolicy {
     static let connectionValidation = 16
     static let validationProbe = 64
     static let standard = 2_400
-    static let followUp = 3_200
+    static let followUp = 6_400
     static let reportGeneration = 6_000
 }
 

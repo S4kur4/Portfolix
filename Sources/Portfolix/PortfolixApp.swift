@@ -12,8 +12,9 @@ struct PortfolixApp: App {
                 .environmentObject(store)
                 .frame(minWidth: 1180, minHeight: 760)
         }
-        .defaultSize(width: 1440, height: 940)
+        .defaultSize(width: 1180, height: 760)
         .windowResizability(.contentMinSize)
+        .restorationBehavior(.disabled)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appInfo) {

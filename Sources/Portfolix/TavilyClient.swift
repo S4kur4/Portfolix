@@ -218,7 +218,7 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
                 components.scheme?.lowercased() == "https",
                 components.host != nil,
                 !containsInstructionLikeContent("\(result.title) \(result.content)"),
-                positions.contains(where: { isRelevant(result, to: $0) })
+                positions.isEmpty || positions.contains(where: { isRelevant(result, to: $0) })
             else { return nil }
             let domain = domain(from: url)
             let snippet = sanitizedSnippet(result.content)

@@ -241,6 +241,7 @@ struct AIAnalysisAgent: Sendable {
         artifacts: AIAnalysisArtifactBundle?,
         chatHistory: [AIReportChatItem] = [],
         positions: [Position],
+        portfolioContext: AIFollowUpPortfolioContext? = nil,
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
         progress: AIFollowUpProgressHandler? = nil
@@ -255,6 +256,7 @@ struct AIAnalysisAgent: Sendable {
         let reportJSON = String(data: try Self.encoder.encode(report), encoding: .utf8) ?? "{}"
         let artifactSummary = artifacts.map(Self.followUpArtifactSummary) ?? "没有可用的持久化审计摘要。"
         let conversationHistoryJSON = Self.followUpConversationHistoryJSON(chatHistory)
+        let portfolioContextJSON = Self.followUpPortfolioContextJSON(portfolioContext)
         var searchMode = "disabled"
         var toolCallCount = 0
         var toolResults: [AIWebSearchToolResult] = []
@@ -270,6 +272,7 @@ struct AIAnalysisAgent: Sendable {
                     question: normalizedQuestion,
                     reportJSON: reportJSON,
                     conversationHistoryJSON: conversationHistoryJSON,
+                    portfolioContextJSON: portfolioContextJSON,
                     positions: positions,
                     configuration: llmConfiguration,
                     apiKey: llmKey
@@ -336,6 +339,7 @@ struct AIAnalysisAgent: Sendable {
                 reportJSON: reportJSON,
                 conversationHistoryJSON: conversationHistoryJSON,
                 artifactSummary: artifactSummary,
+                portfolioContextJSON: portfolioContextJSON,
                 searchMode: searchMode,
                 toolResultsJSON: toolResultsJSON,
                 responseLanguage: responseLanguage
@@ -343,13 +347,34 @@ struct AIAnalysisAgent: Sendable {
             configuration: followUpConfiguration,
             apiKey: llmKey
         )
-        let validated = try await validatedFollowUpResponse(
+        var validated = try await validatedFollowUpResponse(
             raw,
             question: normalizedQuestion,
             responseLanguage: responseLanguage,
             configuration: followUpConfiguration,
             apiKey: llmKey
         )
+        var usedExpansion = false
+        if Self.shouldExpandGeneralMarketFollowUpAnswer(
+            validated.answer,
+            searchMode: searchMode,
+            toolResults: toolResults
+        ), let expanded = try? await expandedFollowUpResponse(
+            originalAnswer: validated.answer,
+            question: normalizedQuestion,
+            reportJSON: reportJSON,
+            conversationHistoryJSON: conversationHistoryJSON,
+            artifactSummary: artifactSummary,
+            portfolioContextJSON: portfolioContextJSON,
+            searchMode: searchMode,
+            toolResultsJSON: toolResultsJSON,
+            responseLanguage: responseLanguage,
+            configuration: followUpConfiguration,
+            apiKey: llmKey
+        ), expanded.answer.count > validated.answer.count {
+            validated = expanded
+            usedExpansion = true
+        }
         let payload = validated.payload
         let answer = AIUserFacingTextSanitizer.sanitize(validated.answer, language: responseLanguage)
         let guardrailResultJSON = String(
@@ -358,7 +383,9 @@ struct AIAnalysisAgent: Sendable {
                     status: "passed",
                     validator: "AIFollowUpGuardrail",
                     checkedAt: ISO8601DateFormatter().string(from: .now),
-                    notes: payload.limitations + (validated.usedRepair ? ["follow_up_response_repaired"] : [])
+                    notes: payload.limitations
+                        + (validated.usedRepair ? ["follow_up_response_repaired"] : [])
+                        + (usedExpansion ? ["follow_up_response_expanded"] : [])
                 )
             ),
             encoding: .utf8
@@ -399,10 +426,59 @@ struct AIAnalysisAgent: Sendable {
         return (validated.payload, validated.answer, true)
     }
 
+    private func expandedFollowUpResponse(
+        originalAnswer: String,
+        question: String,
+        reportJSON: String,
+        conversationHistoryJSON: String,
+        artifactSummary: String,
+        portfolioContextJSON: String,
+        searchMode: String,
+        toolResultsJSON: String,
+        responseLanguage: AIResponseLanguage,
+        configuration: AIProviderConfiguration,
+        apiKey: String
+    ) async throws -> (payload: LLMFollowUpPayload, answer: String, usedRepair: Bool) {
+        let raw = try await llm.completeJSON(
+            systemPrompt: AIAnalysisPromptText.followUpExpansionSystem,
+            userPrompt: AIAnalysisPromptText.followUpExpansionUser(
+                originalAnswer: originalAnswer,
+                question: question,
+                reportJSON: reportJSON,
+                conversationHistoryJSON: conversationHistoryJSON,
+                artifactSummary: artifactSummary,
+                portfolioContextJSON: portfolioContextJSON,
+                searchMode: searchMode,
+                toolResultsJSON: toolResultsJSON,
+                responseLanguage: responseLanguage
+            ),
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        return try await validatedFollowUpResponse(
+            raw,
+            question: question,
+            responseLanguage: responseLanguage,
+            configuration: configuration,
+            apiKey: apiKey
+        )
+    }
+
+    private static func shouldExpandGeneralMarketFollowUpAnswer(
+        _ answer: String,
+        searchMode: String,
+        toolResults: [AIWebSearchToolResult]
+    ) -> Bool {
+        searchMode == "connected_search_completed"
+            && answer.count < 600
+            && toolResults.contains { $0.positionRefs.isEmpty && $0.status == "ok" && !$0.sources.isEmpty }
+    }
+
     private func makeFollowUpToolPlan(
         question: String,
         reportJSON: String,
         conversationHistoryJSON: String,
+        portfolioContextJSON: String,
         positions: [Position],
         configuration: AIProviderConfiguration,
         apiKey: String
@@ -422,7 +498,8 @@ struct AIAnalysisAgent: Sendable {
                 question: question,
                 positionsJSON: positionsJSON,
                 reportJSON: reportJSON,
-                conversationHistoryJSON: conversationHistoryJSON
+                conversationHistoryJSON: conversationHistoryJSON,
+                portfolioContextJSON: portfolioContextJSON
             ),
             configuration: configuration,
             apiKey: apiKey
@@ -433,7 +510,9 @@ struct AIAnalysisAgent: Sendable {
         return try Self.validatedToolPlan(
             decoded,
             allowedRefs: Set(identities.map(\.positionRef)),
-            allowedSearchTerms: Self.allowedSearchTerms(positions: positions)
+            allowedSearchTerms: Self.allowedSearchTerms(positions: positions),
+            allowsGeneralQueries: true,
+            contextQuestion: question
         )
     }
 
@@ -443,6 +522,16 @@ struct AIAnalysisAgent: Sendable {
             "联网资料摘要：\(String(artifacts.toolResultsJSON.prefix(800)))",
             "安全校验摘要：\(String(artifacts.guardrailResultJSON.prefix(500)))",
         ].joined(separator: "\n")
+    }
+
+    private static func followUpPortfolioContextJSON(_ context: AIFollowUpPortfolioContext?) -> String {
+        guard let context,
+              let data = try? inputEncoder.encode(context),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return json
     }
 
     private static func followUpConversationHistoryJSON(_ items: [AIReportChatItem]) -> String {
@@ -476,6 +565,23 @@ struct AIAnalysisAgent: Sendable {
         positions: [Position],
         chatHistory: [AIReportChatItem]
     ) throws -> AIWebSearchToolPlan {
+        let mentionsKnownPosition = positions.contains { textMentionsPosition(question, position: $0) }
+        if !mentionsKnownPosition, let generalQuery = fallbackGeneralMarketSearchQuery(for: question) {
+            return try validatedToolPlan(
+                AIWebSearchToolPlan(toolCalls: [
+                    AIWebSearchToolCall(
+                        id: "web_search_1",
+                        query: generalQuery,
+                        positionRefs: []
+                    ),
+                ]),
+                allowedRefs: Set(positions.map { "position_\($0.id.uuidString)" }),
+                allowedSearchTerms: allowedSearchTerms(positions: positions),
+                allowsGeneralQueries: true,
+                contextQuestion: question
+            )
+        }
+
         let candidates = followUpSearchCandidates(
             question: question,
             positions: positions,
@@ -491,8 +597,28 @@ struct AIAnalysisAgent: Sendable {
         return try validatedToolPlan(
             AIWebSearchToolPlan(toolCalls: calls),
             allowedRefs: Set(positions.map { "position_\($0.id.uuidString)" }),
-            allowedSearchTerms: allowedSearchTerms(positions: positions)
+            allowedSearchTerms: allowedSearchTerms(positions: positions),
+            allowsGeneralQueries: true,
+            contextQuestion: question
         )
+    }
+
+    private static func fallbackGeneralMarketSearchQuery(for question: String) -> String? {
+        let normalized = normalizedIdentityText(question)
+        let asksForGeneralMarket = [
+            "美股", "美国股市", "美股市场", "美股行情", "美股新闻",
+            "纳斯达克", "纳指", "标普", "标普500", "道琼斯", "道指",
+            "usstock", "u.s.stock", "usmarket", "stockmarket", "nasdaq", "s&p500", "sp500", "dowjones",
+        ].contains { normalized.contains(normalizedIdentityText($0)) }
+        guard asksForGeneralMarket else { return nil }
+
+        let asksForLastSession = ["昨晚", "昨日", "昨天", "lastnight", "yesterday"].contains {
+            normalized.contains(normalizedIdentityText($0))
+        }
+        let query = asksForLastSession
+            ? "昨晚 美股 三大指数 收盘 行情 纳斯达克 标普500 道琼斯 财经新闻"
+            : "最新 美股市场 新闻 三大指数 纳斯达克 标普500 道琼斯 科技股"
+        return String(query.prefix(180))
     }
 
     private static func followUpSearchCandidates(
@@ -690,6 +816,9 @@ struct AIAnalysisAgent: Sendable {
                     configuration: configuration,
                     apiKey: apiKey
                 )
+                let emptySearchLimitation = call.positionRefs.isEmpty
+                    ? "搜索未返回可用的公开 HTTPS 来源"
+                    : "搜索未返回与指定持仓直接相关的可用 HTTPS 来源"
                 results.append(
                     AIWebSearchToolResult(
                         callID: call.id,
@@ -698,7 +827,7 @@ struct AIAnalysisAgent: Sendable {
                         searchedAt: .now,
                         status: sources.isEmpty ? "empty" : "ok",
                         sources: sources,
-                        limitations: sources.isEmpty ? ["搜索未返回与指定持仓直接相关的可用 HTTPS 来源"] : []
+                        limitations: sources.isEmpty ? [emptySearchLimitation] : []
                     )
                 )
             } catch {
@@ -1252,7 +1381,9 @@ struct AIAnalysisAgent: Sendable {
     static func validatedToolPlan(
         _ plan: AIWebSearchToolPlan,
         allowedRefs: Set<String>,
-        allowedSearchTerms: [String: Set<String>] = [:]
+        allowedSearchTerms: [String: Set<String>] = [:],
+        allowsGeneralQueries: Bool = false,
+        contextQuestion: String? = nil
     ) throws -> AIWebSearchToolPlan {
         guard plan.toolCalls.count <= 3 else { throw AIAnalysisAgentError.invalidReport }
         let prohibitedQueryFragments = [
@@ -1264,13 +1395,17 @@ struct AIAnalysisAgent: Sendable {
         var seenQueries = Set<String>()
         var normalizedCalls: [AIWebSearchToolCall] = []
         for (index, call) in plan.toolCalls.enumerated() {
-            let query = call.query
+            var query = call.query
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ")
                 .split(separator: " ")
                 .joined(separator: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let refs = Array(NSOrderedSet(array: call.positionRefs).compactMap { $0 as? String })
+            let isGeneralQuery = refs.isEmpty && allowsGeneralQueries
+            if isGeneralQuery {
+                query = Self.optimizedGeneralMarketQuery(query, contextQuestion: contextQuestion)
+            }
             let allowedTerms = refs.reduce(into: Set<String>()) { partial, ref in
                 partial.formUnion(allowedSearchTerms[ref] ?? [])
             }
@@ -1281,10 +1416,11 @@ struct AIAnalysisAgent: Sendable {
             let identityNumbers = Set(allowedTerms.flatMap { Self.numberTokens(in: $0) })
             guard
                 (8...180).contains(query.count),
-                (1...3).contains(refs.count),
+                isGeneralQuery || (1...3).contains(refs.count),
                 refs.allSatisfy({ allowedRefs.contains($0) }),
-                queryNamesEveryRef,
-                queryNumbers.isSubset(of: identityNumbers),
+                isGeneralQuery || queryNamesEveryRef,
+                isGeneralQuery || queryNumbers.isSubset(of: identityNumbers),
+                !isGeneralQuery || Self.isAcceptableGeneralMarketQuery(query),
                 prohibitedQueryFragments.allSatisfy({ !query.localizedCaseInsensitiveContains($0) }),
                 seenQueries.insert(query.lowercased()).inserted
             else {
@@ -1318,6 +1454,52 @@ struct AIAnalysisAgent: Sendable {
         return Set(expression.matches(in: value, range: range).compactMap { match in
             Range(match.range, in: value).map { String(value[$0]) }
         })
+    }
+
+    private static func isAcceptableGeneralMarketQuery(_ query: String) -> Bool {
+        let normalized = normalizedIdentityText(query)
+        let marketHints = [
+            "美股", "美国股市", "市场", "行情", "新闻", "指数", "纳斯达克", "纳指", "标普", "道琼斯",
+            "股市", "宏观", "政策", "监管", "财报", "行业", "科技股",
+            "market", "stock", "stocks", "index", "indices", "nasdaq", "sp500", "s&p500", "dowjones",
+            "earnings", "fed", "inflation", "rates", "sector", "technology",
+        ]
+        return marketHints.contains { normalized.contains(normalizedIdentityText($0)) }
+    }
+
+    private static func optimizedGeneralMarketQuery(_ query: String, contextQuestion: String? = nil) -> String {
+        let normalizedContext = normalizedIdentityText([query, contextQuestion].compactMap(\.self).joined(separator: " "))
+        let isUSMarketQuery = [
+            "美股", "美国股市", "纳斯达克", "纳指", "标普", "标普500", "道琼斯", "道指",
+            "usstock", "u.s.stock", "usmarket", "stockmarket", "nasdaq", "s&p500", "sp500", "dowjones",
+        ].contains { normalizedContext.contains(normalizedIdentityText($0)) }
+        guard isUSMarketQuery else {
+            return String(query.prefix(180))
+        }
+
+        let asksForLastSession = ["昨晚", "昨日", "昨天", "收盘", "lastnight", "yesterday", "close"].contains {
+            normalizedContext.contains(normalizedIdentityText($0))
+        }
+        var optimized = query
+        func appendIfMissing(_ phrase: String, hints: [String]) {
+            let normalizedOptimized = Self.normalizedIdentityText(optimized)
+            guard !hints.contains(where: { normalizedOptimized.contains(Self.normalizedIdentityText($0)) }) else {
+                return
+            }
+            optimized = [optimized, phrase]
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        appendIfMissing("US stock market", hints: ["US stock market", "U.S. stock market", "US market"])
+        if asksForLastSession {
+            appendIfMissing("yesterday close", hints: ["yesterday", "close", "昨晚", "昨日", "昨天", "收盘"])
+        } else {
+            appendIfMissing("latest news", hints: ["latest", "news", "最新", "新闻"])
+        }
+        appendIfMissing("Nasdaq S&P 500 Dow Jones", hints: ["Nasdaq", "S&P 500", "SP500", "Dow Jones"])
+        appendIfMissing("Reuters CNBC MarketWatch", hints: ["Reuters", "CNBC", "MarketWatch"])
+        return String(optimized.prefix(180))
     }
 
     static func decodeInvestmentProfilePayload(_ raw: String) -> LLMInvestmentProfilePayload? {
@@ -2152,7 +2334,7 @@ enum AIFollowUpGuardrail {
 
     static func validatedAnswer(_ answer: String) throws -> String {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 1200 else {
+        guard !trimmed.isEmpty, trimmed.count <= 3000 else {
             throw AIAnalysisAgentError.invalidReport
         }
         try validateAnswerCompleteness(trimmed)

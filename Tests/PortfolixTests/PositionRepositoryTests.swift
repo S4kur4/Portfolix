@@ -1906,7 +1906,7 @@ struct PositionRepositoryTests {
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("output_language = en"))
         #expect(AIAnalysisPromptText.followUpSystem.contains("response_language"))
         #expect(LLMRequestTimeoutPolicy.reportGeneration == 300)
-        #expect(LLMOutputTokenPolicy.followUp == 3_200)
+        #expect(LLMOutputTokenPolicy.followUp == 6_400)
         #expect(LLMOutputTokenPolicy.reportGeneration == 6_000)
         #expect(AIAnalysisPromptText.repairUser(rawReport: "{}", inputJSON: "{}").contains("target_report_shape"))
     }
@@ -2425,6 +2425,27 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func tavilySourcesAllowGeneralMarketSearchWithoutPositionFilter() throws {
+        let response = TavilySearchResponse(
+            query: "最新 美股市场 新闻 三大指数",
+            results: [
+                TavilySearchResult(
+                    title: "US stocks close higher as Nasdaq leads gains",
+                    url: "https://www.reuters.com/markets/us/",
+                    content: "US stock indexes moved after technology shares rallied.",
+                    publishedDate: "2026-07-01"
+                ),
+            ]
+        )
+
+        let sources = TavilyClient.sources(from: response, positions: [])
+
+        #expect(sources.count == 1)
+        #expect(sources.first?.domain == "reuters.com")
+        #expect(sources.first?.credibility == .mainstream)
+    }
+
+    @Test
     func tavilyResponseRejectsHTTPAndIrrelevantFundCodeCollisions() throws {
         let response = TavilySearchResponse(
             query: "测试基金",
@@ -2852,6 +2873,119 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
+    func aiFollowUpSendsCurrentPortfolioContextToPlannerAndAnswer() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            quantity: 10,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 112
+        )
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
+        let oneWeek = AIPerformanceWindowContext(
+            status: "available",
+            periodDays: 7,
+            startDate: "2026-06-25",
+            endDate: "2026-07-02",
+            startPrice: "100",
+            endPrice: "112",
+            profitAmountQuote: "120",
+            returnRatePct: 12,
+            observationDays: 7,
+            calculationBasis: "test_price_change"
+        )
+        let portfolioContext = AIFollowUpPortfolioContext(
+            snapshotDate: "2026-07-02",
+            generatedAt: "2026-07-02T12:00:00Z",
+            displayCurrency: "CNY",
+            totalValueCNY: "7607.8934",
+            totalValueDisplay: "¥7,607.89",
+            today: AIFollowUpReturnContext(
+                status: "available",
+                profitAmountCNY: "135.86",
+                profitAmountDisplay: "+¥135.86",
+                returnRatePct: 1.818,
+                calculationBasis: "test_today_return"
+            ),
+            positions: [
+                AIFollowUpPositionContext(
+                    positionRef: positionRef,
+                    displayLabel: "Apple",
+                    symbol: "AAPL",
+                    assetType: AssetCategory.usStock.aiCode,
+                    quoteCurrency: DisplayCurrency.usd.rawValue,
+                    quantity: "10",
+                    latestPrice: "112",
+                    marketValueCNY: "7607.8934",
+                    allocationPct: 100,
+                    today: AIFollowUpReturnContext(
+                        status: "available",
+                        profitAmountCNY: "135.86",
+                        profitAmountDisplay: "+¥135.86",
+                        returnRatePct: 1.818,
+                        calculationBasis: "test_today_return"
+                    ),
+                    oneWeek: oneWeek,
+                    quoteTime: "2026-07-02T12:00:00Z",
+                    fetchedAt: "2026-07-02T12:00:00Z",
+                    source: "Test"
+                ),
+            ]
+        )
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptText.reportVersion,
+            riskProfileVersion: 1,
+            summary: "组合包含 Apple 持仓。",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [],
+            assetAlerts: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: [],
+            sources: []
+        )
+        let llm = MockLLMCompleter(responses: [
+            #"{"tool_calls":[]}"#,
+            #"{"answer":"今日收益和近一周收益已作为当前上下文参与判断。","limitations":[]}"#,
+        ])
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: MockTavilySearcher(),
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "search-key"])
+        )
+
+        let result = try await agent.answerFollowUp(
+            question: "这份报告里的今日收益和近一周表现怎么看？",
+            report: report,
+            artifacts: nil,
+            chatHistory: [AIReportChatItem.report(report, AIAnalysisRun(status: .completed, model: "mock"))],
+            positions: store.positions,
+            portfolioContext: portfolioContext,
+            llmConfiguration: AIProviderConfiguration.default,
+            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 3)
+        )
+
+        let prompts = await llm.userPrompts()
+        #expect(result.searchMode == "connected_no_search_needed")
+        #expect(result.toolCallCount == 0)
+        #expect(await llm.requestCount() == 2)
+        #expect(prompts.first?.contains("<portfolio_context>") == true)
+        #expect(prompts.last?.contains("<portfolio_context>") == true)
+        #expect(prompts.first?.contains(#""today""#) == true)
+        #expect(prompts.last?.contains(#""one_week""#) == true)
+        #expect(prompts.last?.contains(#""profit_amount_cny":"135.86""#) == true)
+        #expect(prompts.last?.contains(#""return_rate_pct":12"#) == true)
+    }
+
+    @MainActor
+    @Test
     func aiFollowUpRoutesEnglishQuestionWithChineseAssetNameToEnglish() async throws {
         let report = AIAnalysisReport(
             generatedAt: .now,
@@ -3029,6 +3163,68 @@ struct PositionRepositoryTests {
         #expect(await tavily.searchedQueries().first?.contains("华夏国证半导体芯片ETF联接A") == true)
         #expect(await tavily.searchedQueries().first?.contains("近期表现") == true)
         #expect(await llm.requestCount() == 2)
+        #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
+        #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
+    }
+
+    @MainActor
+    @Test
+    func aiExplicitMarketFollowUpSearchUsesGeneralMarketQuery() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "BTC",
+            symbol: "BTC/USDT",
+            category: .crypto,
+            quantity: 0.1,
+            averageCost: 69_000,
+            quoteCurrency: .usdt,
+            latestPrice: 60_000
+        )
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptText.reportVersion,
+            riskProfileVersion: 1,
+            summary: "组合中包含 BTC 和部分海外科技主题基金，需要结合外部市场背景观察。",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [],
+            assetAlerts: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: [],
+            sources: []
+        )
+        let llm = MockLLMCompleter(responses: [
+            #"{"tool_calls":[]}"#,
+            #"{"answer":"本轮搜索会按泛市场口径处理，而不是强行绑定到 BTC 或单只基金。若美股新闻显示三大指数和科技板块同步走弱，组合中的海外科技主题基金可能承受更高波动；若只是个别指数或短线消息扰动，则更适合观察后续交易日确认。","limitations":["泛市场新闻不能替代单只基金净值和持仓明细"]}"#,
+            #"{"answer":"本轮搜索会按泛市场口径处理，而不是强行绑定到 BTC 或单只基金。搜索结果主要用于补充美股指数、科技板块和海外风险偏好的近期背景：如果三大指数同步走弱，且纳斯达克或大型科技股承压，组合中的海外科技主题基金可能会受到估值回撤和汇率波动的共同影响；如果只是个别指数或短线消息扰动，则更适合继续观察后续交易日是否确认趋势。结合当前报告，重点不是立刻根据一条新闻调整仓位，而是把美股市场方向、科技板块强弱和组合中海外科技暴露放在一起看。后续可以继续关注纳斯达克、S&P 500、Dow Jones 的收盘方向，以及相关基金净值是否出现连续回撤。","limitations":["泛市场新闻不能替代单只基金净值和持仓明细"]}"#,
+        ])
+        let tavily = MockTavilySearcher()
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: tavily,
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+        )
+
+        let result = try await agent.answerFollowUp(
+            question: "试着搜索一下最新的美股市场新闻",
+            report: report,
+            artifacts: nil,
+            chatHistory: [AIReportChatItem.report(report, AIAnalysisRun(status: .completed, model: "mock"))],
+            positions: store.positions,
+            llmConfiguration: AIProviderConfiguration.default,
+            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5)
+        )
+
+        #expect(result.searchMode == "connected_search_completed")
+        #expect(result.toolCallCount == 1)
+        #expect(result.toolResultCount == 1)
+        #expect(result.answer.contains("泛市场"))
+        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(await tavily.searchedQueries().first?.contains("US stock market") == true)
+        #expect(await tavily.searchedQueries().first?.contains("Nasdaq") == true)
+        #expect(await llm.requestCount() == 3)
         #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
     }

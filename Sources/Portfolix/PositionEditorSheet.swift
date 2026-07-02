@@ -187,12 +187,13 @@ struct PositionEditorSheet: View {
                     Section {
                         EditorNoticeRow(
                             symbol: "exclamationmark.triangle.fill",
-                            title: sheetText("份额已发生变化", "Shares Changed"),
-                            message: costChangeReminderText,
+                            title: costChangeReminderText,
                             tint: PortfolixTheme.amber,
-                            titleColor: PortfolixTheme.primaryText
+                            titleColor: PortfolixTheme.amber
                         )
                     }
+                    .listRowBackground(PortfolixTheme.panel)
+                    .listRowSeparator(.hidden)
                 }
 
                 if let validationMessage {
