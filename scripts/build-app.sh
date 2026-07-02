@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR=${0:A:h:h}
 BUILD_DIR="$ROOT_DIR/.build"
 APP_VERSION="0.1.0"
-BUILD_NUMBER="1"
+BUILD_NUMBER="6"
 COPYRIGHT_TEXT="Copyright © 2026 S4kur4. All rights reserved."
 EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/Portfolix"
 HELPER_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixPriceUpdater"
@@ -30,14 +30,12 @@ if [[ ! -x "$HELPER_EXECUTABLE" ]]; then
   exit 1
 fi
 
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources/Helpers"
-mkdir -p "$HELPER_APP_DIR/Contents/MacOS" "$HELPER_APP_DIR/Contents/Resources/Helpers"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+mkdir -p "$HELPER_APP_DIR/Contents/MacOS" "$HELPER_APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/Support/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Portfolix"
-cp "$ROOT_DIR/Helpers/portfolix-akshare-bridge.py" "$APP_DIR/Contents/Resources/Helpers/portfolix-akshare-bridge.py"
-chmod 644 "$APP_DIR/Contents/Resources/Helpers/portfolix-akshare-bridge.py"
 
-cat > "$HELPER_APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$HELPER_APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -68,8 +66,6 @@ cat > "$HELPER_APP_DIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 cp "$HELPER_EXECUTABLE" "$HELPER_APP_DIR/Contents/MacOS/PortfolixPriceUpdater"
-cp "$ROOT_DIR/Helpers/portfolix-akshare-bridge.py" "$HELPER_APP_DIR/Contents/Resources/Helpers/portfolix-akshare-bridge.py"
-chmod 644 "$HELPER_APP_DIR/Contents/Resources/Helpers/portfolix-akshare-bridge.py"
 
 codesign --force --sign - "$HELPER_APP_DIR"
 codesign --force --sign - "$APP_DIR"

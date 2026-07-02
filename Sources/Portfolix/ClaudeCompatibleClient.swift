@@ -1,6 +1,6 @@
 import Foundation
 
-final class ClaudeCompatibleClient: LLMCompleting, LLMModelListing, @unchecked Sendable {
+final class ClaudeCompatibleClient: LLMCompleting, LLMConnectionValidating, LLMModelListing, @unchecked Sendable {
     static let shared = ClaudeCompatibleClient()
 
     private let session: URLSession
@@ -37,6 +37,36 @@ final class ClaudeCompatibleClient: LLMCompleting, LLMModelListing, @unchecked S
             throw LLMClientError.invalidResponse
         }
         return text
+    }
+
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { throw LLMClientError.missingAPIKey }
+        guard let url = messagesURL(baseURL: configuration.baseURL) else { throw LLMClientError.invalidBaseURL }
+        var request = URLRequest(url: url, timeoutInterval: configuration.requestTimeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.httpBody = try JSONEncoder().encode(
+            ClaudeMessageRequest(
+                model: configuration.model,
+                maxTokens: min(configuration.maxOutputTokens, LLMOutputTokenPolicy.connectionValidation),
+                temperature: 0,
+                system: "Respond briefly.",
+                messages: [
+                    ClaudeMessage(role: "user", content: "Hi"),
+                ]
+            )
+        )
+
+        let (data, response) = try await session.data(for: request)
+        try Self.validate(response: response)
+        let decoded = try JSONDecoder().decode(ClaudeMessageResponse.self, from: data)
+        guard let text = decoded.content.first(where: { $0.type == "text" })?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            throw LLMClientError.invalidResponse
+        }
     }
 
     func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String] {
@@ -77,6 +107,8 @@ final class ClaudeCompatibleClient: LLMCompleting, LLMModelListing, @unchecked S
             throw LLMClientError.unauthorized
         case 429:
             throw LLMClientError.rateLimited
+        case 404:
+            throw LLMClientError.endpointOrModelNotFound
         case 500...599:
             throw LLMClientError.serverError(httpResponse.statusCode)
         default:

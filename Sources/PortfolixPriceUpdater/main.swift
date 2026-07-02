@@ -35,6 +35,7 @@ struct PortfolixPriceUpdater {
 private final class BackgroundPriceUpdater {
     private let database: OpaquePointer
     private let databaseURL: URL
+    private let maximumResponseBytes = 512 * 1024
 
     init(databaseURL: URL = BackgroundPriceUpdater.defaultDatabaseURL()) {
         self.databaseURL = databaseURL
@@ -69,7 +70,7 @@ private final class BackgroundPriceUpdater {
             do {
                 switch updated[index].category {
                 case "A 股", "B 股", "港股", "美股", "公募基金":
-                    let quote = try resolveAKShareQuote(for: updated[index])
+                    let quote = try await resolveNativeQuote(for: updated[index])
                     updated[index].latestPrice = quote.price
                     updated[index].source = quote.source
                     updated[index].freshness = "已更新"
@@ -113,7 +114,7 @@ private final class BackgroundPriceUpdater {
             )
         }
         if !positions.contains(where: { ["A 股", "B 股", "港股", "美股", "公募基金"].contains($0.category) }) {
-            health.append(.unused(name: "新浪财经", detail: "暂无需自动获取价格的持仓", order: Self.order(for: "新浪财经")))
+            health.append(.unused(name: "东方财富", detail: "暂无需自动获取价格的持仓", order: Self.order(for: "东方财富")))
         }
         if !positions.contains(where: { $0.category == "数字货币" }) {
             health.append(.unused(name: "OKX", detail: "暂无数字货币持仓", order: Self.order(for: "OKX")))
@@ -355,64 +356,127 @@ private final class BackgroundPriceUpdater {
         return (price, quoteTime)
     }
 
-    private func resolveAKShareQuote(for position: StoredPosition) throws -> (price: Double, quoteTime: String?, source: String) {
-        guard position.category != "数字货币" else {
-            throw UpdaterError.requestFailed("数字货币仅支持 OKX 行情")
+    private func resolveNativeQuote(for position: StoredPosition) async throws -> (price: Double, quoteTime: String?, source: String) {
+        if position.category == "公募基金" {
+            if Self.isExchangeTradedFundSymbol(position.symbol),
+               let quote = try? await resolveEastmoneyQuote(symbol: position.symbol, category: "A 股")
+            {
+                return quote
+            }
+            return try await resolveFundQuote(symbol: position.symbol, fallbackName: position.name)
         }
-        let invocation = try helperInvocation()
-        let process = Process()
-        let input = Pipe()
-        let output = Pipe()
-        process.executableURL = invocation.executableURL
-        process.arguments = invocation.arguments
-        process.standardInput = input
-        process.standardOutput = output
-        process.environment = Self.pythonHelperEnvironment()
-        try process.run()
+        return try await resolveEastmoneyQuote(symbol: position.symbol, category: position.category)
+    }
 
-        let request: [String: Any] = [
-            "protocol_version": "akshare-bridge.v1",
-            "request_id": UUID().uuidString,
-            "operation": "resolve_asset",
-            "params": ["name": position.name, "symbol": position.symbol, "category": position.category],
+    private func resolveEastmoneyQuote(symbol: String, category: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+        guard let secid = Self.eastmoneySECID(symbol: symbol, category: category) else {
+            throw UpdaterError.requestFailed("该资产暂不支持自动行情")
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "push2.eastmoney.com"
+        components.path = "/api/qt/stock/get"
+        components.queryItems = [
+            URLQueryItem(name: "secid", value: secid),
+            URLQueryItem(name: "fields", value: "f43,f57,f58,f59,f86"),
         ]
-        try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: request) + Data([0x0A]))
-        try input.fileHandleForWriting.close()
-
-        let deadline = Date().addingTimeInterval(60)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        guard !process.isRunning else {
-            process.terminate()
-            throw UpdaterError.requestFailed("本地行情组件超时")
-        }
-        let responseData = output.fileHandleForReading.readDataToEndOfFile()
-        let envelope = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
-        let data = envelope?["data"] as? [String: Any]
-        let candidate = data?["candidate"] as? [String: Any]
+        guard let url = components.url else { throw UpdaterError.invalidResponse }
+        let data = try await request(url: url, failureMessage: "东方财富行情请求失败")
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let quote = object?["data"] as? [String: Any]
         guard
-            envelope?["status"] as? String == "ok",
-            let priceText = candidate?["latest_price"] as? String,
+            let rawPrice = Self.numberValue(quote?["f43"]),
+            rawPrice > 0
+        else { throw UpdaterError.invalidResponse }
+        let precision = Int(Self.numberValue(quote?["f59"]) ?? 2)
+        guard (0 ... 6).contains(precision) else { throw UpdaterError.invalidResponse }
+        let price = rawPrice / pow(10.0, Double(precision))
+        guard price > 0 else { throw UpdaterError.invalidResponse }
+        let quoteTime = Self.numberValue(quote?["f86"]).flatMap(Self.quoteTime(fromSeconds:))
+        return (price, quoteTime, "东方财富")
+    }
+
+    private func resolveFundQuote(symbol: String, fallbackName: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+        if let quote = try? await resolveFundLatestNetValueQuote(symbol: symbol, fallbackName: fallbackName) {
+            return quote
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "fundgz.1234567.com.cn"
+        components.path = "/js/\(symbol).js"
+        guard let url = components.url else { throw UpdaterError.invalidResponse }
+        let data = try await request(url: url, failureMessage: "东方财富基金净值请求失败")
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "jsonpgz("
+        guard text.hasPrefix(prefix), text.hasSuffix(");") else { throw UpdaterError.invalidResponse }
+        let jsonText = String(text.dropFirst(prefix.count).dropLast(2))
+        let object = try JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
+        guard
+            let priceText = object?["dwjz"] as? String,
             let price = Double(priceText),
             price > 0
         else { throw UpdaterError.invalidResponse }
-        return (
-            price,
-            candidate?["quote_time"] as? String,
-            Self.normalizedQuoteSource(candidate?["upstream_source"] as? String)
-        )
+        return (price, object?["jzrq"] as? String, "东方财富")
     }
 
-    private static let orderedDataSources = ["新浪财经", "东方财富", "同花顺", "OKX"]
+    private func resolveFundLatestNetValueQuote(symbol: String, fallbackName _: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.fund.eastmoney.com"
+        components.path = "/f10/lsjz"
+        components.queryItems = [
+            URLQueryItem(name: "fundCode", value: symbol),
+            URLQueryItem(name: "pageIndex", value: "1"),
+            URLQueryItem(name: "pageSize", value: "3"),
+            URLQueryItem(name: "startDate", value: ""),
+            URLQueryItem(name: "endDate", value: ""),
+        ]
+        guard let url = components.url else { throw UpdaterError.invalidResponse }
+        let data = try await request(
+            url: url,
+            failureMessage: "东方财富基金净值请求失败",
+            headers: [
+                "Referer": "https://fundf10.eastmoney.com/",
+                "User-Agent": "Portfolix/0.1",
+            ]
+        )
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let errorCode = Self.numberValue(object?["ErrCode"]), Int(errorCode) != 0 {
+            throw UpdaterError.invalidResponse
+        }
+        let payload = object?["Data"] as? [String: Any]
+        let rows = payload?["LSJZList"] as? [[String: Any]] ?? []
+        for row in rows {
+            guard let price = Self.numberValue(row["DWJZ"]), price > 0 else { continue }
+            return (price, row["FSRQ"] as? String, "东方财富")
+        }
+        throw UpdaterError.invalidResponse
+    }
+
+    private func request(url: URL, failureMessage: String, headers: [String: String] = [:]) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard data.count <= maximumResponseBytes else {
+            throw UpdaterError.requestFailed("行情数据返回内容超出限制")
+        }
+        guard let httpResponse = response as? HTTPURLResponse, (200 ... 299).contains(httpResponse.statusCode) else {
+            throw UpdaterError.requestFailed(failureMessage)
+        }
+        return data
+    }
+
+    private static let orderedDataSources = ["东方财富", "OKX"]
 
     private static func primarySource(for category: String) -> String {
         switch category {
-        case "A 股", "港股", "美股":
-            return "新浪财经"
-        case "B 股":
-            return "东方财富"
-        case "公募基金":
+        case "A 股", "B 股", "港股", "美股", "公募基金":
             return "东方财富"
         case "数字货币":
             return "OKX"
@@ -423,12 +487,8 @@ private final class BackgroundPriceUpdater {
 
     private static func detail(for source: String) -> String {
         switch source {
-        case "新浪财经":
-            return "A 股、港股、美股"
         case "东方财富":
-            return "股票兜底与公募基金"
-        case "同花顺":
-            return "公募基金兜底"
+            return "股票、基金与跨市场行情"
         case "OKX":
             return "数字货币现货交易对"
         default:
@@ -438,17 +498,79 @@ private final class BackgroundPriceUpdater {
 
     private static func order(for source: String) -> Int {
         switch source {
-        case "新浪财经":
-            return 0
         case "东方财富":
-            return 1
-        case "同花顺":
-            return 2
+            return 0
         case "OKX":
-            return 3
+            return 1
         default:
             return 99
         }
+    }
+
+    private static func eastmoneySECID(symbol: String, category: String) -> String? {
+        let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch category {
+        case "A 股":
+            guard normalized.range(of: #"^\d{6}$"#, options: .regularExpression) != nil else { return nil }
+            if isExchangeTradedFundSymbol(normalized) {
+                return "\(normalized.hasPrefix("5") || normalized.hasPrefix("588") || normalized.hasPrefix("589") ? "1" : "0").\(normalized)"
+            }
+            if normalized.hasPrefix("6") {
+                return "1.\(normalized)"
+            }
+            if normalized.hasPrefix("0") || normalized.hasPrefix("3") || normalized.hasPrefix("4") || normalized.hasPrefix("8") || normalized.hasPrefix("9") {
+                return "0.\(normalized)"
+            }
+            return nil
+        case "B 股":
+            guard normalized.range(of: #"^(900|200)\d{3}$"#, options: .regularExpression) != nil else { return nil }
+            return "\(normalized.hasPrefix("900") ? "1" : "0").\(normalized)"
+        case "港股":
+            let code = leadingZeroTrimmed(normalized.replacingOccurrences(of: ".HK", with: ""))
+            let padded = String(code.suffix(5)).leftPadded(toLength: 5, withPad: "0")
+            return "116.\(padded)"
+        case "美股":
+            let symbol = normalizedUSSymbol(normalized)
+            guard symbol.range(of: #"^[A-Z][A-Z0-9.-]{0,11}$"#, options: .regularExpression) != nil else { return nil }
+            return "105.\(symbol)"
+        default:
+            return nil
+        }
+    }
+
+    private static func isExchangeTradedFundSymbol(_ value: String) -> Bool {
+        value.range(
+            of: #"^(159|510|511|512|513|515|516|517|518|520|560|561|562|563|564|588|589)\d{3}$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func normalizedUSSymbol(_ value: String) -> String {
+        let symbol = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return symbol.contains(".") ? String(symbol.split(separator: ".").last ?? Substring(symbol)) : symbol
+    }
+
+    private static func leadingZeroTrimmed(_ value: String) -> String {
+        let trimmed = value.drop { $0 == "0" }
+        return trimmed.isEmpty ? "0" : String(trimmed)
+    }
+
+    private static func numberValue(_ value: Any?) -> Double? {
+        switch value {
+        case let value as Double:
+            return value.isFinite ? value : nil
+        case let value as Int:
+            return Double(value)
+        case let value as String:
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private static func quoteTime(fromSeconds value: Double) -> String? {
+        guard value.isFinite, value > 0 else { return nil }
+        return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: value))
     }
 
     private static func normalizedQuoteSource(_ value: String?) -> String {
@@ -458,7 +580,7 @@ private final class BackgroundPriceUpdater {
             return "OKX"
         case "local", "手工价格":
             return "手工价格"
-        case "eastmoney", "em", "东方财富", "东财", "akshare":
+        case "eastmoney", "em", "东方财富", "东财":
             return "东方财富"
         case "sina", "新浪", "新浪财经":
             return "新浪财经"
@@ -489,41 +611,6 @@ private final class BackgroundPriceUpdater {
             }
             return normalized
         }
-    }
-
-    private func helperInvocation() throws -> (executableURL: URL, arguments: [String]) {
-        guard let scriptURL = Bundle.main.url(
-            forResource: "portfolix-akshare-bridge",
-            withExtension: "py",
-            subdirectory: "Helpers"
-        ) else {
-            throw UpdaterError.requestFailed("本地行情组件缺失")
-        }
-        let pythonCandidates = [
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/python-runtime/bin/python3"),
-            URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent(".build/akshare-runtime/bin/python3"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/python3"),
-            URL(fileURLWithPath: "/usr/bin/python3"),
-        ]
-        guard let pythonURL = pythonCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-            throw UpdaterError.requestFailed("Python 运行时缺失")
-        }
-        return (pythonURL, [scriptURL.path])
-    }
-
-    private static func pythonHelperEnvironment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment.filter { key, _ in
-            !key.hasPrefix("PYTHON") && !key.hasPrefix("DYLD_") && key != "LD_LIBRARY_PATH"
-        }
-        environment["PYTHONNOUSERSITE"] = "1"
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        environment["PYTHONIOENCODING"] = "utf-8"
-        environment["PYTHONSAFEPATH"] = "1"
-        return environment
     }
 
     private func migrateSupportTables() throws {
@@ -735,6 +822,13 @@ private enum UpdaterError: LocalizedError {
         case let .requestFailed(message):
             message
         }
+    }
+}
+
+private extension String {
+    func leftPadded(toLength length: Int, withPad pad: Character) -> String {
+        guard count < length else { return self }
+        return String(repeating: String(pad), count: length - count) + self
     }
 }
 

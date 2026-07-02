@@ -1,6 +1,6 @@
 import Foundation
 
-final class GeminiClient: LLMCompleting, LLMModelListing, @unchecked Sendable {
+final class GeminiClient: LLMCompleting, LLMConnectionValidating, LLMModelListing, @unchecked Sendable {
     static let shared = GeminiClient()
 
     private let session: URLSession
@@ -38,6 +38,37 @@ final class GeminiClient: LLMCompleting, LLMModelListing, @unchecked Sendable {
             throw LLMClientError.invalidResponse
         }
         return text
+    }
+
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { throw LLMClientError.missingAPIKey }
+        guard let url = generateURL(baseURL: configuration.baseURL, model: configuration.model, apiKey: trimmedKey) else {
+            throw LLMClientError.invalidBaseURL
+        }
+        var request = URLRequest(url: url, timeoutInterval: configuration.requestTimeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            GeminiGenerateRequest(
+                systemInstruction: GeminiContent(parts: [GeminiPart(text: "Respond briefly.")]),
+                contents: [
+                    GeminiContent(parts: [GeminiPart(text: "Hi")]),
+                ],
+                generationConfig: GeminiGenerationConfig(
+                    temperature: 0,
+                    responseMimeType: nil
+                )
+            )
+        )
+
+        let (data, response) = try await session.data(for: request)
+        try Self.validate(response: response)
+        let decoded = try JSONDecoder().decode(GeminiGenerateResponse.self, from: data)
+        guard let text = decoded.candidates.first?.content.parts.first?.text.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            throw LLMClientError.invalidResponse
+        }
     }
 
     func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String] {
@@ -85,6 +116,8 @@ final class GeminiClient: LLMCompleting, LLMModelListing, @unchecked Sendable {
             throw LLMClientError.unauthorized
         case 429:
             throw LLMClientError.rateLimited
+        case 404:
+            throw LLMClientError.endpointOrModelNotFound
         case 500...599:
             throw LLMClientError.serverError(httpResponse.statusCode)
         default:
@@ -109,7 +142,7 @@ private struct GeminiPart: Codable {
 
 private struct GeminiGenerationConfig: Encodable {
     let temperature: Double
-    let responseMimeType: String
+    let responseMimeType: String?
 }
 
 private struct GeminiGenerateResponse: Decodable {

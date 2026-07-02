@@ -1,5 +1,25 @@
 import SwiftUI
 
+private struct AssetLookupProviderMessage: Sendable {
+    let chinese: String
+    let english: String
+}
+
+private struct AssetLookupProviderResult: Sendable {
+    let candidates: [AssetLookupCandidate]
+    let providerMessage: AssetLookupProviderMessage?
+
+    init(candidates: [AssetLookupCandidate] = [], error: AssetLookupProviderMessage? = nil) {
+        self.candidates = candidates
+        self.providerMessage = error
+    }
+
+    func message(language: AppLanguage) -> String? {
+        guard let providerMessage else { return nil }
+        return localizedText(providerMessage.chinese, providerMessage.english, language: language)
+    }
+}
+
 struct PositionEditorSheet: View {
     @EnvironmentObject private var store: PortfolioStore
     @Environment(\.dismiss) private var dismiss
@@ -54,18 +74,10 @@ struct PositionEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(isEditing ? sheetText("编辑持仓", "Edit Holding") : sheetText("添加持仓", "Add Holding"))
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.primaryText)
-                }
-                Spacer()
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 20))
-                    .foregroundStyle(PortfolixTheme.lilac)
-            }
-            .padding(PortfolixSpacing.xl)
+            SheetHeader(
+                title: isEditing ? sheetText("编辑持仓", "Edit Holding") : sheetText("添加持仓", "Add Holding"),
+                symbol: "square.and.pencil"
+            )
 
             Divider().overlay(PortfolixTheme.border)
 
@@ -196,7 +208,7 @@ struct PositionEditorSheet: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .padding(.horizontal, 10)
+            .environment(\.defaultMinListRowHeight, 36)
             .onChange(of: costMode) { oldMode, newMode in
                 convertCostEntry(from: oldMode, to: newMode)
             }
@@ -204,13 +216,16 @@ struct PositionEditorSheet: View {
                 assetLookupTask?.cancel()
             }
 
-            HStack {
+            Divider().overlay(PortfolixTheme.border)
+
+            HStack(spacing: PortfolixSpacing.sm) {
                 Spacer()
 
                 Button(sheetText("取消", "Cancel")) {
                     dismiss()
                 }
                 .buttonStyle(QuietButtonStyle())
+                .keyboardShortcut(.cancelAction)
 
                 Button(isEditing ? sheetText("保存修改", "Save Changes") : sheetText("添加持仓", "Add Holding")) {
                     Task {
@@ -221,6 +236,7 @@ struct PositionEditorSheet: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!canSave || isSaving)
+                .keyboardShortcut(.defaultAction)
             }
             .padding(PortfolixSpacing.xl)
         }
@@ -483,14 +499,10 @@ struct PositionEditorSheet: View {
                 isSearchingAssets = false
             }
 
-            await withTaskGroup(of: [AssetLookupCandidate].self) { group in
+            var providerMessages: [String] = []
+            await withTaskGroup(of: AssetLookupProviderResult.self) { group in
                 group.addTask {
-                    await Self.searchAKShareAssets(keyword: query)
-                }
-                if Self.shouldSearchOKXAssets(keyword: query) {
-                    group.addTask {
-                        await Self.searchOKXAssets(keyword: query)
-                    }
+                    await Self.searchMarketDataAssets(keyword: query)
                 }
 
                 for await providerCandidates in group {
@@ -498,9 +510,12 @@ struct PositionEditorSheet: View {
                         group.cancelAll()
                         return
                     }
-                    candidates = deduplicated(cashCandidates + candidates + providerCandidates)
+                    if let message = providerCandidates.message(language: language) {
+                        providerMessages.append(message)
+                    }
+                    candidates = deduplicated(cashCandidates + candidates + providerCandidates.candidates)
                     assetCandidates = candidates
-                    markAvailableDataSources(from: providerCandidates)
+                    markAvailableDataSources(from: providerCandidates.candidates)
                     if !candidates.isEmpty {
                         isSearchingAssets = false
                     }
@@ -508,7 +523,7 @@ struct PositionEditorSheet: View {
             }
             guard !Task.isCancelled, generation == assetLookupGeneration else { return }
             assetCandidates = candidates
-            assetLookupMessage = candidates.isEmpty ? emptySearchMessage : nil
+            assetLookupMessage = candidates.isEmpty ? providerMessages.first ?? emptySearchMessage : nil
             isSearchingAssets = false
         }
     }
@@ -541,42 +556,52 @@ struct PositionEditorSheet: View {
         }
     }
 
-    private static func searchAKShareAssets(keyword: String) async -> [AssetLookupCandidate] {
-        (try? await AKShareBridgeClient.shared.searchAssets(keyword: keyword)) ?? []
-    }
-
-    private static func searchOKXAssets(keyword: String) async -> [AssetLookupCandidate] {
-        (try? await OKXClient.shared.searchAssets(keyword: keyword)) ?? []
-    }
-
-    private static func shouldSearchOKXAssets(keyword: String) -> Bool {
-        let normalized = keyword
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-            .replacingOccurrences(of: "/", with: "-")
-        guard !normalized.isEmpty else { return false }
-        if normalized.contains("USDT") || normalized.contains("-") {
-            return true
+    private static func searchMarketDataAssets(keyword: String) async -> AssetLookupProviderResult {
+        do {
+            return AssetLookupProviderResult(candidates: try await MarketDataAdapter.shared.searchAssets(keyword: keyword))
+        } catch {
+            return AssetLookupProviderResult(error: marketDataSearchFailureMessage(for: error))
         }
-        return [
-            "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "TRX",
-            "AVAX", "DOT", "LINK", "LTC", "BCH", "TON", "OKB",
-        ].contains(normalized)
+    }
+
+    private static func marketDataSearchFailureMessage(for error: Error) -> AssetLookupProviderMessage {
+        if let marketDataError = error as? MarketDataAdapterError {
+            switch marketDataError {
+            case .invalidKeyword:
+                return AssetLookupProviderMessage(
+                    chinese: "搜索关键字长度无效，请调整后重试。",
+                    english: "The search keyword length is invalid. Adjust it and try again."
+                )
+            case .assetNotFound:
+                return AssetLookupProviderMessage(
+                    chinese: "未找到候选资产，可继续手工填写。",
+                    english: "No matching asset was found. You can continue manually."
+                )
+            case .unsupportedAsset:
+                return AssetLookupProviderMessage(
+                    chinese: "该资产暂不支持自动行情，可继续手工填写。",
+                    english: "Automatic quotes are not supported for this asset yet. You can continue manually."
+                )
+            case .responseTooLarge, .invalidResponse:
+                return AssetLookupProviderMessage(
+                    chinese: "行情数据返回内容暂不可用，可继续手工填写。",
+                    english: "The market data response is unavailable. You can continue manually."
+                )
+            case let .requestFailed(message):
+                return AssetLookupProviderMessage(
+                    chinese: "行情查询失败：\(message)。可稍后重试或继续手工填写。",
+                    english: "Market data lookup failed: \(message). Try again later or continue manually."
+                )
+            }
+        }
+        return AssetLookupProviderMessage(
+            chinese: "行情数据暂不可用，可稍后重试或继续手工填写。",
+            english: "Market data is unavailable. Try again later or continue manually."
+        )
     }
 
     private func resolvedLatestQuote(for candidate: AssetLookupCandidate) async throws -> AssetLookupCandidate {
-        switch candidate.category {
-        case .crypto:
-            do {
-                return try await OKXClient.shared.resolveAsset(candidate)
-            } catch {
-                return try await AKShareBridgeClient.shared.resolveAsset(candidate)
-            }
-        case .cnStock, .bStock, .hkStock, .usStock, .fund:
-            return try await AKShareBridgeClient.shared.resolveAsset(candidate)
-        case .cash:
-            return candidate
-        }
+        try await MarketDataAdapter.shared.resolveAsset(candidate)
     }
 
     private func switchToManualEntry() {

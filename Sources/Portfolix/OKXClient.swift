@@ -20,7 +20,7 @@ enum OKXClientError: LocalizedError {
 actor OKXClient {
     static let shared = OKXClient()
 
-    private let maximumResponseBytes = 4 * 1024 * 1024
+    private let maximumResponseBytes = 16 * 1024 * 1024
     private let instrumentCacheLifetime: TimeInterval = 7 * 24 * 60 * 60
     private let instrumentCacheURL: URL
     private var instrumentCache: (loadedAt: Date, instruments: [OKXSpotInstrument])?

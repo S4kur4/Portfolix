@@ -47,11 +47,15 @@ protocol LLMCompleting: Sendable {
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String
 }
 
+protocol LLMConnectionValidating: Sendable {
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws
+}
+
 protocol LLMModelListing: Sendable {
     func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String]
 }
 
-final class LLMProviderClient: LLMCompleting, LLMModelListing, @unchecked Sendable {
+final class LLMProviderClient: LLMCompleting, LLMConnectionValidating, LLMModelListing, @unchecked Sendable {
     static let shared = LLMProviderClient()
 
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String {
@@ -80,6 +84,19 @@ final class LLMProviderClient: LLMCompleting, LLMModelListing, @unchecked Sendab
         )
     }
 
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
+        let provider = configuration.providerOption
+        if provider.usesClaudeMessagesAPI {
+            try await ClaudeCompatibleClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
+            return
+        }
+        if provider.usesGeminiAPI {
+            try await GeminiClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
+            return
+        }
+        try await OpenAICompatibleClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
+    }
+
     func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String] {
         let provider = configuration.providerOption
         if provider.usesClaudeMessagesAPI {
@@ -92,7 +109,7 @@ final class LLMProviderClient: LLMCompleting, LLMModelListing, @unchecked Sendab
     }
 }
 
-final class OpenAICompatibleClient: LLMCompleting, @unchecked Sendable {
+final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unchecked Sendable {
     static let shared = OpenAICompatibleClient()
 
     private let session: URLSession
@@ -161,6 +178,98 @@ final class OpenAICompatibleClient: LLMCompleting, @unchecked Sendable {
         } catch {
             throw LLMClientError.requestFailed(error.localizedDescription)
         }
+    }
+
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            throw LLMClientError.missingAPIKey
+        }
+        guard let url = Self.chatCompletionsURL(baseURL: configuration.baseURL) else {
+            throw LLMClientError.invalidBaseURL
+        }
+        var request = URLRequest(url: url, timeoutInterval: configuration.requestTimeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(
+            OpenAIChatValidationRequest(
+                model: configuration.model,
+                messages: [
+                    OpenAIChatMessage(role: "user", content: "Hi"),
+                ],
+                temperature: 0,
+                maxTokens: min(configuration.maxOutputTokens, LLMOutputTokenPolicy.connectionValidation),
+                stream: false
+            )
+        )
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw LLMClientError.invalidResponse
+            }
+            switch httpResponse.statusCode {
+            case 200:
+                try Self.validateSuccessfulProbeResponse(data)
+            case 401, 403:
+                throw LLMClientError.unauthorized
+            case 429:
+                throw LLMClientError.rateLimited
+            case 404:
+                throw LLMClientError.endpointOrModelNotFound
+            case 500...599:
+                throw LLMClientError.serverError(httpResponse.statusCode)
+            default:
+                throw LLMClientError.serverError(httpResponse.statusCode)
+            }
+        } catch let error as LLMClientError {
+            throw error
+        } catch {
+            throw LLMClientError.requestFailed(error.localizedDescription)
+        }
+    }
+
+    static func validateSuccessfulProbeResponse(_ data: Data) throws {
+        if let text = String(data: data, encoding: .utf8),
+           text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("data:") {
+            try validateSuccessfulProbeSSE(text)
+            return
+        }
+
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data),
+            !containsProviderError(object)
+        else {
+            throw LLMClientError.invalidResponse
+        }
+    }
+
+    private static func validateSuccessfulProbeSSE(_ text: String) throws {
+        var sawValidPayload = false
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+            guard payload != "[DONE]", let data = payload.data(using: .utf8) else { continue }
+            guard
+                let object = try? JSONSerialization.jsonObject(with: data),
+                !containsProviderError(object)
+            else {
+                throw LLMClientError.invalidResponse
+            }
+            sawValidPayload = true
+        }
+        guard sawValidPayload else {
+            throw LLMClientError.invalidResponse
+        }
+    }
+
+    private static func containsProviderError(_ object: Any) -> Bool {
+        if let dictionary = object as? [String: Any] {
+            return dictionary["error"] != nil
+        }
+        return false
     }
 
     static func chatCompletionsURL(baseURL: String) -> URL? {
@@ -319,6 +428,22 @@ private struct OpenAIChatRequest: Encodable {
         case temperature
         case maxTokens = "max_tokens"
         case responseFormat = "response_format"
+        case stream
+    }
+}
+
+private struct OpenAIChatValidationRequest: Encodable {
+    let model: String
+    let messages: [OpenAIChatMessage]
+    let temperature: Double
+    let maxTokens: Int
+    let stream: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+        case maxTokens = "max_tokens"
         case stream
     }
 }

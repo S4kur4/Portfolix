@@ -88,7 +88,7 @@ enum DisplayCurrency: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum AppearanceMode: String, CaseIterable, Identifiable {
+enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
     case system = "跟随系统"
     case dark = "深色"
     case light = "浅色"
@@ -116,7 +116,7 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum AppLanguage: String, CaseIterable, Identifiable {
+enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case chinese = "中文"
     case english = "English"
 
@@ -396,6 +396,11 @@ struct Position: Identifiable {
         return Self.chineseDateOnlyText(from: trimmed)
     }
 
+    func wasFetchedOnSameDay(as date: Date, calendar: Calendar = .current) -> Bool {
+        guard let fetchedDate = ISO8601DateFormatter().date(from: fetchedAt) else { return false }
+        return calendar.isDate(fetchedDate, inSameDayAs: date)
+    }
+
     private var fetchedDateText: String? {
         fetchedDateText(language: .chinese)
     }
@@ -507,11 +512,6 @@ func normalizedQuoteSource(_ source: String, category: AssetCategory? = nil) -> 
     if normalized.localizedCaseInsensitiveContains("jin10") || normalized.contains("金十") {
         return "金十数据"
     }
-    if normalized.localizedCaseInsensitiveContains("akshare"),
-       let category,
-       [.cnStock, .bStock, .hkStock, .usStock, .fund].contains(category) {
-        return "东方财富"
-    }
     return normalized
 }
 
@@ -537,8 +537,6 @@ func localizedQuoteSource(_ source: String, language: AppLanguage) -> String {
 
 func normalizedDataSourceName(_ name: String) -> String {
     switch name.trimmingCharacters(in: .whitespacesAndNewlines) {
-    case "AKShare Helper", "AKShare":
-        "东方财富"
     case "OKX 公共行情":
         "OKX"
     default:
@@ -546,7 +544,7 @@ func normalizedDataSourceName(_ name: String) -> String {
     }
 }
 
-func isAKShareBackedQuoteSource(_ source: String) -> Bool {
+func isPublicMarketQuoteSource(_ source: String) -> Bool {
     switch normalizedQuoteSource(source) {
     case "东方财富", "新浪财经", "同花顺", "腾讯财经":
         return true
@@ -732,7 +730,7 @@ final class PortfolioStore: ObservableObject {
 
     @Published var selection: SidebarSection = .overview
     @Published var displayCurrency: DisplayCurrency = .cny
-    @Published var appearanceMode: AppearanceMode = .dark
+    @Published var appearanceMode: AppearanceMode = .system
     @Published var appLanguage: AppLanguage = .chinese {
         didSet {
             UserDefaults.standard.set(appLanguage.rawValue, forKey: Self.appLanguageDefaultsKey)
@@ -746,9 +744,9 @@ final class PortfolioStore: ObservableObject {
     @Published var selectedPositionID: Position.ID?
     @Published var trendMetric: TrendMetric = .profitValue
     @Published var trendRange: TrendRange = .month
-    @Published var riskLevel = "稳健平衡"
-    @Published var riskProfileConfigured = true
-    @Published var riskProfileVersion = 3
+    @Published var riskLevel = "未配置"
+    @Published var riskProfileConfigured = false
+    @Published var riskProfileVersion = 0
     @Published var riskProfileUpdatedAt: Date = Date() {
         didSet {
             UserDefaults.standard.set(riskProfileUpdatedAt, forKey: Self.riskProfileUpdatedAtDefaultsKey)
@@ -837,6 +835,14 @@ final class PortfolioStore: ObservableObject {
     private static let dailyUpdateTimeDefaultsKey = "portfolix.automaticPriceUpdateDailyTimeMinutes"
     private static let appLanguageDefaultsKey = "portfolix.appLanguage"
     private static let riskProfileUpdatedAtDefaultsKey = "portfolix.riskProfileUpdatedAt"
+    private static let riskLevelSettingKey = "risk_profile_level"
+    private static let riskProfileConfiguredSettingKey = "risk_profile_configured"
+    private static let riskProfileVersionSettingKey = "risk_profile_version"
+    private static let riskPositionLimitSettingKey = "risk_position_limit"
+    private static let riskCryptoLimitSettingKey = "risk_crypto_limit"
+    private static let riskForeignCurrencyLimitSettingKey = "risk_foreign_currency_limit"
+    private static let riskLiquidityMinimumSettingKey = "risk_liquidity_minimum"
+    private static let riskProfileUpdatedAtSettingKey = "risk_profile_updated_at"
     private static let latestAIReportDefaultsKey = "portfolix.ai.latestReport"
     private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
@@ -905,12 +911,7 @@ final class PortfolioStore: ObservableObject {
         if let date = UserDefaults.standard.object(forKey: riskProfileUpdatedAtDefaultsKey) as? Date {
             return date
         }
-
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: .now)
-        components.hour = 9
-        components.minute = 18
-        components.second = 0
-        return Calendar.current.date(from: components) ?? .now
+        return .now
     }
 
     private static func savedAIChatRetentionPeriod() -> AIChatRetentionPeriod {
@@ -966,6 +967,7 @@ final class PortfolioStore: ObservableObject {
         snapshotHistory = loadedSnapshots
         sourceStatuses = loadedSourceStatuses
         self.positionRepository = activeRepository
+        loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
         aiAnalysisReport = latestReport.flatMap { report in
             report.generatedAt >= savedChatRetentionPeriod.cutoffDate() ? report : nil
@@ -1014,17 +1016,27 @@ final class PortfolioStore: ObservableObject {
     }
 
     var todayProfitCNY: Decimal {
-        positions.reduce(0) { $0 + todayProfitCNY(for: $1) }
+        todayProfitCNY(asOf: .now)
+    }
+
+    func todayProfitCNY(asOf date: Date) -> Decimal {
+        positions.reduce(0) { $0 + todayProfitCNY(for: $1, asOf: date) }
     }
 
     var todayProfitRate: Decimal {
-        let baselineValueCNY = totalValueCNY - todayProfitCNY
-        guard baselineValueCNY != 0 else { return 0 }
-        return todayProfitCNY / baselineValueCNY * 100
+        todayProfitRate(asOf: .now)
     }
 
-    func todayProfitCNY(for position: Position) -> Decimal {
+    func todayProfitRate(asOf date: Date) -> Decimal {
+        let todayProfit = todayProfitCNY(asOf: date)
+        let baselineValueCNY = totalValueCNY - todayProfit
+        guard baselineValueCNY != 0 else { return 0 }
+        return todayProfit / baselineValueCNY * 100
+    }
+
+    func todayProfitCNY(for position: Position, asOf date: Date = .now) -> Decimal {
         guard position.category != .cash, position.weeklyTrend.count >= 2 else { return 0 }
+        guard position.wasFetchedOnSameDay(as: date) else { return 0 }
         let latestPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 1])
         let previousPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 2])
         let priceChange = latestPrice - previousPrice
@@ -1172,6 +1184,9 @@ final class PortfolioStore: ObservableObject {
             positions.append(position)
         }
         persistCurrentSnapshot()
+        if let positionRepository {
+            positions = try positionRepository.fetchPositions()
+        }
     }
 
     func updatePosition(
@@ -1215,6 +1230,7 @@ final class PortfolioStore: ObservableObject {
             quoteCurrency: quoteCurrency,
             source: resolvedSource
         )
+        let fetchedAt = ISO8601DateFormatter().string(from: .now)
 
         let updatedPosition = Position(
             id: current.id,
@@ -1227,9 +1243,10 @@ final class PortfolioStore: ObservableObject {
             latestPrice: latestPrice,
             marketValueCNY: marketValueCNY,
             profitRate: profitRate,
-            weeklyTrend: isManualPrice ? current.weeklyTrend.dropFirst() + [latestPrice.doubleValue] : current.weeklyTrend,
+            weeklyTrend: updatedWeeklyTrend(current: current, latestPrice: latestPrice, fetchedAt: fetchedAt),
             source: resolvedSource,
             quoteTime: quoteTime ?? (isManualPrice ? "刚刚" : current.quoteTime),
+            fetchedAt: fetchedAt,
             freshness: freshness ?? (isManualPrice ? .manual : current.freshness)
         )
 
@@ -1240,6 +1257,30 @@ final class PortfolioStore: ObservableObject {
             positions[index] = updatedPosition
         }
         persistCurrentSnapshot()
+        if let positionRepository {
+            positions = try positionRepository.fetchPositions()
+        }
+    }
+
+    private func updatedWeeklyTrend(current: Position, latestPrice: Decimal, fetchedAt: String) -> [Double] {
+        let latest = latestPrice.doubleValue
+        var trend = current.weeklyTrend
+        guard !trend.isEmpty else { return [latest] }
+
+        let formatter = ISO8601DateFormatter()
+        let calendar = Calendar.current
+        let oldFetchedAt = formatter.date(from: current.fetchedAt)
+        let newFetchedAt = formatter.date(from: fetchedAt) ?? .now
+        if let oldFetchedAt, calendar.isDate(oldFetchedAt, inSameDayAs: newFetchedAt) {
+            trend[trend.count - 1] = latest
+            return trend
+        }
+
+        trend.append(latest)
+        if trend.count > 7 {
+            trend = Array(trend.suffix(7))
+        }
+        return trend
     }
 
     func markDataSourceAvailable(for candidate: AssetLookupCandidate) {
@@ -1486,6 +1527,7 @@ final class PortfolioStore: ObservableObject {
     func saveRiskThresholdVersion(now: Date = .now) {
         riskProfileVersion += 1
         riskProfileUpdatedAt = now
+        persistRiskProfileSettings()
     }
 
     func applyRiskQuestionnaire(
@@ -1507,7 +1549,7 @@ final class PortfolioStore: ObservableObject {
     func skipRiskQuestionnaire() {
         riskLevel = "未配置"
         riskProfileConfigured = false
-        saveRiskThresholdVersion()
+        persistRiskProfileSettings()
     }
 
     private func allocationItems<T>(
@@ -2333,10 +2375,8 @@ final class PortfolioStore: ObservableObject {
 
     private func upsertDataSourceStatus(_ status: DataSourceStatus) {
         var nextStatuses = sourceStatuses.filter {
-            $0.name != status.name
-                && $0.name != "AKShare Helper"
-                && $0.name != "AKShare"
-                && $0.name != "OKX 公共行情"
+            normalizedDataSourceName($0.name) != normalizedDataSourceName(status.name)
+                && normalizedDataSourceName($0.name) != "OKX"
         }
         nextStatuses.append(status)
         nextStatuses.sort { lhs, rhs in
@@ -2429,14 +2469,7 @@ final class PortfolioStore: ObservableObject {
             upstreamSource: position.source
         )
 
-        switch position.category {
-        case .cnStock, .bStock, .hkStock, .usStock, .fund:
-            return try await AKShareBridgeClient.shared.resolveAsset(candidate)
-        case .crypto:
-            return try await OKXClient.shared.resolveAsset(candidate)
-        case .cash:
-            return nil
-        }
+        return try await MarketDataAdapter.shared.resolveAsset(candidate)
     }
 
     private func persistCurrentSnapshot() {
@@ -2447,6 +2480,81 @@ final class PortfolioStore: ObservableObject {
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }
+    }
+
+    private func loadRiskProfileSettings(from repository: PositionRepository?) {
+        guard let repository else { return }
+        do {
+            if let value = try repository.appSetting(for: Self.riskProfileConfiguredSettingKey),
+               let configured = Self.boolSetting(value) {
+                riskProfileConfigured = configured
+            }
+            if let value = try repository.appSetting(for: Self.riskLevelSettingKey), !value.isEmpty {
+                riskLevel = value
+            } else if !riskProfileConfigured {
+                riskLevel = "未配置"
+            }
+            if let value = try repository.appSetting(for: Self.riskProfileVersionSettingKey),
+               let version = Int(value) {
+                riskProfileVersion = max(0, version)
+            }
+            if let value = try repository.appSetting(for: Self.riskPositionLimitSettingKey),
+               let limit = Self.doubleSetting(value) {
+                positionLimit = limit
+            }
+            if let value = try repository.appSetting(for: Self.riskCryptoLimitSettingKey),
+               let limit = Self.doubleSetting(value) {
+                cryptoLimit = limit
+            }
+            if let value = try repository.appSetting(for: Self.riskForeignCurrencyLimitSettingKey),
+               let limit = Self.doubleSetting(value) {
+                foreignCurrencyLimit = limit
+            }
+            if let value = try repository.appSetting(for: Self.riskLiquidityMinimumSettingKey),
+               let limit = Self.doubleSetting(value) {
+                liquidityMinimum = limit
+            }
+            if let value = try repository.appSetting(for: Self.riskProfileUpdatedAtSettingKey),
+               let date = Self.isoDateFormatter.date(from: value) {
+                riskProfileUpdatedAt = date
+            }
+        } catch {
+            persistenceErrorMessage = "风险偏好设置读取失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func persistRiskProfileSettings() {
+        persistAppSetting(key: Self.riskLevelSettingKey, value: riskLevel)
+        persistAppSetting(key: Self.riskProfileConfiguredSettingKey, value: riskProfileConfigured ? "true" : "false")
+        persistAppSetting(key: Self.riskProfileVersionSettingKey, value: String(riskProfileVersion))
+        persistAppSetting(key: Self.riskPositionLimitSettingKey, value: Self.stableSettingNumber(positionLimit))
+        persistAppSetting(key: Self.riskCryptoLimitSettingKey, value: Self.stableSettingNumber(cryptoLimit))
+        persistAppSetting(key: Self.riskForeignCurrencyLimitSettingKey, value: Self.stableSettingNumber(foreignCurrencyLimit))
+        persistAppSetting(key: Self.riskLiquidityMinimumSettingKey, value: Self.stableSettingNumber(liquidityMinimum))
+        persistAppSetting(key: Self.riskProfileUpdatedAtSettingKey, value: Self.isoDateFormatter.string(from: riskProfileUpdatedAt))
+    }
+
+    private static func boolSetting(_ value: String) -> Bool? {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "1", "yes":
+            return true
+        case "false", "0", "no":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func doubleSetting(_ value: String) -> Double? {
+        guard let number = Double(value), number.isFinite else { return nil }
+        return number
+    }
+
+    private static func stableSettingNumber(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(format: "%.4f", value)
     }
 
     private func persistAutomaticPriceUpdateSetting() {
@@ -2575,7 +2683,7 @@ enum PositionInputValidator {
             guard category == .crypto, [.usd, .usdt].contains(quoteCurrency) else {
                 throw PositionValidationError.providerIdentityMismatch
             }
-        case let sourceName where isAKShareBackedQuoteSource(sourceName):
+        case let sourceName where isPublicMarketQuoteSource(sourceName):
             let expectedCurrency: DisplayCurrency
             switch category {
             case .cnStock, .fund:

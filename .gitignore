@@ -24,7 +24,3 @@ release/
 *.db-shm
 *.db-wal
 *.portfolix-export.zip
-
-# Python helper caches
-__pycache__/
-*.pyc

@@ -2,6 +2,10 @@
 
 This document describes the expected release flow for GitHub Releases.
 
+## Source of Truth
+
+Use this repository as the single source of truth for development and release preparation. Make changes directly here, keep each work batch inspectable with Git, and validate with the Swift test suite before packaging.
+
 ## Release Modes
 
 ### Local ad hoc DMG
@@ -30,34 +34,6 @@ PORTFOLIX_NOTARY_PROFILE="portfolix-notary" \
 ```
 
 The script signs nested code first, signs the app bundle with hardened runtime, creates a DMG, signs the DMG, submits it for notarization, and staples the notarization ticket.
-
-## AKShare Runtime
-
-Portfolix can bundle AKShare, but the release build must include a self-contained Python runtime and the AKShare dependency tree.
-
-Set `PORTFOLIX_PYTHON_RUNTIME_DIR` to a prepared runtime directory shaped like:
-
-```text
-python-runtime/
-  bin/python3
-  lib/...
-```
-
-Then run:
-
-```bash
-PORTFOLIX_PYTHON_RUNTIME_DIR=/path/to/python-runtime \
-PORTFOLIX_REQUIRE_AKSHARE_RUNTIME=1 \
-./scripts/package-release-dmg.sh
-```
-
-The runtime directory will be copied to:
-
-```text
-Portfolix.app/Contents/Helpers/python-runtime
-```
-
-Before publishing a DMG that bundles AKShare, include licenses for AKShare and all transitive Python dependencies in the release artifact.
 
 ## GitHub Release Checklist
 

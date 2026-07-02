@@ -465,12 +465,16 @@ struct PositionRepositoryTests {
     @Test
     func portfolioStoreCalculatesTodayReturnFromPriceChangesOnly() throws {
         let store = try makeStore()
+        let today = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 1)))
         store.positions = [
             makePosition(
                 symbol: "EXISTING",
                 quantity: 3,
                 averageCost: 90,
                 latestPrice: 120,
+                quoteTime: "2026-06-30",
+                fetchedAt: "2026-07-01T04:00:00Z",
+                freshness: .updated,
                 weeklyTrend: [95, 100, 120]
             ),
             makePosition(
@@ -478,6 +482,9 @@ struct PositionRepositoryTests {
                 quantity: 10,
                 averageCost: 50,
                 latestPrice: 50,
+                quoteTime: "2026-06-30",
+                fetchedAt: "2026-07-01T04:00:00Z",
+                freshness: .updated,
                 weeklyTrend: [50]
             ),
             makePosition(
@@ -491,8 +498,100 @@ struct PositionRepositoryTests {
             ),
         ]
 
-        #expect(store.todayProfitCNY == 60)
-        #expect(abs(store.todayProfitRate.doubleValue - 3.3333333333) < 0.0001)
+        #expect(store.todayProfitCNY(asOf: today) == 60)
+        #expect(abs(store.todayProfitRate(asOf: today).doubleValue - 3.3333333333) < 0.0001)
+    }
+
+    @MainActor
+    @Test
+    func portfolioStoreUsesFetchDateAndPriceChangeForTodayReturn() throws {
+        let store = try makeStore()
+        let today = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 1)))
+        let stalePosition = makePosition(
+            symbol: "STALE",
+            quantity: 5,
+            averageCost: 90,
+            latestPrice: 120,
+            quoteTime: "2026-06-30",
+            fetchedAt: "2026-06-30T04:00:00Z",
+            freshness: .updated,
+            weeklyTrend: [100, 120]
+        )
+        let freshPosition = makePosition(
+            symbol: "FRESH",
+            quantity: 3,
+            averageCost: 90,
+            latestPrice: 120,
+            quoteTime: "2026-06-30",
+            fetchedAt: "2026-07-01T04:00:00Z",
+            freshness: .updated,
+            weeklyTrend: [100, 120]
+        )
+
+        store.positions = [stalePosition, freshPosition]
+
+        #expect(store.todayProfitCNY(for: stalePosition, asOf: today) == 0)
+        #expect(store.todayProfitCNY(for: freshPosition, asOf: today) == 60)
+        #expect(store.todayProfitCNY(asOf: today) == 60)
+    }
+
+    @MainActor
+    @Test
+    func portfolioStoreReloadsTrendAfterReplacingTodaySnapshot() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let assetID = UUID()
+        let yesterday = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        let baseline = makePosition(
+            id: assetID,
+            name: "博时稳益9个月持有混合C",
+            symbol: "013770",
+            category: .fund,
+            quantity: 10,
+            averageCost: 1,
+            latestPrice: decimal("1.2495"),
+            source: "东方财富",
+            quoteTime: "2026-06-29",
+            freshness: .updated,
+            weeklyTrend: [1.2495]
+        )
+        let staleToday = makePosition(
+            id: assetID,
+            name: baseline.name,
+            symbol: baseline.symbol,
+            category: .fund,
+            quantity: 10,
+            averageCost: 1,
+            latestPrice: decimal("1.2560"),
+            source: "东方财富",
+            quoteTime: "2026-06-30",
+            freshness: .updated,
+            weeklyTrend: [1.2495, 1.2560]
+        )
+
+        try repository.insert(baseline)
+        try repository.replaceDailySnapshots(positions: [baseline], snapshotDate: yesterday)
+        try repository.update(staleToday)
+        try repository.replaceDailySnapshots(positions: [staleToday])
+
+        let store = PortfolioStore(positionRepository: repository)
+        try store.updatePosition(
+            id: assetID,
+            name: baseline.name,
+            symbol: baseline.symbol,
+            category: .fund,
+            quantity: 10,
+            averageCost: 1,
+            quoteCurrency: .cny,
+            latestPrice: decimal("1.2504"),
+            source: "东方财富",
+            quoteTime: "2026-07-01",
+            freshness: .updated
+        )
+
+        let updated = try #require(store.positions.first(where: { $0.id == assetID }))
+        #expect(updated.weeklyTrend.suffix(2).map { String(format: "%.4f", $0) } == ["1.2495", "1.2504"])
+        #expect(store.todayProfitCNY(for: updated).doubleValue < 0.02)
     }
 
     @MainActor
@@ -646,6 +745,35 @@ struct PositionRepositoryTests {
         #expect(store.riskProfileUpdatedText(now: store.riskProfileUpdatedAt, language: .chinese) == "刚刚更新")
         #expect(store.riskProfileUpdatedText(now: store.riskProfileUpdatedAt.addingTimeInterval(120), language: .chinese) == "2 分钟前更新")
         #expect(store.riskProfileUpdatedText(now: store.riskProfileUpdatedAt.addingTimeInterval(3_600), language: .english) == "1h ago")
+    }
+
+    @MainActor
+    @Test
+    func riskQuestionnairePersistsAcrossStoreReloads() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let store = PortfolioStore(positionRepository: repository)
+
+        store.applyRiskQuestionnaire(
+            riskLevel: "稳健平衡",
+            positionLimit: 35,
+            cryptoLimit: 12,
+            foreignCurrencyLimit: 45,
+            liquidityMinimum: 8
+        )
+        let savedVersion = store.riskProfileVersion
+        let savedUpdatedAt = store.riskProfileUpdatedAt
+
+        let reloadedStore = PortfolioStore(positionRepository: try PositionRepository(databaseURL: databaseURL))
+
+        #expect(reloadedStore.riskProfileConfigured)
+        #expect(reloadedStore.riskLevel == "稳健平衡")
+        #expect(reloadedStore.positionLimit == 35)
+        #expect(reloadedStore.cryptoLimit == 12)
+        #expect(reloadedStore.foreignCurrencyLimit == 45)
+        #expect(reloadedStore.liquidityMinimum == 8)
+        #expect(reloadedStore.riskProfileVersion == savedVersion)
+        #expect(abs(reloadedStore.riskProfileUpdatedAt.timeIntervalSince(savedUpdatedAt)) < 1)
     }
 
     @MainActor
@@ -957,8 +1085,7 @@ struct PositionRepositoryTests {
     }
 
     @Test
-    func legacyAKShareSourceMapsToRealUpstreamSource() {
-        #expect(normalizedQuoteSource("AKShare", category: .cnStock) == "东方财富")
+    func marketProviderAliasesMapToDisplaySources() {
         #expect(normalizedQuoteSource("eastmoney", category: .fund) == "东方财富")
         #expect(normalizedQuoteSource("sina", category: .usStock) == "新浪财经")
     }
@@ -1000,10 +1127,182 @@ struct PositionRepositoryTests {
     }
 
     @Test
-    func automaticCryptoQuotesUseOKXWithoutAKShareFallback() {
-        #expect(AKShareBridgeClient.supportsQuoteCategory(.cnStock))
-        #expect(AKShareBridgeClient.supportsQuoteCategory(.fund))
-        #expect(!AKShareBridgeClient.supportsQuoteCategory(.crypto))
+    func marketDataAdapterRoutesCryptoToOKXAndCashToManualEntry() {
+        #expect(MarketDataAdapter.supportsQuoteCategory(.crypto))
+        #expect(!MarketDataAdapter.supportsQuoteCategory(.cash))
+        #expect(MarketDataAdapter.shouldSearchOKXAssets(keyword: "BTC"))
+        #expect(!MarketDataAdapter.shouldSearchOKXAssets(keyword: "600519"))
+    }
+
+    @Test
+    func nativeMarketDataAdapterBuildsDirectCandidatesAndEastmoneySECIDs() {
+        let aShareCandidates = NativeMarketDataAdapter.directSymbolCandidates(keyword: "600519")
+        #expect(aShareCandidates.isEmpty)
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "600519", category: .cnStock) == "1.600519")
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "000001", category: .cnStock) == "0.000001")
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "00700.HK", category: .hkStock) == "116.00700")
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "AAPL", category: .usStock) == "105.AAPL")
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "510300", category: .cnStock) == "1.510300")
+        #expect(NativeMarketDataAdapter.eastmoneySECID(symbol: "510300", category: .fund) == "1.510300")
+        #expect(NativeMarketDataAdapter.directSymbolCandidates(keyword: "390444").isEmpty)
+
+        let etfCandidates = NativeMarketDataAdapter.directSymbolCandidates(keyword: "510300")
+        #expect(etfCandidates.first?.symbol == "510300")
+        #expect(etfCandidates.first?.category == .cnStock)
+
+        let hkCandidates = NativeMarketDataAdapter.directSymbolCandidates(keyword: "700.hk")
+        #expect(hkCandidates.first?.symbol == "0700.HK")
+        #expect(hkCandidates.first?.quoteCurrency == .hkd)
+
+        let usAliasCandidates = NativeMarketDataAdapter.directSymbolCandidates(keyword: "苹果")
+        #expect(usAliasCandidates.first?.symbol == "AAPL")
+        #expect(usAliasCandidates.first?.category == .usStock)
+    }
+
+    @Test
+    func nativeMarketDataAdapterDecodesEastmoneySearchAndFundPayloads() throws {
+        let eastmoneySuggestPayload = """
+        {
+          "QuotationCodeTable": {
+            "Data": [
+              {"Code":"600519","Name":"贵州茅台","Classify":"AStock","SecurityTypeName":"沪A","SecurityType":"1"},
+              {"Code":"00700","Name":"腾讯控股","Classify":"HK","SecurityTypeName":"港股","SecurityType":"19"},
+              {"Code":"AAPL","Name":"苹果","Classify":"UsStock","SecurityTypeName":"美股","SecurityType":"20"},
+              {"Code":"AAPL22","Name":"Apple Notes","Classify":"UsStock","SecurityTypeName":"美股","SecurityType":"7"}
+            ]
+          }
+        }
+        """
+        let stockCandidates = try NativeMarketDataAdapter.candidates(fromEastmoneySuggestData: Data(eastmoneySuggestPayload.utf8))
+        #expect(stockCandidates.map(\.symbol) == ["600519", "0700.HK", "AAPL"])
+        #expect(stockCandidates.map(\.category) == [.cnStock, .hkStock, .usStock])
+
+        let fundSuggestPayload = """
+        {
+          "ErrCode": 0,
+          "Datas": [
+            {
+              "CODE": "300502",
+              "NAME": "新易盛",
+              "CATEGORY": 150,
+              "CATEGORYDESC": "深市",
+              "FundBaseInfo": null,
+              "StockHolder": [{"Name": "国融融盛龙头严选混合A", "Code": "006718"}]
+            },
+            {
+              "CODE": "270042",
+              "NAME": "广发纳斯达克100ETF联接人民币(QDII)A",
+              "CATEGORY": 700,
+              "CATEGORYDESC": "基金",
+              "FundBaseInfo": {"DWJZ": 8.1427, "FSRQ": "2026-06-26", "SHORTNAME": "广发纳斯达克100ETF联接人民币(QDII)A"}
+            },
+            {
+              "CODE": "510300",
+              "NAME": "沪深300ETF华泰柏瑞",
+              "CATEGORY": 700,
+              "CATEGORYDESC": "基金",
+              "FundBaseInfo": {"DWJZ": 4.9618, "FSRQ": "2026-06-29", "SHORTNAME": "沪深300ETF华泰柏瑞"}
+            }
+          ]
+        }
+        """
+        let fundCandidates = try NativeMarketDataAdapter.candidates(fromFundSuggestData: Data(fundSuggestPayload.utf8))
+        #expect(!fundCandidates.contains { $0.symbol == "300502" })
+        #expect(fundCandidates[0].symbol == "270042")
+        #expect(fundCandidates[0].category == .fund)
+        #expect(fundCandidates[0].latestPrice == decimal("8.1427"))
+        #expect(fundCandidates[1].symbol == "510300")
+        #expect(fundCandidates[1].category == .cnStock)
+        #expect(fundCandidates[1].latestPrice == nil)
+
+        let fundGZPayload = #"jsonpgz({"fundcode":"270042","name":"广发纳斯达克100ETF联接人民币(QDII)A","jzrq":"2026-06-26","dwjz":"8.1427"});"#
+        let quote = try NativeMarketDataAdapter.candidate(
+            fromFundGZData: Data(fundGZPayload.utf8),
+            symbol: "270042",
+            fallbackName: "广发纳斯达克"
+        )
+        #expect(quote.symbol == "270042")
+        #expect(quote.latestPrice == decimal("8.1427"))
+        #expect(quote.quoteTime == "2026-06-26")
+
+        let fundLatestNetValuePayload = """
+        {
+          "Data": {
+            "LSJZList": [
+              {"FSRQ":"2026-07-01","DWJZ":"1.2504","LJJZ":"1.2504","JZZZL":"-0.45"},
+              {"FSRQ":"2026-06-30","DWJZ":"1.2560","LJJZ":"1.2560","JZZZL":"0.52"}
+            ]
+          },
+          "ErrCode": 0
+        }
+        """
+        let latestNetValueQuote = try NativeMarketDataAdapter.candidate(
+            fromFundLatestNetValueData: Data(fundLatestNetValuePayload.utf8),
+            symbol: "013770",
+            fallbackName: "博时稳益9个月持有混合C"
+        )
+        #expect(latestNetValueQuote.symbol == "013770")
+        #expect(latestNetValueQuote.latestPrice == decimal("1.2504"))
+        #expect(latestNetValueQuote.quoteTime == "2026-07-01")
+    }
+
+    @Test
+    func liveNativeMarketDataAdapterSearchesAndResolvesRepresentativeAssets() async throws {
+        guard ProcessInfo.processInfo.environment["PORTFOLIX_LIVE_MARKET_TESTS"] == "1" else {
+            return
+        }
+
+        let lookupCases: [(keyword: String, symbol: String, category: AssetCategory, currency: DisplayCurrency)] = [
+            ("600519", "600519", .cnStock, .cny),
+            ("000001", "000001", .cnStock, .cny),
+            ("920118", "920118", .cnStock, .cny),
+            ("900901", "900901", .bStock, .usd),
+            ("00700", "0700.HK", .hkStock, .hkd),
+            ("AAPL", "AAPL", .usStock, .usd),
+            ("510300", "510300", .cnStock, .cny),
+            ("270042", "270042", .fund, .cny),
+            ("013770", "013770", .fund, .cny),
+            ("020387", "020387", .fund, .cny),
+        ]
+
+        for lookupCase in lookupCases {
+            let candidates = try await MarketDataAdapter.shared.searchAssets(keyword: lookupCase.keyword)
+            let candidate = try #require(candidates.first {
+                $0.symbol == lookupCase.symbol && $0.category == lookupCase.category
+            })
+            #expect(candidate.quoteCurrency == lookupCase.currency)
+
+            let resolved = try await MarketDataAdapter.shared.resolveAsset(candidate)
+            #expect(resolved.symbol == lookupCase.symbol)
+            #expect(resolved.category == lookupCase.category)
+            #expect(resolved.quoteCurrency == lookupCase.currency)
+            #expect(resolved.latestPrice != nil)
+            #expect((resolved.latestPrice ?? 0) > 0)
+            #expect(resolved.upstreamSource == "东方财富")
+        }
+
+        let xysCandidates = try await MarketDataAdapter.shared.searchAssets(keyword: "300502")
+        #expect(xysCandidates.contains { $0.symbol == "300502" && $0.category == .cnStock })
+        #expect(!xysCandidates.contains { $0.symbol == "300502" && $0.category == .fund })
+
+        let unmatchedNumericCandidates = try await MarketDataAdapter.shared.searchAssets(keyword: "390444")
+        #expect(!unmatchedNumericCandidates.contains { $0.symbol == "390444" })
+
+        let cryptoCandidates = try await MarketDataAdapter.shared.searchAssets(keyword: "BTC")
+        let bitcoin = try #require(cryptoCandidates.first {
+            $0.symbol == "BTC/USDT" && $0.category == .crypto
+        })
+        let resolvedBitcoin = try await MarketDataAdapter.shared.resolveAsset(bitcoin)
+        #expect(resolvedBitcoin.symbol == "BTC/USDT")
+        #expect(resolvedBitcoin.category == .crypto)
+        #expect(resolvedBitcoin.quoteCurrency == .usdt)
+        #expect((resolvedBitcoin.latestPrice ?? 0) > 0)
+        #expect(resolvedBitcoin.upstreamSource == "OKX")
+
+        let cashCandidates = CashAssetLookup.search(keyword: "美元")
+        let usdCash = try #require(cashCandidates.first { $0.symbol == "USD" && $0.category == .cash })
+        #expect(usdCash.latestPrice == 1)
+        #expect(normalizedQuoteSource(usdCash.upstreamSource) == "手工价格")
     }
 
     @Test
@@ -3077,30 +3376,65 @@ struct PositionRepositoryTests {
     }
 
     @Test
-    func llmAPIKeyValidationProbeUsesCompletionResponse() async throws {
-        let llm = MockLLMCompleter(responses: [#"{"status":"ok"}"#])
+    func llmAPIKeyValidationProbeUsesLightweightConnectionProbe() async throws {
+        let validator = MockLLMConnectionValidator(result: .success(()))
 
         try await LLMAPIKeyValidationProbe.validate(
             configuration: AIProviderConfiguration.default,
             apiKey: "candidate-key",
-            client: llm
+            client: validator
         )
 
-        #expect(await llm.requestCount() == 1)
-        #expect(await llm.outputTokenLimits() == [LLMOutputTokenPolicy.validationProbe])
-        #expect(await llm.requestTimeouts() == [LLMRequestTimeoutPolicy.validationProbe])
-        #expect(await llm.userPrompts().last?.contains(#""status":"ok""#) == true)
+        #expect(await validator.requestCount() == 1)
+        #expect(await validator.outputTokenLimits() == [LLMOutputTokenPolicy.connectionValidation])
+        #expect(await validator.requestTimeouts() == [LLMRequestTimeoutPolicy.validationProbe])
     }
 
     @Test
-    func llmAPIKeyValidationProbeRejectsNonOKResponse() async throws {
-        let llm = MockLLMCompleter(responses: [#"{"status":"nope"}"#])
+    func openAICompatibleValidationAcceptsNonStandardSuccessfulProbeJSON() throws {
+        let reasoningOnlyProbe = """
+        {
+          "id": "chatcmpl-probe",
+          "object": "chat.completion",
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "reasoning_content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+        """
+        try OpenAICompatibleClient.validateSuccessfulProbeResponse(Data(reasoningOnlyProbe.utf8))
+
+        let responsesAPIProbe = """
+        {"id":"resp_probe","object":"response","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}
+        """
+        try OpenAICompatibleClient.validateSuccessfulProbeResponse(Data(responsesAPIProbe.utf8))
+    }
+
+    @Test
+    func openAICompatibleValidationRejectsProviderErrorProbeJSON() throws {
+        let providerError = """
+        {"error":{"message":"model unavailable","type":"invalid_request_error"}}
+        """
+        #expect(throws: LLMClientError.invalidResponse) {
+            try OpenAICompatibleClient.validateSuccessfulProbeResponse(Data(providerError.utf8))
+        }
+    }
+
+    @Test
+    func llmAPIKeyValidationProbePropagatesConnectionFailure() async throws {
+        let validator = MockLLMConnectionValidator(result: .failure(LLMClientError.unauthorized))
 
         await #expect(throws: LLMClientError.self) {
             try await LLMAPIKeyValidationProbe.validate(
                 configuration: AIProviderConfiguration.default,
                 apiKey: "candidate-key",
-                client: llm
+                client: validator
             )
         }
     }
@@ -3278,6 +3612,7 @@ struct PositionRepositoryTests {
         latestPrice: Decimal,
         source: String = "手工价格",
         quoteTime: String = "刚刚",
+        fetchedAt: String = ISO8601DateFormatter().string(from: .now),
         freshness: Freshness = .manual,
         weeklyTrend: [Double]? = nil
     ) -> Position {
@@ -3300,6 +3635,7 @@ struct PositionRepositoryTests {
             weeklyTrend: weeklyTrend ?? Array(repeating: latestPrice.doubleValue, count: 7),
             source: source,
             quoteTime: quoteTime,
+            fetchedAt: fetchedAt,
             freshness: freshness
         )
     }
@@ -3634,6 +3970,36 @@ private actor MockLLMCompleter: LLMCompleting {
 
     func userPrompts() -> [String] {
         capturedUserPrompts
+    }
+
+    func requestTimeouts() -> [TimeInterval] {
+        capturedRequestTimeouts
+    }
+
+    func outputTokenLimits() -> [Int] {
+        capturedOutputTokenLimits
+    }
+}
+
+private actor MockLLMConnectionValidator: LLMConnectionValidating {
+    private let result: Result<Void, LLMClientError>
+    private var count = 0
+    private var capturedRequestTimeouts: [TimeInterval] = []
+    private var capturedOutputTokenLimits: [Int] = []
+
+    init(result: Result<Void, LLMClientError>) {
+        self.result = result
+    }
+
+    func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
+        count += 1
+        capturedRequestTimeouts.append(configuration.requestTimeout)
+        capturedOutputTokenLimits.append(configuration.maxOutputTokens)
+        try result.get()
+    }
+
+    func requestCount() -> Int {
+        count
     }
 
     func requestTimeouts() -> [TimeInterval] {

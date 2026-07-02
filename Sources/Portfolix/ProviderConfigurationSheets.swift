@@ -6,36 +6,18 @@ private enum ProviderConfigurationLayout {
 }
 
 enum LLMAPIKeyValidationProbe {
-    private struct ProbeResponse: Decodable {
-        let status: String
-    }
-
     static func validate(
         configuration: AIProviderConfiguration,
         apiKey: String,
-        client: LLMCompleting = LLMProviderClient.shared
+        client: LLMConnectionValidating = LLMProviderClient.shared
     ) async throws {
         let probeConfiguration = configuration
             .withRequestTimeout(LLMRequestTimeoutPolicy.validationProbe)
-            .withMaxOutputTokens(LLMOutputTokenPolicy.validationProbe)
-        let raw = try await client.completeJSON(
-            systemPrompt: "你是 Portfolix 的 LLM API 连通性检查器。只返回一个合法 JSON 对象，不得输出其他文字。",
-            userPrompt: #"请仅返回 {"status":"ok"}。"#,
+            .withMaxOutputTokens(LLMOutputTokenPolicy.connectionValidation)
+        try await client.validateConnection(
             configuration: probeConfiguration,
             apiKey: apiKey
         )
-        let cleaned = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard
-            let data = cleaned.data(using: .utf8),
-            let decoded = try? JSONDecoder().decode(ProbeResponse.self, from: data),
-            decoded.status.localizedCaseInsensitiveCompare("ok") == .orderedSame
-        else {
-            throw LLMClientError.invalidResponse
-        }
     }
 }
 
@@ -68,30 +50,36 @@ struct LLMConfigurationSheet: View {
         ) {
             Form {
                 Section {
-                    Picker(text("供应商", "Provider"), selection: $provider) {
-                        ForEach(LLMProviderOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
+                    ProviderFormRow(label: text("供应商", "Provider")) {
+                        Picker("", selection: $provider) {
+                            ForEach(LLMProviderOption.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: valueFieldWidth, alignment: .trailing)
                     }
-                    .pickerStyle(.menu)
                     .onChange(of: provider) { _, newProvider in
                         applyProviderDefaults(newProvider)
                     }
 
-                    LabeledContent("API Base URL") {
+                    ProviderFormRow(label: "API Base URL") {
                         TextField("", text: $baseURL)
                             .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .regular))
                             .multilineTextAlignment(.trailing)
                             .foregroundStyle(PortfolixTheme.primaryText)
-                            .frame(width: valueFieldWidth, alignment: .trailing)
+                            .lineLimit(1)
+                            .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
                             .onChange(of: baseURL) { _, _ in
                                 scheduleAPIKeyValidation()
                             }
                     }
 
                     if !availableModels.isEmpty {
-                        LabeledContent(text("模型", "Model")) {
-                            Picker(text("模型", "Model"), selection: $model) {
+                        ProviderFormRow(label: text("模型", "Model")) {
+                            Picker("", selection: $model) {
                                 ForEach(availableModels, id: \.self) { model in
                                     Text(model).tag(model)
                                 }
@@ -104,18 +92,19 @@ struct LLMConfigurationSheet: View {
                             }
                         }
                     } else {
-                        LabeledContent(text("模型", "Model")) {
+                        ProviderFormRow(label: text("模型", "Model")) {
                             TextField("", text: $model)
                                 .textFieldStyle(.plain)
                                 .multilineTextAlignment(.trailing)
-                                .frame(width: valueFieldWidth, alignment: .trailing)
+                                .lineLimit(1)
+                                .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
                                 .onChange(of: model) { _, _ in
                                     scheduleAPIKeyValidation()
                                 }
                         }
                     }
 
-                    LabeledContent("API Key") {
+                    ProviderFormRow(label: "API Key") {
                         HStack(spacing: PortfolixSpacing.sm) {
                             Group {
                                 if isAPIKeyVisible {
@@ -141,7 +130,7 @@ struct LLMConfigurationSheet: View {
                             .foregroundStyle(PortfolixTheme.tertiaryText)
                             .help(isAPIKeyVisible ? text("隐藏 API Key", "Hide API Key") : text("显示 API Key", "Show API Key"))
                         }
-                        .frame(width: valueFieldWidth, alignment: .trailing)
+                        .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
                         .clipped()
                         .onChange(of: apiKey) { _, _ in
                             scheduleAPIKeyValidation()
@@ -161,7 +150,7 @@ struct LLMConfigurationSheet: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .padding(.horizontal, 10)
+            .environment(\.defaultMinListRowHeight, 36)
         } secondary: {
             Button {
                 Task { await fetchModelsAndValidate() }
@@ -477,8 +466,8 @@ struct SearchConfigurationSheet: View {
         ) {
             Form {
                 Section {
-                    LabeledContent(text("供应商", "Provider")) {
-                        Picker(text("供应商", "Provider"), selection: $provider) {
+                    ProviderFormRow(label: text("供应商", "Provider")) {
+                        Picker("", selection: $provider) {
                             ForEach(SearchProviderOption.allCases) { option in
                                 Text(option.rawValue).tag(option)
                             }
@@ -491,7 +480,7 @@ struct SearchConfigurationSheet: View {
                         }
                     }
 
-                    LabeledContent("API Key") {
+                    ProviderFormRow(label: "API Key") {
                         HStack(spacing: PortfolixSpacing.sm) {
                             Group {
                                 if isAPIKeyVisible {
@@ -517,7 +506,7 @@ struct SearchConfigurationSheet: View {
                             .foregroundStyle(PortfolixTheme.tertiaryText)
                             .help(isAPIKeyVisible ? text("隐藏 API Key", "Hide API Key") : text("显示 API Key", "Show API Key"))
                         }
-                        .frame(width: valueFieldWidth, alignment: .trailing)
+                        .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
                         .clipped()
                         .onChange(of: apiKey) { _, _ in
                             scheduleAPIKeyValidation()
@@ -525,8 +514,8 @@ struct SearchConfigurationSheet: View {
                     }
 
                     if provider == .tavily {
-                        LabeledContent(text("搜索质量", "Search Quality")) {
-                            Picker(text("搜索质量", "Search Quality"), selection: $quality) {
+                        ProviderFormRow(label: text("搜索质量", "Search Quality")) {
+                            Picker("", selection: $quality) {
                                 ForEach(SearchQuality.allCases) { option in
                                     Text(option.title(language: store.appLanguage)).tag(option)
                                 }
@@ -550,7 +539,7 @@ struct SearchConfigurationSheet: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .padding(.horizontal, 10)
+            .environment(\.defaultMinListRowHeight, 36)
         } secondary: {
             EmptyView()
         }
@@ -783,16 +772,20 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
 
             Divider().overlay(PortfolixTheme.border)
 
-            HStack(spacing: PortfolixSpacing.sm) {
-                secondary
+            HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
+                HStack(spacing: PortfolixSpacing.sm) {
+                    secondary
+                }
                 Spacer()
-                Button(cancelTitle, action: cancel)
-                    .buttonStyle(QuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button(primaryTitle, action: primary)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isPrimaryDisabled)
-                    .keyboardShortcut(.defaultAction)
+                HStack(spacing: PortfolixSpacing.sm) {
+                    Button(cancelTitle, action: cancel)
+                        .buttonStyle(QuietButtonStyle())
+                        .keyboardShortcut(.cancelAction)
+                    Button(primaryTitle, action: primary)
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(isPrimaryDisabled)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             .padding(PortfolixSpacing.xl)
         }
@@ -810,6 +803,33 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
+    }
+}
+
+private struct ProviderFormRow<Value: View>: View {
+    let label: String
+    let value: Value
+
+    init(label: String, @ViewBuilder value: () -> Value) {
+        self.label = label
+        self.value = value()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: PortfolixSpacing.md) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PortfolixTheme.primaryText)
+                .lineLimit(1)
+
+            Spacer(minLength: PortfolixSpacing.md)
+
+            value
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PortfolixTheme.primaryText)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(minHeight: 36, alignment: .center)
     }
 }
 

@@ -237,6 +237,7 @@ enum LLMRequestTimeoutPolicy {
 }
 
 enum LLMOutputTokenPolicy {
+    static let connectionValidation = 16
     static let validationProbe = 64
     static let standard = 2_400
     static let followUp = 3_200

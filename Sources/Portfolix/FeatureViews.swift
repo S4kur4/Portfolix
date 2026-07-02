@@ -768,10 +768,6 @@ private struct AIReportFollowUpMessage: View {
                 .padding(.horizontal, PortfolixSpacing.lg)
                 .padding(.vertical, PortfolixSpacing.md)
                 .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
-                        .stroke(PortfolixTheme.border, lineWidth: 1)
-                )
 
             if showsDisclaimer {
                 AIReportDisclaimer(language: language)
@@ -2059,7 +2055,12 @@ struct RiskProfileView: View {
                     Button {
                         isQuestionnairePresented = true
                     } label: {
-                        Label(localizedText("重新评估", "Reassess", language: store.appLanguage), systemImage: "arrow.clockwise")
+                        Label(
+                            store.riskProfileConfigured
+                                ? localizedText("重新评估", "Reassess", language: store.appLanguage)
+                                : localizedText("开始评估", "Start Assessment", language: store.appLanguage),
+                            systemImage: store.riskProfileConfigured ? "arrow.clockwise" : "play.circle.fill"
+                        )
                     }
                     .buttonStyle(PrimaryButtonStyle())
                 }
@@ -2149,6 +2150,9 @@ struct RiskProfileView: View {
     }
 
     private var riskProfileVersionLabel: String {
+        guard store.riskProfileConfigured else {
+            return localizedText("等待首次评估", "Not assessed yet", language: store.appLanguage)
+        }
         let updatedText = store.riskProfileUpdatedText(now: store.relativeTimeNow, language: store.appLanguage)
         return store.appLanguage == .english
             ? "Version v\(store.riskProfileVersion) · \(updatedText)"
