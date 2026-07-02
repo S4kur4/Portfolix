@@ -1,6 +1,12 @@
 # Portfolix
 
-**Portfolix 是一款运行于 macOS 的投资组合管理工具，面向国内个人投资者，提供记录、追踪与智能分析功能。**
+</div>
+
+<div align="center">
+  <img src="/Portfolix.png?raw=true" alt="Portfolix" width="256">
+</div>
+
+**Portfolix 是一款运行在 macOS 上的投资组合管理工具，面向国内个人投资者，提供记录、追踪与智能分析功能。**
 
 中文 | [English](#english)
 
