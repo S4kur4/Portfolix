@@ -52,26 +52,53 @@ struct SidebarView: View {
 }
 
 private struct SidebarVersion: View {
+    @EnvironmentObject private var store: PortfolioStore
+    @EnvironmentObject private var sparkleUpdater: PortfolixSparkleUpdater
+
     private var version: String {
-        normalizedBundleValue(for: "CFBundleShortVersionString") ?? "0.1.0"
+        normalizedBundleValue(for: "CFBundleShortVersionString") ?? "0.1.1"
     }
 
     private var build: String {
-        normalizedBundleValue(for: "CFBundleVersion") ?? "7"
+        normalizedBundleValue(for: "CFBundleVersion") ?? "8"
     }
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.sm) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 10, weight: .semibold))
+            HStack(spacing: PortfolixSpacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 10, weight: .semibold))
 
-            Text("v\(version) (\(build))")
+                Text("v\(version) (\(build))")
+            }
+            .lineLimit(1)
+
+            Spacer(minLength: PortfolixSpacing.xs)
+
+            if let availableUpdate = sparkleUpdater.availableUpdate {
+                Button {
+                    sparkleUpdater.checkForUpdates()
+                } label: {
+                    Label(updateButtonTitle, systemImage: "arrow.down.circle.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(PortfolixTheme.violet.opacity(0.16))
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(PortfolixTheme.violet)
+                .help(updateHelpText(for: availableUpdate))
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
         }
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .monospacedDigit()
             .foregroundStyle(PortfolixTheme.secondaryText)
             .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
             .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
             .padding(.top, PortfolixSpacing.sm)
             .overlay(alignment: .top) {
@@ -79,6 +106,18 @@ private struct SidebarVersion: View {
                     .fill(PortfolixTheme.border)
                     .frame(height: 1)
             }
+    }
+
+    private var updateButtonTitle: String {
+        localizedText("更新", "Update", language: store.appLanguage)
+    }
+
+    private func updateHelpText(for update: PortfolixAvailableUpdate) -> String {
+        localizedText(
+            "发现新版本 \(update.displayVersion)，点击检查更新",
+            "Version \(update.displayVersion) is available. Click to check for updates.",
+            language: store.appLanguage
+        )
     }
 
     private func normalizedBundleValue(for key: String) -> String? {

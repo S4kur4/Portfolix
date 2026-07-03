@@ -5,11 +5,13 @@ import SwiftUI
 struct PortfolixApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = PortfolioStore()
+    @StateObject private var sparkleUpdater = PortfolixSparkleUpdater()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(sparkleUpdater)
                 .frame(minWidth: 1180, minHeight: 760)
         }
         .defaultSize(width: 1180, height: 760)
@@ -21,6 +23,10 @@ struct PortfolixApp: App {
                 Button(systemLocalizedText("关于 Portfolix", "About Portfolix")) {
                     PortfolixReleaseInfo.showAboutPanel()
                 }
+
+                Divider()
+
+                CheckForUpdatesMenuItem(updater: sparkleUpdater)
             }
         }
     }

@@ -11,13 +11,19 @@ let package = Package(
         .executable(name: "Portfolix", targets: ["Portfolix"]),
         .executable(name: "PortfolixPriceUpdater", targets: ["PortfolixPriceUpdater"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0")
+    ],
     targets: [
         .systemLibrary(
             name: "CSQLite"
         ),
         .executableTarget(
             name: "Portfolix",
-            dependencies: ["CSQLite"]
+            dependencies: [
+                "CSQLite",
+                .product(name: "Sparkle", package: "Sparkle")
+            ]
         ),
         .executableTarget(
             name: "PortfolixPriceUpdater",
