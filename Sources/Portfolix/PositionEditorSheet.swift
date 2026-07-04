@@ -1,5 +1,17 @@
 import SwiftUI
 
+private enum PositionEditorField: Hashable {
+    case name
+    case symbol
+    case quantity
+    case cost
+}
+
+private enum PositionEditorLayout {
+    static let valueFieldWidth: CGFloat = 320
+    static let valueFieldHeight: CGFloat = 28
+}
+
 private struct AssetLookupProviderMessage: Sendable {
     let chinese: String
     let english: String
@@ -43,6 +55,8 @@ struct PositionEditorSheet: View {
     @State private var isManualAssetEntry: Bool
     @State private var selectedQuoteTime: String?
     @State private var isSaving = false
+    @State private var didAttemptSave = false
+    @FocusState private var focusedField: PositionEditorField?
 
     init(presentation: PositionEditorPresentation) {
         self.presentation = presentation
@@ -72,6 +86,58 @@ struct PositionEditorSheet: View {
         localizedText(chinese, english, language: language)
     }
 
+    private func placeholderColor(for field: PositionEditorField) -> Color {
+        shouldHighlight(field) ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
+    }
+
+    private func inputColor(for field: PositionEditorField) -> Color {
+        shouldHighlight(field) ? PortfolixTheme.danger : PortfolixTheme.primaryText
+    }
+
+    private func shouldShowPlaceholder(for field: PositionEditorField, text: String) -> Bool {
+        focusedField != field && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var usesFixedCashPricing: Bool {
+        category == .cash
+    }
+
+    private func editorTextField(
+        title: String,
+        text: Binding<String>,
+        field: PositionEditorField,
+        placeholder: String,
+        isLocked: Bool = false
+    ) -> some View {
+        LabeledContent {
+            ZStack(alignment: .trailing) {
+                if !isLocked, shouldShowPlaceholder(for: field, text: text.wrappedValue) {
+                    Text(placeholder)
+                        .font(PortfolixTypography.body)
+                        .foregroundStyle(placeholderColor(for: field))
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: text)
+                    .textFieldStyle(.plain)
+                    .font(PortfolixTypography.body)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+                    .foregroundStyle(isLocked ? PortfolixTheme.secondaryText : inputColor(for: field))
+                    .focused($focusedField, equals: field)
+                    .allowsHitTesting(!isLocked)
+                    .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
+            }
+            .frame(
+                width: PositionEditorLayout.valueFieldWidth,
+                height: PositionEditorLayout.valueFieldHeight,
+                alignment: .trailing
+            )
+        } label: {
+            EditorFieldLabel(title: title, isInvalid: shouldHighlight(field))
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
@@ -83,11 +149,49 @@ struct PositionEditorSheet: View {
 
             Form {
                 Section {
-                    TextField(sheetText("资产名称", "Asset Name"), text: $name)
+                    Picker(sheetText("资产类别", "Asset Type"), selection: $category) {
+                        ForEach(AssetCategory.allCases) { category in
+                            Text(category.title(language: language)).tag(category)
+                        }
+                    }
+                    .disabled(!isManualAssetEntry)
+                    .onChange(of: category) { _, _ in
+                        handleCategoryChange()
+                    }
+
+                    if !isManualAssetEntry {
+                        HStack(spacing: PortfolixSpacing.sm) {
+                            Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(PortfolixTheme.secondaryText)
+
+                            Spacer()
+
+                            Button(sheetText("改为手工录入", "Use Manual Entry")) {
+                                switchToManualEntry()
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(PortfolixTheme.lilac)
+                        }
+                    }
+
+                    editorTextField(
+                        title: sheetText("资产名称", "Asset Name"),
+                        text: $name,
+                        field: .name,
+                        placeholder: sheetText("输入名称搜索", "Search by name")
+                    )
                         .onChange(of: name) { _, value in
                             scheduleAssetSearch(for: value)
                         }
-                    TextField(sheetText("资产代码", "Asset Code"), text: $symbol)
+
+                    editorTextField(
+                        title: sheetText("资产代码", "Asset Code"),
+                        text: $symbol,
+                        field: .symbol,
+                        placeholder: sheetText("输入代码搜索", "Search by code")
+                    )
                         .onChange(of: symbol) { _, value in
                             scheduleAssetSearch(for: value)
                         }
@@ -124,31 +228,15 @@ struct PositionEditorSheet: View {
                     }
                 }
 
-                Picker(sheetText("资产类别", "Asset Type"), selection: $category) {
-                    ForEach(AssetCategory.allCases) { category in
-                        Text(category.title(language: language)).tag(category)
-                    }
+                editorTextField(
+                    title: sheetText("当前份额", "Current Shares"),
+                    text: $quantity,
+                    field: .quantity,
+                    placeholder: sheetText("填写当前持有份额", "Enter current shares")
+                )
+                .onChange(of: quantity) { _, _ in
+                    validationMessage = nil
                 }
-                .disabled(!isManualAssetEntry)
-
-                if !isManualAssetEntry {
-                    HStack(spacing: PortfolixSpacing.sm) {
-                        Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(PortfolixTheme.secondaryText)
-
-                        Spacer()
-
-                        Button(sheetText("改为手工录入", "Use Manual Entry")) {
-                            switchToManualEntry()
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(PortfolixTheme.lilac)
-                    }
-                }
-
-                TextField(sheetText("当前份额", "Current Shares"), text: $quantity)
 
                 Picker(sheetText("成本录入方式", "Cost Input Method"), selection: $costMode) {
                     ForEach(CostEntryMode.allCases) { mode in
@@ -156,8 +244,20 @@ struct PositionEditorSheet: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .disabled(usesFixedCashPricing)
 
-                TextField(costMode.title(language: language), text: $costValue)
+                editorTextField(
+                    title: costMode.title(language: language),
+                    text: $costValue,
+                    field: .cost,
+                    placeholder: costMode == .totalCost
+                        ? sheetText("填写持仓总成本", "Enter total holding cost")
+                        : sheetText("填写每份成本价", "Enter cost per share"),
+                    isLocked: usesFixedCashPricing
+                )
+                .onChange(of: costValue) { _, _ in
+                    validationMessage = nil
+                }
 
                 Picker(sheetText("计价与成本币种", "Price and Cost Currency"), selection: $costCurrency) {
                     ForEach(DisplayCurrency.allCases) { currency in
@@ -167,7 +267,12 @@ struct PositionEditorSheet: View {
                 .pickerStyle(.segmented)
                 .disabled(!isManualAssetEntry)
 
-                TextField(sheetText("当前价格", "Current Price"), text: $latestPrice)
+                LabeledContent(sheetText("当前价格", "Current Price")) {
+                    Text(currentPriceText)
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
 
                 if let priceMetadataText {
                     LabeledContent(sheetText("价格日期", "Price Date")) {
@@ -236,7 +341,7 @@ struct PositionEditorSheet: View {
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(!canSave || isSaving)
+                .disabled(isSaving)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(PortfolixSpacing.xl)
@@ -245,6 +350,31 @@ struct PositionEditorSheet: View {
         .background {
             PortfolixSheetBackground()
         }
+    }
+
+    private var invalidRequiredFields: Set<PositionEditorField> {
+        var fields: Set<PositionEditorField> = []
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            fields.insert(.name)
+        }
+        if symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            fields.insert(.symbol)
+        }
+        if decimalValue(quantity).map({ $0 > 0 }) != true {
+            fields.insert(.quantity)
+        }
+        if !usesFixedCashPricing, decimalValue(costValue).map({ $0 >= 0 }) != true {
+            fields.insert(.cost)
+        }
+        return fields
+    }
+
+    private var firstInvalidField: PositionEditorField? {
+        [.name, .symbol, .quantity, .cost].first { invalidRequiredFields.contains($0) }
+    }
+
+    private func shouldHighlight(_ field: PositionEditorField) -> Bool {
+        didAttemptSave && invalidRequiredFields.contains(field)
     }
 
     private var quantityChanged: Bool {
@@ -258,16 +388,7 @@ struct PositionEditorSheet: View {
     }
 
     private var canSave: Bool {
-        guard
-            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let quantity = decimalValue(quantity),
-            quantity > 0,
-            let enteredCost = decimalValue(costValue),
-            enteredCost >= 0,
-            let latestPrice = decimalValue(latestPrice),
-            latestPrice > 0
-        else {
+        guard invalidRequiredFields.isEmpty else {
             return false
         }
         if
@@ -281,6 +402,16 @@ struct PositionEditorSheet: View {
             return false
         }
         return true
+    }
+
+    private var currentPriceText: String {
+        guard
+            let latestPrice = decimalValue(latestPrice),
+            latestPrice > 0
+        else {
+            return "--"
+        }
+        return decimalString(latestPrice)
     }
 
     private var holdingAmountText: String {
@@ -304,16 +435,34 @@ struct PositionEditorSheet: View {
     }
 
     private func saveChanges() async -> Bool {
+        if usesFixedCashPricing {
+            applyFixedCashPricing()
+        }
         guard
             canSave,
             let quantity = decimalValue(quantity),
-            let enteredCost = decimalValue(costValue),
-            let latestPrice = decimalValue(latestPrice)
+            let enteredCost = decimalValue(costValue)
         else {
-            validationMessage = sheetText("请完整填写有效的资产、份额、成本和价格", "Please complete valid asset, shares, cost, and price fields")
+            didAttemptSave = true
+            validationMessage = nil
+            focusedField = firstInvalidField
             return false
         }
 
+        guard
+            let latestPrice = decimalValue(latestPrice),
+            latestPrice > 0
+        else {
+            didAttemptSave = true
+            validationMessage = sheetText(
+                "当前价格尚未获取，请先从数据候选中选择资产。",
+                "Current price is not available yet. Select an asset from data candidates first."
+            )
+            focusedField = nil
+            return false
+        }
+
+        didAttemptSave = false
         let averageCost = costMode == .totalCost ? enteredCost / quantity : enteredCost
         isSaving = true
         defer { isSaving = false }
@@ -466,6 +615,34 @@ struct PositionEditorSheet: View {
         }
     }
 
+    private func handleCategoryChange() {
+        guard isManualAssetEntry else { return }
+        validationMessage = nil
+        selectedAssetCandidate = nil
+        selectedQuoteTime = nil
+        assetCandidates = []
+        assetLookupMessage = nil
+        costCurrency = defaultCurrency(for: category)
+        if usesFixedCashPricing {
+            applyFixedCashPricing()
+        }
+        scheduleAssetSearch(for: preferredAssetLookupQuery)
+    }
+
+    private func applyFixedCashPricing() {
+        costMode = .averageCost
+        costValue = "1"
+        latestPrice = "1"
+    }
+
+    private var preferredAssetLookupQuery: String {
+        let symbolQuery = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !symbolQuery.isEmpty {
+            return symbolQuery
+        }
+        return name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func scheduleAssetSearch(for rawQuery: String) {
         if let selectedAssetCandidate,
            rawQuery == selectedAssetCandidate.name
@@ -475,12 +652,16 @@ struct PositionEditorSheet: View {
         }
         selectedAssetCandidate = nil
         isManualAssetEntry = true
+        validationMessage = nil
         assetLookupTask?.cancel()
         assetLookupGeneration += 1
         let generation = assetLookupGeneration
         selectedQuoteTime = nil
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard query.count >= 2 else {
+        let searchCategory = category
+        let lookupLanguage = language
+        let emptyMessage = emptySearchMessage
+        guard !query.isEmpty else {
             assetCandidates = []
             isSearchingAssets = false
             assetLookupMessage = nil
@@ -490,20 +671,24 @@ struct PositionEditorSheet: View {
         isSearchingAssets = true
         assetLookupMessage = nil
         assetLookupTask = Task {
-            try? await Task.sleep(for: .milliseconds(350))
+            try? await Task.sleep(for: .milliseconds(280))
             guard !Task.isCancelled else { return }
 
-            let cashCandidates = CashAssetLookup.search(keyword: query)
-            var candidates = deduplicated(cashCandidates)
+            let localCandidates = searchCategory == .cash ? CashAssetLookup.search(keyword: query) : []
+            var candidates = Self.filteredLookupCandidates(localCandidates, category: searchCategory)
             assetCandidates = candidates
-            if !candidates.isEmpty {
+            if !candidates.isEmpty || searchCategory == .cash {
                 isSearchingAssets = false
+            }
+            if searchCategory == .cash {
+                assetLookupMessage = candidates.isEmpty ? emptyMessage : nil
+                return
             }
 
             var providerMessages: [String] = []
             await withTaskGroup(of: AssetLookupProviderResult.self) { group in
                 group.addTask {
-                    await Self.searchMarketDataAssets(keyword: query)
+                    await Self.searchMarketDataAssets(keyword: query, category: searchCategory)
                 }
 
                 for await providerCandidates in group {
@@ -511,10 +696,10 @@ struct PositionEditorSheet: View {
                         group.cancelAll()
                         return
                     }
-                    if let message = providerCandidates.message(language: language) {
+                    if let message = providerCandidates.message(language: lookupLanguage) {
                         providerMessages.append(message)
                     }
-                    candidates = deduplicated(cashCandidates + candidates + providerCandidates.candidates)
+                    candidates = Self.filteredLookupCandidates(candidates + providerCandidates.candidates, category: searchCategory)
                     assetCandidates = candidates
                     markAvailableDataSources(from: providerCandidates.candidates)
                     if !candidates.isEmpty {
@@ -524,7 +709,7 @@ struct PositionEditorSheet: View {
             }
             guard !Task.isCancelled, generation == assetLookupGeneration else { return }
             assetCandidates = candidates
-            assetLookupMessage = candidates.isEmpty ? providerMessages.first ?? emptySearchMessage : nil
+            assetLookupMessage = candidates.isEmpty ? providerMessages.first ?? emptyMessage : nil
             isSearchingAssets = false
         }
     }
@@ -548,18 +733,24 @@ struct PositionEditorSheet: View {
                 applyAssetCandidate(resolved)
                 store.markDataSourceAvailable(for: resolved)
                 if resolved.latestPrice == nil {
-                    assetLookupMessage = sheetText("未获取到最新价格，请手工填写", "Latest price unavailable. Please enter it manually")
+                    assetLookupMessage = sheetText(
+                        "未获取到最新价格，请稍后重试或继续选择其他候选",
+                        "Latest price unavailable. Try again later or choose another candidate."
+                    )
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                assetLookupMessage = sheetText("未获取到最新价格，请手工填写", "Latest price unavailable. Please enter it manually")
+                assetLookupMessage = sheetText(
+                    "未获取到最新价格，请稍后重试或继续选择其他候选",
+                    "Latest price unavailable. Try again later or choose another candidate."
+                )
             }
         }
     }
 
-    private static func searchMarketDataAssets(keyword: String) async -> AssetLookupProviderResult {
+    private static func searchMarketDataAssets(keyword: String, category: AssetCategory) async -> AssetLookupProviderResult {
         do {
-            return AssetLookupProviderResult(candidates: try await MarketDataAdapter.shared.searchAssets(keyword: keyword))
+            return AssetLookupProviderResult(candidates: try await MarketDataAdapter.shared.searchAssets(keyword: keyword, category: category))
         } catch {
             return AssetLookupProviderResult(error: marketDataSearchFailureMessage(for: error))
         }
@@ -615,6 +806,9 @@ struct PositionEditorSheet: View {
         isSearchingAssets = false
         isResolvingAsset = false
         isManualAssetEntry = true
+        if usesFixedCashPricing {
+            applyFixedCashPricing()
+        }
     }
 
 }
@@ -688,13 +882,33 @@ enum CashAssetLookup {
 }
 
 private extension PositionEditorSheet {
-    func deduplicated(_ candidates: [AssetLookupCandidate]) -> [AssetLookupCandidate] {
+    static func deduplicated(_ candidates: [AssetLookupCandidate]) -> [AssetLookupCandidate] {
         var seen: Set<AssetLookupCandidate.ID> = []
         return candidates.filter { seen.insert($0.id).inserted }
     }
 
+    static func filteredLookupCandidates(_ candidates: [AssetLookupCandidate], category: AssetCategory) -> [AssetLookupCandidate] {
+        Array(deduplicated(candidates.filter { $0.category == category }).prefix(10))
+    }
+
     var emptySearchMessage: String {
-        sheetText("未找到候选，可继续手工填写", "No candidates found. You can continue manually")
+        sheetText(
+            "未找到\(category.title(language: language))候选，可继续手工填写",
+            "No \(category.title(language: language)) candidates found. You can continue manually"
+        )
+    }
+
+    func defaultCurrency(for category: AssetCategory) -> DisplayCurrency {
+        switch category {
+        case .cnStock, .bStock, .fund, .cash:
+            .cny
+        case .hkStock:
+            .hkd
+        case .usStock:
+            .usd
+        case .crypto:
+            .usdt
+        }
     }
 
     func markAvailableDataSources(from candidates: [AssetLookupCandidate]) {
@@ -713,6 +927,9 @@ private extension PositionEditorSheet {
         costCurrency = candidate.quoteCurrency
         if let latestPrice = candidate.latestPrice {
             self.latestPrice = decimalString(latestPrice)
+        }
+        if candidate.category == .cash {
+            applyFixedCashPricing()
         }
         selectedQuoteTime = candidate.quoteTime
     }
@@ -746,6 +963,22 @@ private extension PositionEditorSheet {
             return preview.priceDateText(language: language)
         }
         return sheetText("价格日期待获取", "Price date pending")
+    }
+}
+
+private struct EditorFieldLabel: View {
+    let title: String
+    let isInvalid: Bool
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.xs) {
+            Text(title)
+            Text("·")
+                .font(.system(size: 22, weight: .heavy))
+                .baselineOffset(1)
+                .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
+                .accessibilityHidden(true)
+        }
     }
 }
 

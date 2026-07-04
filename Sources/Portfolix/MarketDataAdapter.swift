@@ -87,6 +87,23 @@ actor MarketDataAdapter {
         return []
     }
 
+    func searchAssets(keyword rawKeyword: String, category: AssetCategory) async throws -> [AssetLookupCandidate] {
+        let keyword = rawKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard 1 ... 64 ~= keyword.count else {
+            throw MarketDataAdapterError.invalidKeyword
+        }
+
+        switch category {
+        case .cash:
+            return []
+        case .crypto:
+            return Self.deduplicated(try await okx.searchAssets(keyword: keyword)).prefix(12).map { $0 }
+        case .cnStock, .bStock, .hkStock, .usStock, .fund:
+            let candidates = try await native.searchAssets(keyword: keyword)
+            return Self.deduplicated(candidates.filter { $0.category == category }).prefix(12).map { $0 }
+        }
+    }
+
     func resolveAsset(_ candidate: AssetLookupCandidate) async throws -> AssetLookupCandidate {
         switch candidate.category {
         case .cash:

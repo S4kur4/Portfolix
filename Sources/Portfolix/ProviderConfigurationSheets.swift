@@ -2,7 +2,15 @@ import AppKit
 import SwiftUI
 
 private enum ProviderConfigurationLayout {
-    static let valueFieldWidth: CGFloat = 380
+    static let valueFieldWidth: CGFloat = 340
+    static let valueFieldMinHeight: CGFloat = 28
+}
+
+private enum ProviderConfigurationField: Hashable {
+    case llmBaseURL
+    case llmModel
+    case llmAPIKey
+    case searchAPIKey
 }
 
 enum LLMAPIKeyValidationProbe {
@@ -35,6 +43,8 @@ struct LLMConfigurationSheet: View {
     @State private var isAPIKeyVisible = false
     @State private var apiKeyValidationTask: Task<Void, Never>?
     @State private var connectionStatusFingerprint: String?
+    @State private var didAttemptSave = false
+    @FocusState private var focusedField: ProviderConfigurationField?
     private let valueFieldWidth = ProviderConfigurationLayout.valueFieldWidth
 
     var body: some View {
@@ -44,7 +54,7 @@ struct LLMConfigurationSheet: View {
             height: 500,
             cancelTitle: text("取消", "Cancel"),
             primaryTitle: text("保存", "Save"),
-            isPrimaryDisabled: !canSave,
+            isPrimaryDisabled: isValidatingAPIKey,
             cancel: { dismiss() },
             primary: save
         ) {
@@ -64,21 +74,21 @@ struct LLMConfigurationSheet: View {
                         applyProviderDefaults(newProvider)
                     }
 
-                    ProviderFormRow(label: "API Base URL") {
-                        TextField("", text: $baseURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13, weight: .regular))
-                            .multilineTextAlignment(.trailing)
-                            .foregroundStyle(PortfolixTheme.primaryText)
-                            .lineLimit(1)
-                            .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
+                    ProviderFormRow(label: "API Base URL", isRequired: true, isInvalid: shouldHighlight(.llmBaseURL)) {
+                        ProviderInputField(
+                            text: $baseURL,
+                            placeholder: text("填写 HTTPS API Base URL", "Enter HTTPS API Base URL"),
+                            field: .llmBaseURL,
+                            focusedField: $focusedField,
+                            isInvalid: shouldHighlight(.llmBaseURL)
+                        )
                             .onChange(of: baseURL) { _, _ in
                                 scheduleAPIKeyValidation()
                             }
                     }
 
                     if !availableModels.isEmpty {
-                        ProviderFormRow(label: text("模型", "Model")) {
+                        ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
                             Picker("", selection: $model) {
                                 ForEach(availableModels, id: \.self) { model in
                                     Text(model).tag(model)
@@ -92,46 +102,31 @@ struct LLMConfigurationSheet: View {
                             }
                         }
                     } else {
-                        ProviderFormRow(label: text("模型", "Model")) {
-                            TextField("", text: $model)
-                                .textFieldStyle(.plain)
-                                .multilineTextAlignment(.trailing)
-                                .lineLimit(1)
-                                .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
+                        ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
+                            ProviderInputField(
+                                text: $model,
+                                placeholder: text("填写模型名称", "Enter model name"),
+                                field: .llmModel,
+                                focusedField: $focusedField,
+                                isInvalid: shouldHighlight(.llmModel)
+                            )
                                 .onChange(of: model) { _, _ in
                                     scheduleAPIKeyValidation()
                                 }
                         }
                     }
 
-                    ProviderFormRow(label: "API Key") {
-                        HStack(spacing: PortfolixSpacing.sm) {
-                            Group {
-                                if isAPIKeyVisible {
-                                    TextField("", text: $apiKey)
-                                } else {
-                                    SecureField("", text: $apiKey)
-                                }
-                            }
-                            .textFieldStyle(.plain)
-                            .multilineTextAlignment(.trailing)
-                            .foregroundStyle(PortfolixTheme.primaryText)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-
-                            Button {
-                                isAPIKeyVisible.toggle()
-                            } label: {
-                                Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .frame(width: 20, height: 20)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
-                            .help(isAPIKeyVisible ? text("隐藏 API Key", "Hide API Key") : text("显示 API Key", "Show API Key"))
-                        }
-                        .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
-                        .clipped()
+                    ProviderFormRow(label: "API Key", isRequired: true, isInvalid: shouldHighlight(.llmAPIKey)) {
+                        ProviderAPIKeyInputField(
+                            text: $apiKey,
+                            isVisible: $isAPIKeyVisible,
+                            placeholder: text("填写 API Key", "Enter API Key"),
+                            field: .llmAPIKey,
+                            focusedField: $focusedField,
+                            isInvalid: shouldHighlight(.llmAPIKey),
+                            visibleHelp: text("隐藏 API Key", "Hide API Key"),
+                            hiddenHelp: text("显示 API Key", "Show API Key")
+                        )
                         .onChange(of: apiKey) { _, _ in
                             scheduleAPIKeyValidation()
                         }
@@ -180,7 +175,7 @@ struct LLMConfigurationSheet: View {
 
     private var canSave: Bool {
         hasValidBaseURL
-            && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && hasModel
             && hasVisibleOrSavedAPIKey
             && !isValidatingAPIKey
     }
@@ -202,8 +197,30 @@ struct LLMConfigurationSheet: View {
         hasBaseURL && baseURLValidationError == nil
     }
 
+    private var hasModel: Bool {
+        !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var hasVisibleOrSavedAPIKey: Bool {
         store.hasLLMAPIKey || !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var invalidFields: Set<ProviderConfigurationField> {
+        var fields: Set<ProviderConfigurationField> = []
+        if !hasValidBaseURL {
+            fields.insert(.llmBaseURL)
+        }
+        if !hasModel {
+            fields.insert(.llmModel)
+        }
+        if !hasVisibleOrSavedAPIKey {
+            fields.insert(.llmAPIKey)
+        }
+        return fields
+    }
+
+    private func shouldHighlight(_ field: ProviderConfigurationField) -> Bool {
+        didAttemptSave && invalidFields.contains(field)
     }
 
     private var activeAPIKey: String {
@@ -233,6 +250,10 @@ struct LLMConfigurationSheet: View {
     }
 
     private func save() {
+        didAttemptSave = true
+        guard canSave else {
+            return
+        }
         do {
             _ = try LLMBaseURLValidator.validatedComponents(from: baseURL)
             let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,6 +269,7 @@ struct LLMConfigurationSheet: View {
             store.aiConfiguration.provider = provider.rawValue
             store.aiConfiguration.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
             store.aiConfiguration.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            didAttemptSave = false
             dismiss()
         } catch {
             connectionStatus = .failure(error.localizedDescription)
@@ -373,6 +395,9 @@ struct LLMConfigurationSheet: View {
         if let baseURLValidationError {
             return baseURLValidationError
         }
+        if !hasModel {
+            return text("请填写模型名称", "Enter model name")
+        }
         return text("请填写 API Key", "Enter API Key")
     }
 
@@ -407,7 +432,7 @@ struct LLMConfigurationSheet: View {
         if connectionStatus != nil || isValidatingAPIKey {
             return true
         }
-        if !hasValidBaseURL || !hasVisibleOrSavedAPIKey {
+        if !hasValidBaseURL || !hasModel || !hasVisibleOrSavedAPIKey {
             return true
         }
         return false
@@ -451,6 +476,8 @@ struct SearchConfigurationSheet: View {
     @State private var isValidatingAPIKey = false
     @State private var isAPIKeyVisible = false
     @State private var apiKeyValidationTask: Task<Void, Never>?
+    @State private var didAttemptSave = false
+    @FocusState private var focusedField: ProviderConfigurationField?
     private let valueFieldWidth = ProviderConfigurationLayout.valueFieldWidth
 
     var body: some View {
@@ -460,7 +487,7 @@ struct SearchConfigurationSheet: View {
             height: 500,
             cancelTitle: text("取消", "Cancel"),
             primaryTitle: text("保存", "Save"),
-            isPrimaryDisabled: apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingAPIKey,
+            isPrimaryDisabled: isValidatingAPIKey,
             cancel: { dismiss() },
             primary: save
         ) {
@@ -480,34 +507,17 @@ struct SearchConfigurationSheet: View {
                         }
                     }
 
-                    ProviderFormRow(label: "API Key") {
-                        HStack(spacing: PortfolixSpacing.sm) {
-                            Group {
-                                if isAPIKeyVisible {
-                                    TextField("", text: $apiKey)
-                                } else {
-                                    SecureField("", text: $apiKey)
-                                }
-                            }
-                            .textFieldStyle(.plain)
-                            .multilineTextAlignment(.trailing)
-                            .foregroundStyle(PortfolixTheme.primaryText)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-
-                            Button {
-                                isAPIKeyVisible.toggle()
-                            } label: {
-                                Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .frame(width: 20, height: 20)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
-                            .help(isAPIKeyVisible ? text("隐藏 API Key", "Hide API Key") : text("显示 API Key", "Show API Key"))
-                        }
-                        .frame(width: valueFieldWidth, height: 22, alignment: .trailing)
-                        .clipped()
+                    ProviderFormRow(label: "API Key", isRequired: true, isInvalid: shouldHighlight(.searchAPIKey)) {
+                        ProviderAPIKeyInputField(
+                            text: $apiKey,
+                            isVisible: $isAPIKeyVisible,
+                            placeholder: text("填写 API Key", "Enter API Key"),
+                            field: .searchAPIKey,
+                            focusedField: $focusedField,
+                            isInvalid: shouldHighlight(.searchAPIKey),
+                            visibleHelp: text("隐藏 API Key", "Hide API Key"),
+                            hiddenHelp: text("显示 API Key", "Show API Key")
+                        )
                         .onChange(of: apiKey) { _, _ in
                             scheduleAPIKeyValidation()
                         }
@@ -557,6 +567,10 @@ struct SearchConfigurationSheet: View {
     }
 
     private func save() {
+        didAttemptSave = true
+        guard hasAPIKey else {
+            return
+        }
         do {
             let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             let isKeyChanged = !trimmedAPIKey.isEmpty && trimmedAPIKey != savedAPIKey
@@ -568,6 +582,7 @@ struct SearchConfigurationSheet: View {
             }
             store.searchConfiguration.provider = provider
             store.searchConfiguration.quality = quality
+            didAttemptSave = false
             dismiss()
         } catch {
             connectionStatus = .failure(error.localizedDescription)
@@ -586,6 +601,22 @@ struct SearchConfigurationSheet: View {
             return .invalid
         }
         return isKeyChanged ? .unknown : nil
+    }
+
+    private var hasAPIKey: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var invalidFields: Set<ProviderConfigurationField> {
+        var fields: Set<ProviderConfigurationField> = []
+        if !hasAPIKey {
+            fields.insert(.searchAPIKey)
+        }
+        return fields
+    }
+
+    private func shouldHighlight(_ field: ProviderConfigurationField) -> Bool {
+        didAttemptSave && invalidFields.contains(field)
     }
 
     private func scheduleAPIKeyValidation() {
@@ -626,6 +657,9 @@ struct SearchConfigurationSheet: View {
         if connectionStatus != nil || isValidatingAPIKey {
             return true
         }
+        if didAttemptSave && !hasAPIKey {
+            return true
+        }
         return false
     }
 
@@ -646,7 +680,7 @@ struct SearchConfigurationSheet: View {
         if isValidatingAPIKey {
             return text("正在验证 API Key", "Validating API Key")
         }
-        return ""
+        return text("请填写 API Key", "Enter API Key")
     }
 
     private var noticeMessage: String? {
@@ -765,9 +799,7 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
 
             Divider().overlay(PortfolixTheme.border)
 
-            VStack(alignment: .leading, spacing: 0) {
-                content
-            }
+            content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider().overlay(PortfolixTheme.border)
@@ -808,19 +840,38 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
 
 private struct ProviderFormRow<Value: View>: View {
     let label: String
+    let isRequired: Bool
+    let isInvalid: Bool
     let value: Value
 
-    init(label: String, @ViewBuilder value: () -> Value) {
+    init(
+        label: String,
+        isRequired: Bool = false,
+        isInvalid: Bool = false,
+        @ViewBuilder value: () -> Value
+    ) {
         self.label = label
+        self.isRequired = isRequired
+        self.isInvalid = isInvalid
         self.value = value()
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            Text(label)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.primaryText)
-                .lineLimit(1)
+            HStack(spacing: PortfolixSpacing.xs) {
+                Text(label)
+
+                if isRequired {
+                    Text("·")
+                        .font(.system(size: 18, weight: .heavy))
+                        .baselineOffset(1)
+                        .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
+                        .accessibilityHidden(true)
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(PortfolixTheme.primaryText)
+            .lineLimit(1)
 
             Spacer(minLength: PortfolixSpacing.md)
 
@@ -830,6 +881,271 @@ private struct ProviderFormRow<Value: View>: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .frame(minHeight: 36, alignment: .center)
+    }
+}
+
+private struct ProviderInputField: View {
+    @Binding var text: String
+    let placeholder: String
+    let field: ProviderConfigurationField
+    let focusedField: FocusState<ProviderConfigurationField?>.Binding
+    let isInvalid: Bool
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if shouldShowPlaceholder {
+                Text(placeholder)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(placeholderColor)
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+            }
+
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .regular))
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(inputColor)
+                .lineLimit(1)
+                .focused(focusedField, equals: field)
+        }
+        .frame(width: ProviderConfigurationLayout.valueFieldWidth, alignment: .trailing)
+        .frame(minHeight: ProviderConfigurationLayout.valueFieldMinHeight, alignment: .center)
+        .clipped()
+    }
+
+    private var shouldShowPlaceholder: Bool {
+        focusedField.wrappedValue != field && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var placeholderColor: Color {
+        isInvalid ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
+    }
+
+    private var inputColor: Color {
+        isInvalid ? PortfolixTheme.danger : PortfolixTheme.primaryText
+    }
+}
+
+private struct ProviderAPIKeyInputField: View {
+    @Binding var text: String
+    @Binding var isVisible: Bool
+    let placeholder: String
+    let field: ProviderConfigurationField
+    let focusedField: FocusState<ProviderConfigurationField?>.Binding
+    let isInvalid: Bool
+    let visibleHelp: String
+    let hiddenHelp: String
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.sm) {
+            ZStack(alignment: .trailing) {
+                if shouldShowPlaceholder {
+                    Text(placeholder)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(placeholderColor)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                }
+
+            inputContent
+            }
+            .frame(
+                maxWidth: .infinity,
+                minHeight: ProviderConfigurationLayout.valueFieldMinHeight,
+                alignment: .trailing
+            )
+            .clipped()
+
+            Button {
+                isVisible.toggle()
+            } label: {
+                Image(systemName: isVisible ? "eye.slash" : "eye")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .help(isVisible ? visibleHelp : hiddenHelp)
+        }
+        .frame(width: ProviderConfigurationLayout.valueFieldWidth, alignment: .trailing)
+        .frame(minHeight: ProviderConfigurationLayout.valueFieldMinHeight, alignment: .center)
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var inputContent: some View {
+        ProviderAPIKeyTextInput(
+            text: $text,
+            isVisible: isVisible,
+            field: field,
+            focusedField: focusedField,
+            isInvalid: isInvalid
+        )
+            .frame(
+                maxWidth: .infinity,
+                minHeight: ProviderConfigurationLayout.valueFieldMinHeight,
+                alignment: .trailing
+            )
+            .clipped()
+    }
+
+    private var shouldShowPlaceholder: Bool {
+        focusedField.wrappedValue != field && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var placeholderColor: Color {
+        isInvalid ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
+    }
+
+    private var inputColor: Color {
+        isInvalid ? PortfolixTheme.danger : PortfolixTheme.primaryText
+    }
+}
+
+private struct ProviderAPIKeyTextInput: NSViewRepresentable {
+    @Binding var text: String
+    let isVisible: Bool
+    let field: ProviderConfigurationField
+    let focusedField: FocusState<ProviderConfigurationField?>.Binding
+    let isInvalid: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> ProviderAPIKeyTextInputView {
+        let view = ProviderAPIKeyTextInputView()
+        view.plainField.delegate = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ nsView: ProviderAPIKeyTextInputView, context: Context) {
+        context.coordinator.parent = self
+        nsView.update(text: text, isVisible: isVisible, textColor: textColor)
+        if focusedField.wrappedValue == field {
+            nsView.focusActiveField()
+        }
+    }
+
+    private var textColor: NSColor {
+        isInvalid ? .portfolixDanger : .labelColor
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: ProviderAPIKeyTextInput
+
+        init(parent: ProviderAPIKeyTextInput) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            parent.focusedField.wrappedValue = parent.field
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let textField = obj.object as? NSTextField else { return }
+            parent.text = textField.stringValue
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            if parent.focusedField.wrappedValue == parent.field {
+                parent.focusedField.wrappedValue = nil
+            }
+        }
+    }
+}
+
+private final class ProviderAPIKeyTextInputView: NSView {
+    private static let maskedValue = "xxxxxxxxxxxx"
+
+    let plainField = NSTextField()
+    let maskedField = NSSecureTextField()
+    private var isVisible = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        setup(field: plainField)
+        setupMaskedField()
+        addSubview(plainField)
+        addSubview(maskedField)
+        NSLayoutConstraint.activate([
+            plainField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            plainField.trailingAnchor.constraint(equalTo: trailingAnchor),
+            plainField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            plainField.heightAnchor.constraint(equalToConstant: 24),
+            maskedField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            maskedField.trailingAnchor.constraint(equalTo: trailingAnchor),
+            maskedField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            maskedField.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        plainField.isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(text: String, isVisible: Bool, textColor: NSColor) {
+        let wasEditing = plainField.currentEditor() != nil
+        self.isVisible = isVisible
+        plainField.isHidden = !isVisible
+        maskedField.isHidden = isVisible
+        if plainField.stringValue != text {
+            plainField.stringValue = text
+        }
+        maskedField.stringValue = text.isEmpty ? "" : Self.maskedValue
+        plainField.textColor = textColor
+        maskedField.textColor = textColor
+        if wasEditing {
+            if isVisible {
+                focusActiveField()
+            } else {
+                window?.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    func focusActiveField() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window else { return }
+            if self.isVisible, self.plainField.currentEditor() == nil {
+                window.makeFirstResponder(self.plainField)
+            }
+        }
+    }
+
+    private func setup(field: NSTextField) {
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.alignment = .right
+        field.font = .systemFont(ofSize: 13, weight: .regular)
+        field.textColor = .labelColor
+        field.usesSingleLineMode = true
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.cell?.lineBreakMode = .byTruncatingMiddle
+    }
+
+    private func setupMaskedField() {
+        setup(field: maskedField)
+        maskedField.isEditable = false
+        maskedField.isSelectable = false
+        maskedField.cell?.lineBreakMode = .byClipping
+    }
+}
+
+private extension NSColor {
+    static let portfolixDanger = NSColor(name: nil) { appearance in
+        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+        return NSColor(hex: match == .darkAqua ? 0xDD7D88 : 0xB44755)
     }
 }
 
