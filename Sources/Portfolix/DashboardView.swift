@@ -1421,34 +1421,15 @@ private struct InvestmentRadarChart: View {
         guard points.count >= 3 else { return Path() }
 
         var path = Path()
-        let cornerRadius: CGFloat = 8
-        for index in points.indices {
-            let previous = points[(index - 1 + points.count) % points.count]
-            let current = points[index]
-            let next = points[(index + 1) % points.count]
-            let entry = roundedCornerPoint(from: current, toward: previous, distance: cornerRadius)
-            let exit = roundedCornerPoint(from: current, toward: next, distance: cornerRadius)
-
+        for (index, point) in points.enumerated() {
             if index == points.startIndex {
-                path.move(to: entry)
+                path.move(to: point)
             } else {
-                path.addLine(to: entry)
+                path.addLine(to: point)
             }
-            path.addQuadCurve(to: exit, control: current)
         }
         path.closeSubpath()
         return path
-    }
-
-    private func roundedCornerPoint(from origin: CGPoint, toward target: CGPoint, distance: CGFloat) -> CGPoint {
-        let dx = target.x - origin.x
-        let dy = target.y - origin.y
-        let length = max(hypot(dx, dy), 0.001)
-        let boundedDistance = min(distance, length * 0.35)
-        return CGPoint(
-            x: origin.x + dx / length * boundedDistance,
-            y: origin.y + dy / length * boundedDistance
-        )
     }
 
     private func radarPoint(

@@ -1559,14 +1559,12 @@ final class PositionRepository {
 
     private static func colorKey(for status: DataSourceStatus) -> String {
         switch status.state {
-        case "连接正常":
+        case "可用", "连接正常":
             "mint"
-        case "未使用":
-            "tertiary"
-        case "连接异常":
+        case "不可用", "未使用", "连接异常", "部分异常", "待检查":
             "danger"
         default:
-            "amber"
+            "danger"
         }
     }
 

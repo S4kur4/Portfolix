@@ -12,13 +12,15 @@ struct PortfolixPriceUpdater {
             } catch {
                 try? updater.recordHealth(
                     [
-                        DataSourceHealth(
-                            name: "后台价格更新",
+                        DataSourceHealth.unavailable(
+                            name: "东方财富",
                             detail: String(error.localizedDescription.prefix(64)),
-                            symbol: "exclamationmark.triangle.fill",
-                            state: "连接异常",
-                            colorKey: "danger",
-                            order: 99
+                            order: 0
+                        ),
+                        DataSourceHealth.unavailable(
+                            name: "OKX",
+                            detail: String(error.localizedDescription.prefix(64)),
+                            order: 1
                         ),
                     ]
                 )
@@ -52,19 +54,9 @@ private final class BackgroundPriceUpdater {
     func runOnce() async throws {
         guard try automaticUpdatesEnabled() else { return }
         let positions = try fetchPositions()
-        guard !positions.isEmpty else {
-            try recordHealth([
-                .unused(name: "东方财富", detail: "暂无需自动获取价格的持仓", order: 0),
-                .unused(name: "OKX", detail: "暂无数字货币持仓", order: 1),
-            ])
-            return
-        }
-
         var updated = positions
-        var health: [DataSourceHealth] = []
         var sourceErrors: [String: String] = [:]
         var sourceSuccessCounts: [String: Int] = [:]
-        var usedSources: Set<String> = []
 
         for index in updated.indices {
             do {
@@ -76,9 +68,7 @@ private final class BackgroundPriceUpdater {
                     updated[index].freshness = "已更新"
                     updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
                     sourceSuccessCounts[quote.source, default: 0] += 1
-                    usedSources.insert(quote.source)
                 case "数字货币":
-                    usedSources.insert("OKX")
                     let okxQuote = try await resolveOKXQuote(symbol: updated[index].symbol)
                     let quote = (price: okxQuote.price, quoteTime: okxQuote.quoteTime, source: "OKX")
                     updated[index].latestPrice = quote.price
@@ -86,39 +76,25 @@ private final class BackgroundPriceUpdater {
                     updated[index].freshness = "已更新"
                     updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
                     sourceSuccessCounts[quote.source, default: 0] += 1
-                    usedSources.insert(quote.source)
                 default:
                     continue
                 }
                 try updateLatestQuote(updated[index])
             } catch {
                 let source = Self.primarySource(for: updated[index].category)
-                usedSources.insert(source)
                 if sourceErrors[source] == nil {
                     sourceErrors[source] = error.localizedDescription
                 }
             }
         }
 
-        try replaceDailySnapshots(positions: updated)
-
-        for source in Self.orderedDataSources where usedSources.contains(source) {
-            health.append(
-                DataSourceHealth.from(
-                    error: sourceErrors[source],
-                    hasSuccess: (sourceSuccessCounts[source] ?? 0) > 0,
-                    name: source,
-                    detail: Self.detail(for: source),
-                    order: Self.order(for: source)
-                )
-            )
+        if !positions.isEmpty {
+            try replaceDailySnapshots(positions: updated)
         }
-        if !positions.contains(where: { ["A 股", "B 股", "港股", "美股", "公募基金"].contains($0.category) }) {
-            health.append(.unused(name: "东方财富", detail: "暂无需自动获取价格的持仓", order: Self.order(for: "东方财富")))
-        }
-        if !positions.contains(where: { $0.category == "数字货币" }) {
-            health.append(.unused(name: "OKX", detail: "暂无数字货币持仓", order: Self.order(for: "OKX")))
-        }
+        let health = await dataSourceHealthStatuses(
+            sourceErrors: sourceErrors,
+            sourceSuccessCounts: sourceSuccessCounts
+        )
         try recordHealth(health)
     }
 
@@ -454,6 +430,56 @@ private final class BackgroundPriceUpdater {
         throw UpdaterError.invalidResponse
     }
 
+    private func dataSourceHealthStatuses(
+        sourceErrors: [String: String],
+        sourceSuccessCounts: [String: Int]
+    ) async -> [DataSourceHealth] {
+        var statuses: [DataSourceHealth] = []
+        for source in Self.orderedDataSources {
+            let hasSuccess = (sourceSuccessCounts[source] ?? 0) > 0
+            if hasSuccess || sourceErrors[source] != nil {
+                statuses.append(
+                    DataSourceHealth.from(
+                        error: sourceErrors[source],
+                        hasSuccess: hasSuccess,
+                        name: source,
+                        detail: Self.detail(for: source),
+                        order: Self.order(for: source)
+                    )
+                )
+            } else {
+                statuses.append(await probeDataSourceHealth(source))
+            }
+        }
+        return statuses.sorted { $0.order < $1.order }
+    }
+
+    private func probeDataSourceHealth(_ source: String) async -> DataSourceHealth {
+        do {
+            switch source {
+            case "东方财富":
+                let quote = try await resolveEastmoneyQuote(symbol: "000001", category: "A 股")
+                guard quote.price > 0 else { throw UpdaterError.invalidResponse }
+            case "OKX":
+                let quote = try await resolveOKXQuote(symbol: "BTC/USDT")
+                guard quote.price > 0 else { throw UpdaterError.invalidResponse }
+            default:
+                throw UpdaterError.invalidResponse
+            }
+            return DataSourceHealth.available(
+                name: source,
+                detail: Self.detail(for: source),
+                order: Self.order(for: source)
+            )
+        } catch {
+            return DataSourceHealth.unavailable(
+                name: source,
+                detail: String(error.localizedDescription.prefix(64)),
+                order: Self.order(for: source)
+            )
+        }
+    }
+
     private func request(url: URL, failureMessage: String, headers: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -488,7 +514,7 @@ private final class BackgroundPriceUpdater {
     private static func detail(for source: String) -> String {
         switch source {
         case "东方财富":
-            return "股票、基金与跨市场行情"
+            return "A 股、B 股、港股、美股和公募基金"
         case "OKX":
             return "数字货币现货交易对"
         default:
@@ -582,14 +608,6 @@ private final class BackgroundPriceUpdater {
             return "手工价格"
         case "eastmoney", "em", "东方财富", "东财":
             return "东方财富"
-        case "sina", "新浪", "新浪财经":
-            return "新浪财经"
-        case "ths", "tonghuashun", "同花顺":
-            return "同花顺"
-        case "tencent", "tx", "腾讯", "腾讯财经":
-            return "腾讯财经"
-        case "jin10", "金十", "金十数据":
-            return "金十数据"
         default:
             if normalized.isEmpty {
                 return "东方财富"
@@ -597,17 +615,8 @@ private final class BackgroundPriceUpdater {
             if normalized.localizedCaseInsensitiveContains("okx") {
                 return "OKX"
             }
-            if normalized.localizedCaseInsensitiveContains("sina") || normalized.contains("新浪") {
-                return "新浪财经"
-            }
             if normalized.localizedCaseInsensitiveContains("eastmoney") || normalized.contains("东方财富") {
                 return "东方财富"
-            }
-            if normalized.localizedCaseInsensitiveContains("tonghuashun") || normalized.localizedCaseInsensitiveContains("ths") || normalized.contains("同花顺") {
-                return "同花顺"
-            }
-            if normalized.localizedCaseInsensitiveContains("jin10") || normalized.contains("金十") {
-                return "金十数据"
             }
             return normalized
         }
@@ -762,47 +771,42 @@ private struct DataSourceHealth {
     let colorKey: String
     let order: Int
 
-    static func unused(name: String, detail: String, order: Int) -> DataSourceHealth {
-        DataSourceHealth(name: name, detail: detail, symbol: "pause.circle.fill", state: "未使用", colorKey: "tertiary", order: order)
+    static func from(error: String?, hasSuccess: Bool, name: String, detail: String, order: Int) -> DataSourceHealth {
+        if hasSuccess {
+            return available(name: name, detail: detail, order: order)
+        }
+        if let error {
+            return unavailable(name: name, detail: String(error.prefix(64)), order: order)
+        }
+        return available(name: name, detail: detail, order: order)
     }
 
-    static func from(error: String?, hasSuccess: Bool, name: String, detail: String, order: Int) -> DataSourceHealth {
-        if let error {
-            if hasSuccess {
-                return DataSourceHealth(
-                    name: name,
-                    detail: String(error.prefix(64)),
-                    symbol: "exclamationmark.triangle.fill",
-                    state: "部分异常",
-                    colorKey: "amber",
-                    order: order
-                )
-            }
-            return DataSourceHealth(
-                name: name,
-                detail: String(error.prefix(64)),
-                symbol: "exclamationmark.triangle.fill",
-                state: "连接异常",
-                colorKey: "danger",
-                order: order
-            )
-        }
-        return DataSourceHealth(
+    static func available(name: String, detail: String, order: Int) -> DataSourceHealth {
+        DataSourceHealth(
             name: name,
             detail: detail,
             symbol: normalSymbol(for: name),
-            state: "连接正常",
+            state: "可用",
             colorKey: "mint",
+            order: order
+        )
+    }
+
+    static func unavailable(name: String, detail: String, order: Int) -> DataSourceHealth {
+        DataSourceHealth(
+            name: name,
+            detail: detail,
+            symbol: normalSymbol(for: name),
+            state: "不可用",
+            colorKey: "danger",
             order: order
         )
     }
 
     private static func normalSymbol(for name: String) -> String {
         switch name {
-        case "东方财富", "新浪财经", "同花顺", "腾讯财经":
+        case "东方财富":
             "chart.line.uptrend.xyaxis"
-        case "金十数据":
-            "chart.bar.doc.horizontal"
         case "OKX":
             "okx"
         default:

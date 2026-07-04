@@ -548,7 +548,6 @@ struct PositionEditorSheet: View {
         )
 
         let resolved = try await resolvedLatestQuote(for: candidate)
-        store.markDataSourceAvailable(for: resolved)
         return resolved.latestPrice == nil ? nil : resolved
     }
 
@@ -701,7 +700,6 @@ struct PositionEditorSheet: View {
                     }
                     candidates = Self.filteredLookupCandidates(candidates + providerCandidates.candidates, category: searchCategory)
                     assetCandidates = candidates
-                    markAvailableDataSources(from: providerCandidates.candidates)
                     if !candidates.isEmpty {
                         isSearchingAssets = false
                     }
@@ -721,7 +719,6 @@ struct PositionEditorSheet: View {
         assetLookupMessage = nil
         selectedAssetCandidate = candidate
         applyAssetCandidate(candidate)
-        store.markDataSourceAvailable(for: candidate)
 
         guard candidate.latestPrice == nil else { return }
         isResolvingAsset = true
@@ -731,7 +728,6 @@ struct PositionEditorSheet: View {
                 let resolved = try await resolvedLatestQuote(for: candidate)
                 guard !Task.isCancelled else { return }
                 applyAssetCandidate(resolved)
-                store.markDataSourceAvailable(for: resolved)
                 if resolved.latestPrice == nil {
                     assetLookupMessage = sheetText(
                         "未获取到最新价格，请稍后重试或继续选择其他候选",
@@ -908,13 +904,6 @@ private extension PositionEditorSheet {
             .usd
         case .crypto:
             .usdt
-        }
-    }
-
-    func markAvailableDataSources(from candidates: [AssetLookupCandidate]) {
-        var markedCategories = Set<AssetCategory>()
-        for candidate in candidates where candidate.upstreamSource != "local" && markedCategories.insert(candidate.category).inserted {
-            store.markDataSourceAvailable(for: candidate)
         }
     }
 

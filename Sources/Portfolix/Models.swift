@@ -485,32 +485,12 @@ func normalizedQuoteSource(_ source: String, category: AssetCategory? = nil) -> 
     switch normalized.lowercased() {
     case "eastmoney", "em", "东方财富", "东财":
         return "东方财富"
-    case "sina", "新浪", "新浪财经":
-        return "新浪财经"
-    case "ths", "tonghuashun", "同花顺":
-        return "同花顺"
-    case "tencent", "tx", "腾讯", "腾讯财经":
-        return "腾讯财经"
-    case "jin10", "金十", "金十数据":
-        return "金十数据"
     default:
         break
     }
 
     if normalized.localizedCaseInsensitiveContains("eastmoney") || normalized.contains("东方财富") {
         return "东方财富"
-    }
-    if normalized.localizedCaseInsensitiveContains("sina") || normalized.contains("新浪") {
-        return "新浪财经"
-    }
-    if normalized.localizedCaseInsensitiveContains("tonghuashun") || normalized.localizedCaseInsensitiveContains("ths") || normalized.contains("同花顺") {
-        return "同花顺"
-    }
-    if normalized.localizedCaseInsensitiveContains("tencent") || normalized.localizedCaseInsensitiveContains("tx") || normalized.contains("腾讯") {
-        return "腾讯财经"
-    }
-    if normalized.localizedCaseInsensitiveContains("jin10") || normalized.contains("金十") {
-        return "金十数据"
     }
     return normalized
 }
@@ -522,14 +502,8 @@ func localizedQuoteSource(_ source: String, language: AppLanguage) -> String {
         return "Manual"
     case "东方财富":
         return "Eastmoney"
-    case "新浪财经":
-        return "Sina Finance"
-    case "同花顺":
-        return "iFinD"
-    case "腾讯财经":
-        return "Tencent Finance"
-    case "金十数据":
-        return "Jin10"
+    case "OKX":
+        return "OKX"
     default:
         return source
     }
@@ -546,7 +520,7 @@ func normalizedDataSourceName(_ name: String) -> String {
 
 func isPublicMarketQuoteSource(_ source: String) -> Bool {
     switch normalizedQuoteSource(source) {
-    case "东方财富", "新浪财经", "同花顺", "腾讯财经":
+    case "东方财富":
         return true
     default:
         return false
@@ -577,54 +551,26 @@ struct DataSourceStatus: Identifiable {
     func displayDetail(language: AppLanguage) -> String {
         if language == .english {
             switch detail {
-            case "候选查询成功":
-                return defaultDetail(language: language)
             case "A 股、B 股、港股、美股和公募基金":
                 return "A/B-shares, HK/US stocks, and funds"
-            case "股票与基金":
-                return "Stocks and funds"
             case "数字货币现货交易对":
                 return "Crypto spot pairs"
-            case "暂无需自动获取价格的持仓":
-                return "No stock or fund holdings"
-            case "暂无数字货币持仓":
-                return "No crypto holdings"
             default:
                 return detail
             }
         }
-        guard detail == "候选查询成功" else { return detail }
-        return defaultDetail(language: language)
+        return detail
     }
 
     func stateText(language: AppLanguage) -> String {
         guard language == .english else { return state }
         switch state {
-        case "连接正常":
-            return "Connected"
-        case "连接异常":
-            return "Error"
-        case "部分异常":
-            return "Partial error"
-        case "未使用":
-            return "Unused"
-        case "待检查":
-            return "Pending"
+        case "可用", "连接正常":
+            return "Available"
+        case "不可用", "连接异常", "部分异常", "未使用", "待检查":
+            return "Unavailable"
         default:
             return state
-        }
-    }
-
-    private func defaultDetail(language: AppLanguage) -> String {
-        switch name {
-        case "东方财富", "新浪财经", "同花顺", "腾讯财经":
-            return language == .english ? "Stocks and funds" : "股票与基金"
-        case "金十数据":
-            return language == .english ? "Market data" : "市场数据"
-        case "OKX":
-            return language == .english ? "Crypto spot pairs" : "数字货币现货交易对"
-        default:
-            return detail
         }
     }
 }
@@ -924,6 +870,57 @@ final class PortfolioStore: ObservableObject {
         return period
     }
 
+    private static var defaultMarketDataSourceStatuses: [DataSourceStatus] {
+        [
+            dataSourceStatus(name: "东方财富", isAvailable: false),
+            dataSourceStatus(name: "OKX", isAvailable: false),
+        ]
+    }
+
+    private static func normalizedMarketDataSourceStatuses(_ statuses: [DataSourceStatus]) -> [DataSourceStatus] {
+        defaultMarketDataSourceStatuses.map { defaultStatus in
+            guard let stored = statuses.first(where: { normalizedDataSourceName($0.name) == defaultStatus.name }) else {
+                return defaultStatus
+            }
+            return dataSourceStatus(
+                name: defaultStatus.name,
+                isAvailable: ["可用", "连接正常"].contains(stored.state)
+            )
+        }
+    }
+
+    private static func dataSourceStatus(name: String, isAvailable: Bool) -> DataSourceStatus {
+        DataSourceStatus(
+            name: name,
+            detail: dataSourceDetail(name),
+            symbol: dataSourceSymbol(name),
+            state: isAvailable ? "可用" : "不可用",
+            color: isAvailable ? PortfolixTheme.mint : PortfolixTheme.danger
+        )
+    }
+
+    private static func dataSourceDetail(_ name: String) -> String {
+        switch name {
+        case "东方财富":
+            "A 股、B 股、港股、美股和公募基金"
+        case "OKX":
+            "数字货币现货交易对"
+        default:
+            ""
+        }
+    }
+
+    private static func dataSourceSymbol(_ name: String) -> String {
+        switch normalizedDataSourceName(name) {
+        case "东方财富":
+            "chart.line.uptrend.xyaxis"
+        case "OKX":
+            "okx"
+        default:
+            "network"
+        }
+    }
+
     init(
         positionRepository: PositionRepository? = nil,
         credentialStore: ProviderCredentialStoring? = nil,
@@ -946,7 +943,7 @@ final class PortfolioStore: ObservableObject {
             let repository = try positionRepository ?? PositionRepository()
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
-            loadedSourceStatuses = try repository.fetchDataSourceStatuses().filter { $0.name != "金十数据" }
+            loadedSourceStatuses = Self.normalizedMarketDataSourceStatuses(try repository.fetchDataSourceStatuses())
             let cutoff = savedChatRetentionPeriod.cutoffDate()
             try repository.deleteExpiredAIAnalysisContent(before: cutoff)
             let storedChatItems = try repository.fetchAIAnalysisChatItems(since: cutoff)
@@ -965,7 +962,7 @@ final class PortfolioStore: ObservableObject {
         self.credentialStore = resolvedCredentialStore
         self.aiAgent = aiAgent ?? AIAnalysisAgent(credentialStore: resolvedCredentialStore)
         snapshotHistory = loadedSnapshots
-        sourceStatuses = loadedSourceStatuses
+        sourceStatuses = loadedSourceStatuses.isEmpty ? Self.defaultMarketDataSourceStatuses : loadedSourceStatuses
         self.positionRepository = activeRepository
         loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
@@ -1281,34 +1278,6 @@ final class PortfolioStore: ObservableObject {
             trend = Array(trend.suffix(7))
         }
         return trend
-    }
-
-    func markDataSourceAvailable(for candidate: AssetLookupCandidate) {
-        let status: DataSourceStatus?
-        switch candidate.category {
-        case .cnStock, .bStock, .hkStock, .usStock, .fund:
-            let sourceName = normalizedQuoteSource(candidate.upstreamSource, category: candidate.category)
-            status = DataSourceStatus(
-                name: sourceName,
-                detail: "股票与基金",
-                symbol: dataSourceSymbol(sourceName),
-                state: "连接正常",
-                color: PortfolixTheme.mint
-            )
-        case .crypto:
-            status = DataSourceStatus(
-                name: "OKX",
-                detail: "数字货币现货交易对",
-                symbol: dataSourceSymbol("OKX"),
-                state: "连接正常",
-                color: PortfolixTheme.mint
-            )
-        case .cash:
-            status = nil
-        }
-
-        guard let status else { return }
-        upsertDataSourceStatus(status)
     }
 
     func deletePosition(for positionID: Position.ID) throws {
@@ -2524,88 +2493,36 @@ final class PortfolioStore: ObservableObject {
     }()
 
     private func refreshDataSourceHealth() async {
-        let currentPositions = positions
-        var statuses: [DataSourceStatus] = []
-
-        let quoteBackedPositions = currentPositions.filter {
-            [.cnStock, .bStock, .hkStock, .usStock, .fund].contains($0.category)
-        }
-        if quoteBackedPositions.isEmpty {
-            statuses.append(
-                DataSourceStatus(
-                    name: "新浪财经",
-                    detail: "暂无需自动获取价格的持仓",
-                    symbol: "pause.circle.fill",
-                    state: "未使用",
-                    color: PortfolixTheme.tertiaryText
-                )
+        async let eastmoneyStatus = dataSourceHealthStatus(name: "东方财富") {
+            let probe = AssetLookupCandidate(
+                name: "平安银行",
+                symbol: "000001",
+                category: .cnStock,
+                quoteCurrency: .cny,
+                latestPrice: nil,
+                upstreamSource: "东方财富"
             )
-        } else {
-            var seenSources: Set<String> = []
-            for position in quoteBackedPositions {
-                let fallbackSource = normalizedQuoteSource(position.source, category: position.category)
-                do {
-                    let resolved = try await latestQuote(for: position)
-                    let sourceName = normalizedQuoteSource(resolved?.upstreamSource ?? fallbackSource, category: position.category)
-                    guard seenSources.insert(sourceName).inserted else { continue }
-                    statuses.append(
-                        DataSourceStatus(
-                            name: sourceName,
-                            detail: "股票与基金",
-                            symbol: dataSourceSymbol(sourceName),
-                            state: "连接正常",
-                            color: PortfolixTheme.mint
-                        )
-                    )
-                } catch {
-                    guard seenSources.insert(fallbackSource).inserted else { continue }
-                    statuses.append(
-                        DataSourceStatus(
-                            name: fallbackSource,
-                            detail: String(error.localizedDescription.prefix(28)),
-                            symbol: "exclamationmark.triangle.fill",
-                            state: "连接异常",
-                            color: PortfolixTheme.danger
-                        )
-                    )
-                }
+            let resolved = try await MarketDataAdapter.shared.resolveAsset(probe)
+            guard (resolved.latestPrice ?? 0) > 0 else {
+                throw MarketDataAdapterError.invalidResponse
+            }
+        }
+        async let okxStatus = dataSourceHealthStatus(name: "OKX") {
+            let probe = AssetLookupCandidate(
+                name: "BTC",
+                symbol: "BTC/USDT",
+                category: .crypto,
+                quoteCurrency: .usdt,
+                latestPrice: nil,
+                upstreamSource: "OKX"
+            )
+            let resolved = try await MarketDataAdapter.shared.resolveAsset(probe)
+            guard (resolved.latestPrice ?? 0) > 0 else {
+                throw OKXClientError.invalidResponse
             }
         }
 
-        if let cryptoPosition = currentPositions.first(where: { $0.category == .crypto }) {
-            do {
-                _ = try await latestQuote(for: cryptoPosition)
-                statuses.append(
-                    DataSourceStatus(
-                        name: "OKX",
-                        detail: "数字货币现货交易对",
-                        symbol: dataSourceSymbol("OKX"),
-                        state: "连接正常",
-                        color: PortfolixTheme.mint
-                    )
-                )
-            } catch {
-                statuses.append(
-                    DataSourceStatus(
-                        name: "OKX",
-                        detail: String(error.localizedDescription.prefix(28)),
-                        symbol: "exclamationmark.triangle.fill",
-                        state: "连接异常",
-                        color: PortfolixTheme.danger
-                    )
-                )
-            }
-        } else {
-            statuses.append(
-                DataSourceStatus(
-                    name: "OKX",
-                    detail: "暂无数字货币持仓",
-                    symbol: "pause.circle.fill",
-                    state: "未使用",
-                    color: PortfolixTheme.tertiaryText
-                )
-            )
-        }
+        let statuses = await [eastmoneyStatus, okxStatus]
 
         sourceStatuses = statuses
         guard let positionRepository else { return }
@@ -2616,88 +2533,15 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
-    private func upsertDataSourceStatus(_ status: DataSourceStatus) {
-        var nextStatuses = sourceStatuses.filter {
-            normalizedDataSourceName($0.name) != normalizedDataSourceName(status.name)
-                && normalizedDataSourceName($0.name) != "OKX"
-        }
-        nextStatuses.append(status)
-        nextStatuses.sort { lhs, rhs in
-            dataSourceOrder(lhs.name) < dataSourceOrder(rhs.name)
-        }
-        sourceStatuses = nextStatuses
-
-        guard let positionRepository else { return }
-        do {
-            try positionRepository.replaceDataSourceStatuses(sourceStatuses)
-        } catch {
-            persistenceErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func dataSourceOrder(_ name: String) -> Int {
-        switch name {
-        case "新浪财经":
-            0
-        case "东方财富":
-            1
-        case "同花顺":
-            2
-        case "OKX":
-            3
-        case "腾讯财经":
-            4
-        default:
-            99
-        }
-    }
-
-    private func dataSourceSymbol(_ name: String) -> String {
-        switch normalizedDataSourceName(name) {
-        case "东方财富", "新浪财经", "同花顺", "腾讯财经":
-            return "chart.line.uptrend.xyaxis"
-        case "OKX":
-            return "okx"
-        default:
-            return "network"
-        }
-    }
-
-    private func healthStatus(
+    private func dataSourceHealthStatus(
         name: String,
-        detail: String,
-        symbol: String,
-        color: Color,
         check: () async throws -> Void
     ) async -> DataSourceStatus {
         do {
             try await check()
-            return DataSourceStatus(
-                name: name,
-                detail: detail,
-                symbol: symbol,
-                state: "连接正常",
-                color: color
-            )
-        } catch is CancellationError {
-            if let existingStatus = sourceStatuses.first(where: { $0.name == name && $0.state != "连接异常" }) {
-                return existingStatus
-            }
-            return DataSourceStatus(
-                name: name,
-                detail: detail,
-                symbol: "clock.arrow.circlepath",
-                state: "待检查",
-                color: PortfolixTheme.amber
-            )
+            return Self.dataSourceStatus(name: name, isAvailable: true)
         } catch {
-            return DataSourceStatus(
-                name: name,
-                detail: String(error.localizedDescription.prefix(28)),
-                symbol: "exclamationmark.triangle.fill",
-                state: "连接异常",
-                color: PortfolixTheme.danger
-            )
+            return Self.dataSourceStatus(name: name, isAvailable: false)
         }
     }
 
@@ -2919,10 +2763,6 @@ enum PositionInputValidator {
     ) throws {
         switch source {
         case "OKX":
-            guard category == .crypto, [.usd, .usdt].contains(quoteCurrency) else {
-                throw PositionValidationError.providerIdentityMismatch
-            }
-        case "金十数据":
             guard category == .crypto, [.usd, .usdt].contains(quoteCurrency) else {
                 throw PositionValidationError.providerIdentityMismatch
             }

@@ -79,8 +79,10 @@ private struct SidebarVersion: View {
                 Button {
                     sparkleUpdater.checkForUpdates()
                 } label: {
-                    Label(updateButtonTitle, systemImage: "arrow.down.circle.fill")
-                        .labelStyle(.titleAndIcon)
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text(updateButtonTitle)
+                    }
                         .font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)

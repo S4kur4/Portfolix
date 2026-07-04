@@ -487,7 +487,7 @@ struct PositionRepositoryTests {
             quantity: 1,
             averageCost: 1,
             latestPrice: 1,
-            source: "sina",
+            source: "东方财富",
             quoteTime: "2026-06-12 15:00:03.0",
             freshness: .updated
         )
@@ -1130,9 +1130,12 @@ struct PositionRepositoryTests {
     }
 
     @Test
-    func marketProviderAliasesMapToDisplaySources() {
+    func activeMarketProviderAliasesMapToDisplaySources() {
         #expect(normalizedQuoteSource("eastmoney", category: .fund) == "东方财富")
-        #expect(normalizedQuoteSource("sina", category: .usStock) == "新浪财经")
+        #expect(normalizedQuoteSource("em", category: .fund) == "东方财富")
+        #expect(normalizedQuoteSource("okx", category: .crypto) == "OKX")
+        #expect(normalizedQuoteSource("custom-feed", category: .usStock) == "custom-feed")
+        #expect(!isPublicMarketQuoteSource("custom-feed"))
     }
 
     @Test
@@ -2356,7 +2359,7 @@ struct PositionRepositoryTests {
             averageCost: 320,
             quoteCurrency: .hkd,
             latestPrice: 420,
-            source: "新浪财经",
+            source: "东方财富",
             freshness: .updated
         )
         try store.addPosition(
