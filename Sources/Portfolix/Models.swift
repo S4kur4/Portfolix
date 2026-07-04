@@ -1689,7 +1689,7 @@ final class PortfolioStore: ObservableObject {
             )
         aiAnalysisReport = fallback
         persistAIAnalysisReport(fallback)
-        persistAIAnalysisRun(
+        let runID = persistAIAnalysisRun(
             report: fallback,
             artifacts: artifacts,
             trigger: trigger,
@@ -1698,13 +1698,20 @@ final class PortfolioStore: ObservableObject {
             usedFallback: true,
             errorCode: errorDescription
         )
+        let diagnostic = makeAIAnalysisDiagnostic(
+            error: error,
+            runID: runID,
+            startedAt: startedAt,
+            finishedAt: finishedAt
+        )
         aiAnalysisRun = AIAnalysisRun(
             status: .completed,
             startedAt: startedAt,
             finishedAt: finishedAt,
             model: aiConfiguration.model,
             usedFallback: true,
-            fallbackReason: fallbackReason
+            fallbackReason: fallbackReason,
+            diagnostic: diagnostic
         )
         appendAIAnalysisChatItem(.report(fallback, aiAnalysisRun))
 
@@ -1736,6 +1743,115 @@ final class PortfolioStore: ObservableObject {
         return localizedText(
             "\(context)失败，已改用本地分析。可检查 API 配置、网络连接和模型可用性后重试。",
             "The \(context) stage failed, so local analysis was used. Check API configuration, connectivity, and model availability before retrying.",
+            language: appLanguage
+        )
+    }
+
+    private func makeAIAnalysisDiagnostic(
+        error: Error,
+        runID: UUID?,
+        startedAt: Date,
+        finishedAt: Date
+    ) -> AIAnalysisDiagnostic {
+        let pipelineError = error as? AIAnalysisPipelineError
+        let stage = pipelineError?.stage
+        let rawSummary = pipelineError?.underlyingDescription ?? error.localizedDescription
+        return AIAnalysisDiagnostic(
+            runID: runID,
+            stageID: stage?.telemetryID ?? "unknown",
+            stageTitle: stage?.failureContext(language: appLanguage)
+                ?? localizedText("Agent 执行", "Agent execution", language: appLanguage),
+            errorKind: aiDiagnosticErrorKind(for: rawSummary),
+            errorSummary: Self.sanitizedAIDiagnosticError(rawSummary),
+            provider: aiConfiguration.providerOption.rawValue,
+            model: aiConfiguration.model,
+            analysisMode: currentAIAnalysisMode,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            recoveryHint: aiDiagnosticRecoveryHint(for: rawSummary)
+        )
+    }
+
+    private func aiDiagnosticErrorKind(for value: String) -> String {
+        let description = value.lowercased()
+        if description.contains("timed out") || description.contains("timeout") || description.contains("超时") {
+            return localizedText("请求超时", "Request timed out", language: appLanguage)
+        }
+        if description.contains("json mode") || description.contains("response_format") || description.contains("json_object") {
+            return localizedText("模型结构化输出不兼容", "Structured output is not supported by the model", language: appLanguage)
+        }
+        if description.contains("decode")
+            || description.contains("parse")
+            || description.contains("无法解析")
+            || description.contains("invalid field")
+            || description.contains("字段格式无效") {
+            return localizedText("模型返回结构不符合要求", "Model response structure is invalid", language: appLanguage)
+        }
+        if description.contains("安全校验")
+            || description.contains("safety")
+            || description.contains("guardrail")
+            || description.contains("information security") {
+            return localizedText("信息安全校验未通过", "Information security validation failed", language: appLanguage)
+        }
+        if description.contains("401") || description.contains("403") || description.contains("unauthorized") || description.contains("forbidden") {
+            return localizedText("API 鉴权失败", "API authentication failed", language: appLanguage)
+        }
+        if description.contains("400") || description.contains("bad request") {
+            return localizedText("模型服务拒绝请求", "Model service rejected the request", language: appLanguage)
+        }
+        if description.contains("network") || description.contains("连接") || description.contains("dns") {
+            return localizedText("网络连接异常", "Network connectivity issue", language: appLanguage)
+        }
+        return localizedText("未知执行错误", "Unknown execution error", language: appLanguage)
+    }
+
+    private func aiDiagnosticRecoveryHint(for value: String) -> String {
+        let description = value.lowercased()
+        if description.contains("timed out") || description.contains("timeout") || description.contains("超时") {
+            return localizedText(
+                "优先检查代理连接、Base URL、模型响应速度，并尝试降低输出长度或切换更快模型。",
+                "Check proxy connectivity, Base URL, and model response speed first. Try reducing output length or switching to a faster model.",
+                language: appLanguage
+            )
+        }
+        if description.contains("json mode") || description.contains("response_format") || description.contains("json_object") {
+            return localizedText(
+                "该模型可能不支持结构化输出参数，可切换兼容模型，或把这条诊断信息发给开发者确认适配。",
+                "This model may not support structured output parameters. Switch to a compatible model or share this diagnostic with the developer.",
+                language: appLanguage
+            )
+        }
+        if description.contains("decode")
+            || description.contains("parse")
+            || description.contains("无法解析")
+            || description.contains("invalid field")
+            || description.contains("字段格式无效") {
+            return localizedText(
+                "模型返回内容没有满足报告结构要求，建议重试一次；若持续出现，请把诊断信息发给开发者优化提示词或兼容逻辑。",
+                "The model response did not match the required report structure. Retry once; if it persists, share this diagnostic so prompts or compatibility handling can be improved.",
+                language: appLanguage
+            )
+        }
+        if description.contains("安全校验")
+            || description.contains("safety")
+            || description.contains("guardrail")
+            || description.contains("information security") {
+            return localizedText(
+                "模型返回可能包含敏感指令、异常链接或不符合结构要求的字段。建议重试，或将诊断信息发给开发者定位具体校验项。",
+                "The response may contain sensitive instructions, unusual links, or fields that do not match the required structure. Retry or share this diagnostic for validation tuning.",
+                language: appLanguage
+            )
+        }
+        if description.contains("401") || description.contains("403") || description.contains("unauthorized") || description.contains("forbidden") {
+            return localizedText(
+                "请重新验证 API Key、模型权限和服务商账户额度。",
+                "Revalidate the API key, model permission, and provider account quota.",
+                language: appLanguage
+            )
+        }
+        return localizedText(
+            "请检查 API 配置、网络连接和模型可用性；如果重复失败，把诊断信息发给开发者继续排查。",
+            "Check API configuration, connectivity, and model availability. If it keeps failing, share this diagnostic for further investigation.",
             language: appLanguage
         )
     }
@@ -1830,6 +1946,7 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
+    @discardableResult
     private func persistAIAnalysisRun(
         report: AIAnalysisReport,
         artifacts: AIAnalysisArtifactBundle?,
@@ -1838,8 +1955,8 @@ final class PortfolioStore: ObservableObject {
         finishedAt: Date,
         usedFallback: Bool,
         errorCode: String?
-    ) {
-        guard let positionRepository else { return }
+    ) -> UUID? {
+        guard let positionRepository else { return nil }
         let fingerprintSource = artifacts?.inputJSON ?? artifacts?.finalReportJSON ?? report.summary
         let run = PersistedAIAnalysisRun(
             trigger: trigger.rawValue,
@@ -1860,8 +1977,10 @@ final class PortfolioStore: ObservableObject {
 
         do {
             try positionRepository.insertAIAnalysisRun(run)
+            return run.id
         } catch {
             persistenceErrorMessage = "AI 分析运行记录保存失败：\(error.localizedDescription)"
+            return nil
         }
     }
 
@@ -1927,6 +2046,27 @@ final class PortfolioStore: ObservableObject {
 
     private static func truncatedAIErrorCode(_ value: String) -> String {
         String(value.prefix(280))
+    }
+
+    private static func sanitizedAIDiagnosticError(_ value: String) -> String {
+        var sanitized = value
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)(authorization|bearer|api[-_ ]?key|apikey|token|password|credential)\s*[:=]\s*[^,\s;，。]+"#,
+            with: "[redacted credential]",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"\b[A-Za-z0-9_\-]{40,}\b"#,
+            with: "[redacted]",
+            options: .regularExpression
+        )
+        while sanitized.contains("  ") {
+            sanitized = sanitized.replacingOccurrences(of: "  ", with: " ")
+        }
+        let trimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(360))
     }
 
     func refreshInvestmentProfileIfNeeded(force: Bool = false) {

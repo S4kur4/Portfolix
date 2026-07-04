@@ -980,6 +980,10 @@ private struct AIReportChatReport: View {
                 .padding(.horizontal, PortfolixSpacing.md)
                 .padding(.vertical, PortfolixSpacing.sm)
                 .background(PortfolixTheme.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+
+                if let diagnostic = run.diagnostic {
+                    AIAnalysisDiagnosticCard(diagnostic: diagnostic, language: language)
+                }
             }
 
             AIReportChatSection(title: localizedText("核心结论", "Core Takeaway", language: language), symbol: "target") {
@@ -1055,6 +1059,78 @@ private struct AIReportChatReport: View {
         case "warning": PortfolixTheme.amber
         default: PortfolixTheme.lilac
         }
+    }
+}
+
+private struct AIAnalysisDiagnosticCard: View {
+    let diagnostic: AIAnalysisDiagnostic
+    let language: AppLanguage
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
+            HStack(spacing: PortfolixSpacing.sm) {
+                Image(systemName: "stethoscope")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.amber)
+                Text(localizedText("诊断信息", "Diagnostics", language: language))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                Spacer()
+                Button(action: copyDiagnostic) {
+                    Label(
+                        copied
+                            ? localizedText("已复制", "Copied", language: language)
+                            : localizedText("复制", "Copy", language: language),
+                        systemImage: copied ? "checkmark" : "doc.on.doc"
+                    )
+                    .font(PortfolixTypography.captionEmphasis)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(copied ? PortfolixTheme.mint : PortfolixTheme.amber)
+                .help(localizedText("复制脱敏诊断信息", "Copy redacted diagnostic details", language: language))
+            }
+
+            VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
+                diagnosticRow(
+                    localizedText("阶段", "Stage", language: language),
+                    "\(diagnostic.stageTitle) · \(diagnostic.stageID)"
+                )
+                diagnosticRow(localizedText("类型", "Type", language: language), diagnostic.errorKind)
+                diagnosticRow(
+                    localizedText("模型", "Model", language: language),
+                    "\(diagnostic.provider) · \(diagnostic.model)"
+                )
+                diagnosticRow(
+                    localizedText("ID", "ID", language: language),
+                    diagnostic.displayID
+                )
+                diagnosticRow(localizedText("错误摘要", "Error", language: language), diagnostic.errorSummary)
+                diagnosticRow(localizedText("建议", "Suggestion", language: language), diagnostic.recoveryHint)
+            }
+        }
+        .padding(PortfolixSpacing.md)
+        .background(PortfolixTheme.amber.opacity(0.09), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+    }
+
+    private func diagnosticRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: PortfolixSpacing.sm) {
+            Text(title)
+                .font(PortfolixTypography.captionEmphasis)
+                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .frame(width: 58, alignment: .leading)
+            Text(value)
+                .font(PortfolixTypography.caption)
+                .foregroundStyle(PortfolixTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func copyDiagnostic() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(diagnostic.copyText(language: language), forType: .string)
+        copied = true
     }
 }
 

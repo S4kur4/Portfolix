@@ -1311,7 +1311,7 @@ struct AIAnalysisAgent: Sendable {
             else {
                 throw AIAnalysisAgentError.invalidReport
             }
-            let boundedScore = min(max(score.score, localScore - 5), localScore + 5)
+            let boundedScore = min(max(score.score, localScore - 10), localScore + 10)
             let finalScore = min(max(boundedScore, 0), 100)
             return AIInvestmentProfileScore(
                 id: id,

@@ -7,7 +7,9 @@ enum LLMClientError: LocalizedError, Equatable {
     case unauthorized
     case rateLimited
     case endpointOrModelNotFound
+    case badRequest(String)
     case serverError(Int)
+    case unsupportedJSONMode(String?)
     case emptyFinalContent(reasoningCharacters: Int, finishReason: String?)
     case truncatedFinalContent(finishReason: String?)
     case requestFailed(String)
@@ -26,8 +28,15 @@ enum LLMClientError: LocalizedError, Equatable {
             return "LLM 请求已达到频率或额度限制"
         case .endpointOrModelNotFound:
             return "LLM Endpoint 或模型不存在（404），请检查 Base URL 和模型名称"
+        case let .badRequest(message):
+            return "LLM 请求参数被服务拒绝：\(message)"
         case let .serverError(status):
             return "LLM 服务暂时不可用（\(status)）"
+        case let .unsupportedJSONMode(message):
+            if let message, !message.isEmpty {
+                return "LLM 模型不支持 JSON mode：\(message)"
+            }
+            return "LLM 模型不支持 JSON mode"
         case let .emptyFinalContent(reasoningCharacters, finishReason):
             let reason = finishReason.map { "，结束原因：\($0)" } ?? ""
             if reasoningCharacters > 0 {
@@ -120,6 +129,32 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
     }
 
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String {
+        do {
+            return try await completeJSON(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                configuration: configuration,
+                apiKey: apiKey,
+                usesJSONMode: true
+            )
+        } catch LLMClientError.unsupportedJSONMode {
+            return try await completeJSON(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                configuration: configuration,
+                apiKey: apiKey,
+                usesJSONMode: false
+            )
+        }
+    }
+
+    private func completeJSON(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        usesJSONMode: Bool
+    ) async throws -> String {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
             throw LLMClientError.missingAPIKey
@@ -140,7 +175,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
                 ],
                 temperature: 0,
                 maxTokens: configuration.maxOutputTokens,
-                responseFormat: OpenAIResponseFormat(type: "json_object"),
+                responseFormat: usesJSONMode ? OpenAIResponseFormat(type: "json_object") : nil,
                 stream: true
             )
         )
@@ -162,6 +197,13 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
                     lines.append(line)
                 }
                 return try Self.content(fromResponseLines: lines)
+            case 400:
+                let body = await Self.responseBodyText(from: bytes)
+                let message = Self.providerErrorMessage(from: body)
+                if usesJSONMode, Self.isJSONModeUnsupported(message: message, body: body) {
+                    throw LLMClientError.unsupportedJSONMode(message)
+                }
+                throw LLMClientError.badRequest(message ?? "HTTP 400")
             case 401, 403:
                 throw LLMClientError.unauthorized
             case 429:
@@ -212,6 +254,9 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             switch httpResponse.statusCode {
             case 200:
                 try Self.validateSuccessfulProbeResponse(data)
+            case 400:
+                let body = String(data: data, encoding: .utf8)
+                throw LLMClientError.badRequest(Self.providerErrorMessage(from: body) ?? "HTTP 400")
             case 401, 403:
                 throw LLMClientError.unauthorized
             case 429:
@@ -270,6 +315,55 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             return dictionary["error"] != nil
         }
         return false
+    }
+
+    private static func responseBodyText(from bytes: URLSession.AsyncBytes, maximumBytes: Int = 64 * 1024) async -> String? {
+        var lines: [String] = []
+        var receivedByteCount = 0
+        do {
+            for try await line in bytes.lines {
+                receivedByteCount += line.utf8.count + 1
+                guard receivedByteCount <= maximumBytes else { break }
+                lines.append(line)
+            }
+        } catch {
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    static func providerErrorMessage(from body: String?) -> String? {
+        guard
+            let body,
+            let data = body.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data)
+        else {
+            let trimmed = body?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }
+        if let dictionary = object as? [String: Any] {
+            if let message = dictionary["message"] as? String {
+                return message
+            }
+            if let error = dictionary["error"] as? [String: Any],
+               let message = error["message"] as? String {
+                return message
+            }
+            if let error = dictionary["error"] as? String {
+                return error
+            }
+        }
+        return nil
+    }
+
+    static func isJSONModeUnsupported(message: String?, body: String?) -> Bool {
+        let haystack = [message, body]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        guard !haystack.isEmpty else { return false }
+        return haystack.contains("json mode")
+            || haystack.contains("response_format")
+            || haystack.contains("json_object")
     }
 
     static func chatCompletionsURL(baseURL: String) -> URL? {
@@ -419,7 +513,7 @@ private struct OpenAIChatRequest: Encodable {
     let messages: [OpenAIChatMessage]
     let temperature: Double
     let maxTokens: Int
-    let responseFormat: OpenAIResponseFormat
+    let responseFormat: OpenAIResponseFormat?
     let stream: Bool
 
     enum CodingKeys: String, CodingKey {

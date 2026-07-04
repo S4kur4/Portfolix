@@ -1555,7 +1555,7 @@ extension PortfolioStore {
         return localDimensions.map { dimension in
             guard let aiScore = aiScores[dimension.id] else { return dimension }
             let calibratedScore = clampProfileValue(
-                min(max(aiScore, dimension.value - 5), dimension.value + 5)
+                min(max(aiScore, dimension.value - 10), dimension.value + 10)
             )
             return InvestmentProfileDimension(
                 id: dimension.id,

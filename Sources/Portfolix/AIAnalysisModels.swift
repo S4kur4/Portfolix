@@ -181,6 +181,81 @@ struct AIAnalysisRun: Equatable {
     var searchCount = 0
     var usedFallback = false
     var fallbackReason: String?
+    var diagnostic: AIAnalysisDiagnostic?
+}
+
+struct AIAnalysisDiagnostic: Codable, Identifiable, Equatable {
+    let id: UUID
+    let runID: UUID?
+    let stageID: String
+    let stageTitle: String
+    let errorKind: String
+    let errorSummary: String
+    let provider: String
+    let model: String
+    let analysisMode: String
+    let startedAt: Date
+    let finishedAt: Date
+    let recoveryHint: String
+
+    init(
+        id: UUID = UUID(),
+        runID: UUID?,
+        stageID: String,
+        stageTitle: String,
+        errorKind: String,
+        errorSummary: String,
+        provider: String,
+        model: String,
+        analysisMode: String,
+        startedAt: Date,
+        finishedAt: Date,
+        recoveryHint: String
+    ) {
+        self.id = id
+        self.runID = runID
+        self.stageID = stageID
+        self.stageTitle = stageTitle
+        self.errorKind = errorKind
+        self.errorSummary = errorSummary
+        self.provider = provider
+        self.model = model
+        self.analysisMode = analysisMode
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.recoveryHint = recoveryHint
+    }
+
+    var displayID: String {
+        (runID ?? id).uuidString
+    }
+
+    func analysisModeLabel(language: AppLanguage) -> String {
+        switch analysisMode {
+        case "connected_enhanced":
+            localizedText("联网增强", "Connected enhanced", language: language)
+        case "basic_standard":
+            localizedText("基础模式", "Basic mode", language: language)
+        default:
+            analysisMode
+        }
+    }
+
+    func copyText(language: AppLanguage) -> String {
+        let formatter = ISO8601DateFormatter()
+        return [
+            localizedText("Portfolix Agent 诊断信息", "Portfolix Agent diagnostics", language: language),
+            localizedText("诊断 ID：\(displayID)", "Diagnostic ID: \(displayID)", language: language),
+            localizedText("阶段：\(stageTitle) (\(stageID))", "Stage: \(stageTitle) (\(stageID))", language: language),
+            localizedText("类型：\(errorKind)", "Type: \(errorKind)", language: language),
+            localizedText("模型：\(provider) / \(model)", "Model: \(provider) / \(model)", language: language),
+            localizedText("模式：\(analysisModeLabel(language: language))", "Mode: \(analysisModeLabel(language: language))", language: language),
+            localizedText("开始时间：\(formatter.string(from: startedAt))", "Started at: \(formatter.string(from: startedAt))", language: language),
+            localizedText("结束时间：\(formatter.string(from: finishedAt))", "Finished at: \(formatter.string(from: finishedAt))", language: language),
+            localizedText("错误摘要：\(errorSummary)", "Error summary: \(errorSummary)", language: language),
+            localizedText("建议：\(recoveryHint)", "Suggestion: \(recoveryHint)", language: language)
+        ].joined(separator: "\n")
+    }
 }
 
 enum AIChatRetentionPeriod: String, CaseIterable, Identifiable {
@@ -231,11 +306,13 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         let model: String?
         let usedFallback: Bool
         let fallbackReason: String?
+        let diagnostic: AIAnalysisDiagnostic?
 
         init(run: AIAnalysisRun) {
             model = run.model
             usedFallback = run.usedFallback
             fallbackReason = run.fallbackReason
+            diagnostic = run.diagnostic
         }
 
         var run: AIAnalysisRun {
@@ -243,7 +320,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
                 status: .completed,
                 model: model,
                 usedFallback: usedFallback,
-                fallbackReason: fallbackReason
+                fallbackReason: fallbackReason,
+                diagnostic: diagnostic
             )
         }
     }

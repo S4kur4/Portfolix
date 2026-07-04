@@ -209,6 +209,51 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func repositoryPersistsAIAnalysisFallbackDiagnosticsInChatItems() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let now = Date()
+        let runID = UUID()
+        let diagnostic = AIAnalysisDiagnostic(
+            runID: runID,
+            stageID: "validating_report",
+            stageTitle: "报告安全校验",
+            errorKind: "模型返回结构不符合要求",
+            errorSummary: "报告字段格式无效：summary",
+            provider: "openai-compatible",
+            model: "glm-5.2",
+            analysisMode: "connected_enhanced",
+            startedAt: now.addingTimeInterval(-12),
+            finishedAt: now,
+            recoveryHint: "建议重试一次。"
+        )
+        let report = makeMinimalAIReport(summary: "本次使用本地分析。", generatedAt: now)
+        let item = AIReportChatItem.report(
+            report,
+            AIAnalysisRun(
+                status: .completed,
+                startedAt: diagnostic.startedAt,
+                finishedAt: diagnostic.finishedAt,
+                model: diagnostic.model,
+                usedFallback: true,
+                fallbackReason: "报告安全校验未通过结构或安全校验，已改用本地分析。",
+                diagnostic: diagnostic
+            )
+        )
+
+        try repository.upsertAIAnalysisChatItem(item)
+
+        let fetched = try #require(try repository.fetchAIAnalysisChatItems(since: now.addingTimeInterval(-60)).first)
+        guard case let .report(_, fetchedRun) = fetched.content else {
+            Issue.record("应读取到报告聊天记录")
+            return
+        }
+        #expect(fetchedRun.diagnostic?.runID == runID)
+        #expect(fetchedRun.diagnostic?.stageID == "validating_report")
+        #expect(fetchedRun.diagnostic?.errorSummary == "报告字段格式无效：summary")
+    }
+
+    @Test
     func repositoryPrunesExpiredAIAnalysisReportsArtifactsAndChat() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)
@@ -2390,6 +2435,38 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func aiInvestmentProfileClampsLLMCalibrationToTenPointsFromLocalBaseline() throws {
+        let payload = LLMInvestmentProfilePayload(
+            dimensions: [
+                LLMInvestmentProfileDimensionPayload(id: "growth", score: 95, reason: "测试"),
+                LLMInvestmentProfileDimensionPayload(id: "global", score: 20, reason: "测试"),
+                LLMInvestmentProfileDimensionPayload(id: "diversification", score: 60, reason: "测试"),
+                LLMInvestmentProfileDimensionPayload(id: "defense", score: 40, reason: "测试"),
+                LLMInvestmentProfileDimensionPayload(id: "cashflow", score: 70, reason: "测试"),
+                LLMInvestmentProfileDimensionPayload(id: "activity", score: 40, reason: "测试"),
+            ],
+            summary: "测试",
+            confidence: "medium"
+        )
+
+        let profile = try AIAnalysisAgent.investmentProfile(
+            from: payload,
+            localScores: makeLocalInvestmentProfileScores(),
+            generatedAt: .now,
+            model: "mock",
+            riskProfileVersion: 1,
+            inputFingerprint: "test"
+        )
+
+        #expect(profile.dimensions.first { $0.id == "growth" }?.score == 80)
+        #expect(profile.dimensions.first { $0.id == "global" }?.score == 46)
+        #expect(profile.dimensions.first { $0.id == "diversification" }?.score == 58)
+        #expect(profile.dimensions.first { $0.id == "defense" }?.score == 50)
+        #expect(profile.dimensions.first { $0.id == "cashflow" }?.score == 62)
+        #expect(profile.dimensions.first { $0.id == "activity" }?.score == 52)
+    }
+
+    @Test
     func tavilyResponseIsSanitizedAndClassified() throws {
         let response = TavilySearchResponse(
             query: "Apple",
@@ -3569,6 +3646,17 @@ struct PositionRepositoryTests {
         } catch let error as LLMClientError {
             #expect(error == .truncatedFinalContent(finishReason: "length"))
         }
+    }
+
+    @Test
+    func openAICompatibleClientDetectsUnsupportedJSONModeProviderErrors() throws {
+        let body = #"{"error":{"message":"Json mode is not supported for this model.","type":"bad_response_status_code"}}"#
+        let message = OpenAICompatibleClient.providerErrorMessage(from: body)
+
+        #expect(message == "Json mode is not supported for this model.")
+        #expect(OpenAICompatibleClient.isJSONModeUnsupported(message: message, body: body))
+        #expect(OpenAICompatibleClient.isJSONModeUnsupported(message: "response_format is unavailable", body: nil))
+        #expect(!OpenAICompatibleClient.isJSONModeUnsupported(message: "model quota exceeded", body: nil))
     }
 
     @Test
