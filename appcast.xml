@@ -3,14 +3,14 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.1</title>
-            <pubDate>Fri, 03 Jul 2026 20:56:04 +0800</pubDate>
+            <title>0.1.2</title>
+            <pubDate>Sat, 04 Jul 2026 12:47:27 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>8</sparkle:version>
-            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.1/Portfolix-0.1.1.dmg" length="4990682" type="application/octet-stream" sparkle:edSignature="fn6qqH0vbsHn5uqNfK9LEsLPSTiDBKU/k9ux64ZH+SHX2+xMMFc3RLs5DlYqq4UlGLKj9vNzYJjIDefwJvmkBA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.2/Portfolix-0.1.2.dmg" length="5080756" type="application/octet-stream" sparkle:edSignature="ka8KDOobClfnFnSXKxegSY36Buvv8gBAdWunzxA6UXTka7ZPegKZ6cOw/gMg7ltN0PszxVMdTbebukYc0/GwCA=="/>
         </item>
     </channel>
 </rss>

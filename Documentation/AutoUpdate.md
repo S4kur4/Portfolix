@@ -27,11 +27,11 @@ BX7U6Nmwk+IBB5lluFk8rJ3KFopJfeYJS7DFOR+wqZM=
 ## Release Flow
 
 1. Build the release DMG with `scripts/package-release-dmg.sh`.
-2. Upload the DMG and `.sha256` file to the GitHub Release tag, for example `v0.1.1`.
+2. Upload the DMG and `.sha256` file to the GitHub Release tag, for example `v0.1.2`.
 3. Generate and update `appcast.xml`:
 
 ```bash
-PORTFOLIX_VERSION=0.1.1 scripts/generate-sparkle-appcast.sh
+PORTFOLIX_VERSION=0.1.2 scripts/generate-sparkle-appcast.sh
 ```
 
 4. Commit and push the updated `appcast.xml`.

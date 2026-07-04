@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_RELEASE_DIR="$(cd "$ROOT_DIR/.." && pwd)/release"
 RELEASE_DIR="${PORTFOLIX_RELEASE_DIR:-$DEFAULT_RELEASE_DIR}"
-VERSION="${PORTFOLIX_VERSION:-0.1.1}"
+VERSION="${PORTFOLIX_VERSION:-0.1.2}"
 SPARKLE_BIN="$ROOT_DIR/.build/release/artifacts/sparkle/Sparkle/bin/generate_appcast"
 if [[ ! -x "$SPARKLE_BIN" ]]; then
   SPARKLE_BIN="$ROOT_DIR/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
