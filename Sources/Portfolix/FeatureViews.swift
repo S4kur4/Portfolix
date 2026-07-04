@@ -414,8 +414,9 @@ struct AIReportView: View {
                 hasPositions: !store.positions.isEmpty,
                 hasLLMKey: store.hasValidLLMAPIKey,
                 hasSearchKey: store.hasValidSearchAPIKey,
-                usesConnectedMode: store.searchConfiguration.isEnabled,
-                configuredModel: store.aiConfiguration.model,
+                selectedModel: aiModelBinding,
+                availableModels: availableModelOptions,
+                selectedAnalysisMode: aiAnalysisModeBinding,
                 draftMessage: $draftMessage,
                 language: store.appLanguage,
                 generate: requestAnalysis,
@@ -446,6 +447,46 @@ struct AIReportView: View {
         draftMessage = ""
         store.submitAIAnalysisFollowUp(question)
     }
+
+    private var aiModelBinding: Binding<String> {
+        Binding(
+            get: { store.aiConfiguration.model },
+            set: { model in
+                var configuration = store.aiConfiguration
+                configuration.model = model
+                store.aiConfiguration = configuration
+            }
+        )
+    }
+
+    private var aiAnalysisModeBinding: Binding<SmartAnalysisMode> {
+        Binding(
+            get: { store.searchConfiguration.isEnabled ? .connected : .basic },
+            set: { mode in
+                var configuration = store.searchConfiguration
+                configuration.isEnabled = mode == .connected
+                store.searchConfiguration = configuration
+            }
+        )
+    }
+
+    private var availableModelOptions: [String] {
+        var options: [String] = []
+        let currentModel = store.aiConfiguration.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentModel.isEmpty {
+            options.append(currentModel)
+        }
+        for model in AIProviderConfigurationStore.loadCachedModels(provider: store.aiConfiguration.providerOption) {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !options.contains(trimmed) else { continue }
+            options.append(trimmed)
+        }
+        let defaultModel = store.aiConfiguration.providerOption.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !defaultModel.isEmpty, !options.contains(defaultModel) {
+            options.append(defaultModel)
+        }
+        return options
+    }
 }
 
 private struct AIReportChatSurface: View {
@@ -458,8 +499,9 @@ private struct AIReportChatSurface: View {
     let hasPositions: Bool
     let hasLLMKey: Bool
     let hasSearchKey: Bool
-    let usesConnectedMode: Bool
-    let configuredModel: String
+    @Binding var selectedModel: String
+    let availableModels: [String]
+    @Binding var selectedAnalysisMode: SmartAnalysisMode
     @Binding var draftMessage: String
     let language: AppLanguage
     let generate: () -> Void
@@ -471,8 +513,10 @@ private struct AIReportChatSurface: View {
                 AIReportChatHeader(
                     report: report,
                     run: run,
-                    usesConnectedMode: usesConnectedMode,
-                    configuredModel: configuredModel,
+                    selectedModel: $selectedModel,
+                    availableModels: availableModels,
+                    selectedAnalysisMode: $selectedAnalysisMode,
+                    isInteractionEnabled: !isRunning && !isSendingFollowUp,
                     language: language
                 )
 
@@ -627,13 +671,19 @@ private struct AIReportChatSurface: View {
             false
         }
     }
+
+    private var usesConnectedMode: Bool {
+        selectedAnalysisMode == .connected
+    }
 }
 
 private struct AIReportChatHeader: View {
     let report: AIAnalysisReport?
     let run: AIAnalysisRun
-    let usesConnectedMode: Bool
-    let configuredModel: String
+    @Binding var selectedModel: String
+    let availableModels: [String]
+    @Binding var selectedAnalysisMode: SmartAnalysisMode
+    let isInteractionEnabled: Bool
     let language: AppLanguage
 
     var body: some View {
@@ -652,18 +702,24 @@ private struct AIReportChatHeader: View {
             Spacer()
 
             HStack(spacing: PortfolixSpacing.md) {
-                AIReportHeaderStatusTag(
+                AIReportHeaderMenuTag(
                     title: model,
                     symbol: "cpu",
-                    help: localizedText("当前 LLM 模型", "Current LLM model", language: language)
+                    options: availableModels,
+                    selection: $selectedModel,
+                    isEnabled: isInteractionEnabled && !availableModels.isEmpty,
+                    optionTitle: { $0 },
+                    help: localizedText("快速切换 LLM 模型", "Quickly switch LLM model", language: language)
                 )
 
-                AIReportHeaderStatusTag(
-                    title: usesConnectedMode
-                        ? localizedText("联网增强", "Connected", language: language)
-                        : localizedText("基础模式", "Basic", language: language),
-                    symbol: usesConnectedMode ? "network" : "lock.laptopcomputer",
-                    help: usesConnectedMode
+                AIReportHeaderMenuTag(
+                    title: selectedAnalysisMode.title(language: language),
+                    symbol: "network",
+                    options: Array(SmartAnalysisMode.allCases),
+                    selection: $selectedAnalysisMode,
+                    isEnabled: isInteractionEnabled,
+                    optionTitle: { $0.title(language: language) },
+                    help: selectedAnalysisMode == .connected
                         ? localizedText("允许按需联网搜索", "Connected search is available when needed", language: language)
                         : localizedText("仅使用持仓数据和模型知识", "Uses holdings and model knowledge only", language: language)
                 )
@@ -676,23 +732,41 @@ private struct AIReportChatHeader: View {
     }
 
     private var model: String {
-        configuredModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (report?.model ?? run.model ?? localizedText("未配置模型", "Model not configured", language: language))
-            : configuredModel
+            : selectedModel
     }
 }
 
-private struct AIReportHeaderStatusTag: View {
+private struct AIReportHeaderMenuTag<Option: Hashable>: View {
     let title: String
     let symbol: String
+    let options: [Option]
+    @Binding var selection: Option
+    let isEnabled: Bool
+    let optionTitle: (Option) -> String
     let help: String
 
     var body: some View {
-        Label(title, systemImage: symbol)
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                } label: {
+                    Text(optionTitle(option))
+                }
+            }
+        } label: {
+            HStack(spacing: PortfolixSpacing.sm) {
+                Image(systemName: symbol)
+                Text(title)
+                    .fixedSize(horizontal: true, vertical: false)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+            }
             .font(PortfolixTypography.captionEmphasis)
             .lineLimit(1)
-            .truncationMode(.middle)
-            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(PortfolixTheme.secondaryText)
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, 6)
@@ -702,7 +776,13 @@ private struct AIReportHeaderStatusTag: View {
                 fallbackTint: PortfolixTheme.panelSoft,
                 fallbackOpacity: 0.48
             )
-            .help(help)
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.64)
+        .help(help)
     }
 }
 
