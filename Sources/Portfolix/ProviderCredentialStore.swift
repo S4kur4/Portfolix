@@ -241,7 +241,7 @@ enum LLMOutputTokenPolicy {
     static let validationProbe = 64
     static let standard = 2_400
     static let followUp = 6_400
-    static let reportGeneration = 6_000
+    static let reportGeneration = 10_000
 }
 
 enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {

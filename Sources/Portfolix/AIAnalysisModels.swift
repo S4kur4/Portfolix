@@ -14,7 +14,8 @@ enum AIAnalysisProgress: Equatable, Sendable {
     case callingWebSearch(query: String, ordinal: Int, total: Int)
     case webSearchResultsReady(callCount: Int, sourceCount: Int)
     case generatingReport(model: String)
-    case repairingReport
+    case validatingModelOutput(attempt: Int, total: Int)
+    case repairingReport(attempt: Int, total: Int, reason: String)
     case validatingReport
     case preparingArtifacts
     case savingReport
@@ -29,6 +30,7 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .callingWebSearch: "calling_web_search"
         case .webSearchResultsReady: "web_search_results_ready"
         case .generatingReport: "generating_report"
+        case .validatingModelOutput: "validating_model_output"
         case .repairingReport: "repairing_report"
         case .validatingReport: "validating_report"
         case .preparingArtifacts: "preparing_artifacts"
@@ -54,8 +56,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("联网搜索结果已整理", "Connected search results are ready", language: language)
         case .generatingReport:
             localizedText("正在分析组合并生成报告", "Analyzing the portfolio and generating the report", language: language)
-        case .repairingReport:
-            localizedText("正在修复模型返回", "Repairing the model response", language: language)
+        case .validatingModelOutput:
+            localizedText("正在校验模型输出", "Validating model output", language: language)
+        case let .repairingReport(attempt, total, _):
+            localizedText("正在修复模型返回 \(attempt)/\(total)", "Repairing model response \(attempt)/\(total)", language: language)
         case .validatingReport:
             localizedText("正在执行报告安全校验", "Running report safety checks", language: language)
         case .preparingArtifacts:
@@ -83,8 +87,14 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("完成 \(callCount) 次搜索，保留 \(sourceCount) 个可信来源", "Completed \(callCount) searches and retained \(sourceCount) trusted sources", language: language)
         case let .generatingReport(model):
             localizedText("模型：\(shortened(model))", "Model: \(shortened(model))", language: language)
-        case .repairingReport:
-            localizedText("模型首次返回未满足结构或安全预检，正在受限重试一次", "The first response failed structure or safety preflight; retrying once", language: language)
+        case let .validatingModelOutput(attempt, total):
+            localizedText(
+                "检查 JSON、字段、语言和信息安全边界（\(attempt)/\(total)）",
+                "Checking JSON, fields, language, and security boundaries (\(attempt)/\(total))",
+                language: language
+            )
+        case let .repairingReport(_, _, reason):
+            localizedText("原因：\(shortened(reason))", "Reason: \(shortened(reason))", language: language)
         case .validatingReport:
             localizedText("检查结构、引用、来源 URL 与信息安全边界", "Checking structure, references, source URLs, and information security boundaries", language: language)
         case .preparingArtifacts:
@@ -102,6 +112,7 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .planningToolCalls: localizedText("判断联网需求", "connected information assessment", language: language)
         case .callingWebSearch, .webSearchResultsReady: localizedText("联网搜索", "connected search", language: language)
         case .generatingReport: localizedText("生成分析报告", "report generation", language: language)
+        case .validatingModelOutput: localizedText("模型输出校验", "model output validation", language: language)
         case .repairingReport: localizedText("修复模型返回", "model response repair", language: language)
         case .validatingReport: localizedText("报告安全校验", "report safety validation", language: language)
         case .preparingArtifacts: localizedText("整理审计记录", "audit artifact preparation", language: language)
@@ -285,7 +296,9 @@ enum AIChatRetentionPeriod: String, CaseIterable, Identifiable {
     }
 
     func cutoffDate(now: Date = .now) -> Date {
-        Calendar.current.date(byAdding: .day, value: -dayCount, to: now) ?? now
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: now)
+        return calendar.date(byAdding: .day, value: -(dayCount - 1), to: todayStart) ?? todayStart
     }
 }
 

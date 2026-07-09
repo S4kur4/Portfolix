@@ -759,6 +759,8 @@ final class PortfolioStore: ObservableObject {
     @Published private(set) var aiAnalysisChatItems: [AIReportChatItem] = []
     @Published private(set) var isAnsweringAIAnalysisFollowUp = false
     @Published private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
+    private var isAIAnalysisGenerationInFlight = false
+    private var lastAIAnalysisRetentionPruneDay: Date?
     @Published var aiChatRetentionPeriod: AIChatRetentionPeriod = .oneWeek {
         didSet {
             UserDefaults.standard.set(aiChatRetentionPeriod.rawValue, forKey: Self.aiChatRetentionDefaultsKey)
@@ -792,6 +794,7 @@ final class PortfolioStore: ObservableObject {
     private static let latestAIReportDefaultsKey = "portfolix.ai.latestReport"
     private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
+    private static let aiAnalysisGenerationTimeoutNanoseconds: UInt64 = 420_000_000_000
     private static let loginItemIdentifier = "app.portfolix.mac.PriceUpdater"
     private static let isoDateFormatter = ISO8601DateFormatter()
 
@@ -973,6 +976,7 @@ final class PortfolioStore: ObservableObject {
         aiAnalysisChatItems = loadedChatItems
         aiInvestmentProfile = Self.savedAIInvestmentProfile()
         seedAIAnalysisChatIfNeeded()
+        lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
         persistAutomaticPriceUpdateSetting()
         if backgroundUpdatesEnabled {
@@ -986,6 +990,10 @@ final class PortfolioStore: ObservableObject {
 
     func updateRelativeTime(now: Date = .now) {
         relativeTimeNow = now
+        let currentDay = Calendar.current.startOfDay(for: now)
+        if lastAIAnalysisRetentionPruneDay != currentDay {
+            pruneAIAnalysisChatHistory(now: now)
+        }
     }
 
     var totalValueCNY: Decimal {
@@ -1347,6 +1355,10 @@ final class PortfolioStore: ObservableObject {
     }
 
     func generateAIAnalysis(trigger: AIAnalysisTrigger = .manual) {
+        guard !isAIAnalysisGenerationInFlight else { return }
+        if case .running = aiAnalysisRun.status { return }
+        pruneAIAnalysisChatHistory()
+        isAIAnalysisGenerationInFlight = true
         if trigger == .manual {
             let hasReport = aiAnalysisChatItems.contains { item in
                 if case .report = item.content { return true }
@@ -1367,9 +1379,23 @@ final class PortfolioStore: ObservableObject {
         pruneAIAnalysisChatHistory()
     }
 
+    func clearAIAnalysisHistory() throws {
+        guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else {
+            throw PositionRepositoryError.database("智能分析正在运行，请稍后再清空历史")
+        }
+        try positionRepository?.deleteAllAIAnalysisContent()
+        aiAnalysisChatItems = []
+        aiAnalysisReport = nil
+        aiAnalysisRun = AIAnalysisRun()
+        aiAnalysisFollowUpProgress = nil
+        UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey)
+        lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
+    }
+
     func submitAIAnalysisFollowUp(_ question: String) {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp else { return }
+        pruneAIAnalysisChatHistory()
         appendAIAnalysisChatItem(.user(trimmed))
         isAnsweringAIAnalysisFollowUp = true
         aiAnalysisFollowUpProgress = .analyzing
@@ -1542,6 +1568,9 @@ final class PortfolioStore: ObservableObject {
     }
 
     private func generateAIAnalysisReport(trigger: AIAnalysisTrigger) async {
+        defer {
+            isAIAnalysisGenerationInFlight = false
+        }
         refreshProviderCredentialState()
         guard !positions.isEmpty else {
             aiAnalysisRun = AIAnalysisRun(status: .failed(localizedText("请先添加持仓", "Add holdings first", language: appLanguage)))
@@ -1578,17 +1607,13 @@ final class PortfolioStore: ObservableObject {
             let positionPerformance = loadAIPositionPerformance(asOf: Date())
             analysisContext = makeAIStoreContext(positionPerformance: positionPerformance)
             let previousReport = aiAnalysisReport
-            let result = try await aiAgent.generateReportResult(
+            let result = try await withAIAnalysisGenerationTimeout(
                 positions: positions,
-                storeContext: analysisContext,
-                llmConfiguration: aiConfiguration,
-                searchConfiguration: searchConfiguration,
+                context: analysisContext,
                 trigger: trigger,
                 outputLanguage: appLanguage.aiResponseLanguage,
                 previousReport: previousReport,
-                progress: { [weak self] progress in
-                    await self?.updateAIAnalysisProgress(progress, startedAt: startedAt)
-                }
+                startedAt: startedAt
             )
             let report = result.report
             let finishedAt = Date()
@@ -1621,6 +1646,52 @@ final class PortfolioStore: ObservableObject {
             completeAIAnalysisWithFallback(error: error, trigger: trigger, startedAt: startedAt, context: analysisContext)
         } catch {
             completeAIAnalysisWithFallback(error: error, trigger: trigger, startedAt: startedAt, context: analysisContext)
+        }
+    }
+
+    private func withAIAnalysisGenerationTimeout(
+        positions: [Position],
+        context: AIAnalysisStoreContext,
+        trigger: AIAnalysisTrigger,
+        outputLanguage: AIResponseLanguage,
+        previousReport: AIAnalysisReport?,
+        startedAt: Date
+    ) async throws -> AIAnalysisAgentResult {
+        let agent = aiAgent
+        let llmConfiguration = aiConfiguration
+        let searchConfiguration = searchConfiguration
+        let timeoutNanoseconds = Self.aiAnalysisGenerationTimeoutNanoseconds
+        return try await withThrowingTaskGroup(of: AIAnalysisAgentResult.self) { group in
+            group.addTask {
+                try await agent.generateReportResult(
+                    positions: positions,
+                    storeContext: context,
+                    llmConfiguration: llmConfiguration,
+                    searchConfiguration: searchConfiguration,
+                    trigger: trigger,
+                    outputLanguage: outputLanguage,
+                    previousReport: previousReport,
+                    progress: { [weak self] progress in
+                        await self?.updateAIAnalysisProgress(progress, startedAt: startedAt)
+                    }
+                )
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                throw AIAnalysisAgentError.timedOut
+            }
+
+            do {
+                guard let result = try await group.next() else {
+                    group.cancelAll()
+                    throw AIAnalysisAgentError.timedOut
+                }
+                group.cancelAll()
+                return result
+            } catch {
+                group.cancelAll()
+                throw error
+            }
         }
     }
 
@@ -1702,7 +1773,14 @@ final class PortfolioStore: ObservableObject {
                 language: appLanguage
             )
         }
-        if description.contains("安全校验") || description.contains("invalid report") {
+        if description.contains("安全校验")
+            || description.contains("invalid report")
+            || description.contains("结构校验")
+            || description.contains("不是合法 json")
+            || description.contains("字段不符合")
+            || description.contains("枚举值不符合")
+            || description.contains("列表数量不符合")
+            || description.contains("语言不匹配") {
             return localizedText(
                 "\(context)未通过结构或安全校验，已改用本地分析。",
                 "The \(context) output failed structural or safety validation, so local analysis was used.",
@@ -1749,6 +1827,21 @@ final class PortfolioStore: ObservableObject {
         if description.contains("json mode") || description.contains("response_format") || description.contains("json_object") {
             return localizedText("模型结构化输出不兼容", "Structured output is not supported by the model", language: appLanguage)
         }
+        if description.contains("返回内容被截断") || description.contains("truncated") {
+            return localizedText("模型输出被截断", "Model output was truncated", language: appLanguage)
+        }
+        if description.contains("不是合法 json") {
+            return localizedText("模型返回不是合法 JSON", "Model response is not valid JSON", language: appLanguage)
+        }
+        if description.contains("语言不匹配") {
+            return localizedText("模型输出语言不匹配", "Model response language mismatch", language: appLanguage)
+        }
+        if description.contains("字段不符合")
+            || description.contains("枚举值不符合")
+            || description.contains("列表数量不符合")
+            || description.contains("结构校验") {
+            return localizedText("模型返回字段不符合要求", "Model response fields are invalid", language: appLanguage)
+        }
         if description.contains("decode")
             || description.contains("parse")
             || description.contains("无法解析")
@@ -1756,7 +1849,7 @@ final class PortfolioStore: ObservableObject {
             || description.contains("字段格式无效") {
             return localizedText("模型返回结构不符合要求", "Model response structure is invalid", language: appLanguage)
         }
-        if description.contains("安全校验")
+        if description.contains("信息安全敏感")
             || description.contains("safety")
             || description.contains("guardrail")
             || description.contains("information security") {
@@ -1790,6 +1883,37 @@ final class PortfolioStore: ObservableObject {
                 language: appLanguage
             )
         }
+        if description.contains("返回内容被截断") || description.contains("truncated") {
+            return localizedText(
+                "模型输出达到长度上限。App 已尝试修复；若持续出现，可切换更稳定模型或减少报告复杂度。",
+                "The model output reached its length limit. The app attempted repair; if it persists, switch to a more stable model or reduce report complexity.",
+                language: appLanguage
+            )
+        }
+        if description.contains("不是合法 json") {
+            return localizedText(
+                "模型没有返回合法 JSON。App 已自动要求模型修复；若仍失败，可切换更兼容结构化输出的模型。",
+                "The model did not return valid JSON. The app asked the model to repair it automatically; if it still fails, switch to a model with better structured-output compatibility.",
+                language: appLanguage
+            )
+        }
+        if description.contains("语言不匹配") {
+            return localizedText(
+                "模型未按当前界面语言返回报告。App 已自动要求模型改写语言；若仍失败，可重试或切换模型。",
+                "The model did not answer in the current interface language. The app asked it to rewrite the language automatically; if it still fails, retry or switch models.",
+                language: appLanguage
+            )
+        }
+        if description.contains("字段不符合")
+            || description.contains("枚举值不符合")
+            || description.contains("列表数量不符合")
+            || description.contains("结构校验") {
+            return localizedText(
+                "模型返回字段没有满足报告结构要求。App 已自动按失败字段定向修复；若持续出现，请分享诊断信息以便优化兼容逻辑。",
+                "The model response fields did not match the report schema. The app attempted targeted repair by failed field; if it persists, share this diagnostic so compatibility can be improved.",
+                language: appLanguage
+            )
+        }
         if description.contains("decode")
             || description.contains("parse")
             || description.contains("无法解析")
@@ -1801,7 +1925,7 @@ final class PortfolioStore: ObservableObject {
                 language: appLanguage
             )
         }
-        if description.contains("安全校验")
+        if description.contains("信息安全敏感")
             || description.contains("safety")
             || description.contains("guardrail")
             || description.contains("information security") {
@@ -1902,6 +2026,7 @@ final class PortfolioStore: ObservableObject {
     }
 
     private func pruneAIAnalysisChatHistory(now: Date = .now) {
+        lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: now)
         let cutoff = aiChatRetentionPeriod.cutoffDate(now: now)
         aiAnalysisChatItems.removeAll { $0.createdAt < cutoff }
         if let report = aiAnalysisReport, report.generatedAt < cutoff {

@@ -8,6 +8,7 @@ enum AIAnalysisAgentError: LocalizedError, Equatable {
     case missingLLMKey
     case missingSearchKey
     case invalidReport
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -22,7 +23,9 @@ enum AIAnalysisAgentError: LocalizedError, Equatable {
         case .missingSearchKey:
             "请先配置 Search API Key"
         case .invalidReport:
-            "模型返回内容未通过安全校验"
+            "模型返回内容未通过结构校验"
+        case .timedOut:
+            "完整分析运行超时"
         }
     }
 }
@@ -51,6 +54,71 @@ struct AIAnalysisPipelineError: LocalizedError, Sendable, CustomStringConvertibl
     }
 
     var debugDescription: String { description }
+}
+
+enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
+    case informationSecurityViolation(String)
+    case invalidJSON(String)
+    case invalidField(String)
+    case invalidEnum(String)
+    case invalidListCount(String)
+    case languageMismatch(expected: AIResponseLanguage)
+
+    var errorDescription: String? {
+        switch self {
+        case let .informationSecurityViolation(fragment):
+            "模型返回包含潜在信息安全敏感内容：\(fragment)"
+        case let .invalidJSON(detail):
+            "模型返回不是合法 JSON：\(detail)"
+        case let .invalidField(field):
+            "模型返回字段不符合要求：\(field)"
+        case let .invalidEnum(field):
+            "模型返回枚举值不符合要求：\(field)"
+        case let .invalidListCount(field):
+            "模型返回列表数量不符合要求：\(field)"
+        case let .languageMismatch(expected):
+            expected == .english
+                ? "模型返回语言不匹配：应使用英文正文，资产名称可保持原文"
+                : "模型返回语言不匹配：应使用简体中文正文"
+        }
+    }
+
+    var repairInstruction: String {
+        switch self {
+        case let .informationSecurityViolation(fragment):
+            return "删除或改写疑似敏感、越权或提示词泄露内容：\(fragment)。"
+        case let .invalidJSON(detail):
+            return "只返回一个合法 JSON 对象；修复 JSON 语法，不要输出 Markdown 或解释。解析问题：\(detail)。"
+        case let .invalidField(field):
+            return "修复字段 \(field) 的类型、长度或必填内容，使其符合目标结构。"
+        case let .invalidEnum(field):
+            return "修复字段 \(field) 的枚举值，只能使用目标结构列出的允许值。"
+        case let .invalidListCount(field):
+            return "压缩字段 \(field) 的数组数量，保留最重要的项目。"
+        case let .languageMismatch(expected):
+            if expected == .english {
+                return "输出语言不匹配：将所有面向用户的正文改为英文；中文资产名、基金名、证券代码和专有名词保持原文。"
+            }
+            return "输出语言不匹配：将所有面向用户的正文改为简体中文；资产名、基金名、证券代码和专有名词保持原文。"
+        }
+    }
+
+    var progressReason: String {
+        switch self {
+        case .informationSecurityViolation:
+            "输出包含潜在敏感内容"
+        case .invalidJSON:
+            "输出不是合法 JSON"
+        case let .invalidField(field):
+            "字段不符合要求：\(field)"
+        case let .invalidEnum(field):
+            "枚举值不符合要求：\(field)"
+        case let .invalidListCount(field):
+            "列表数量不符合要求：\(field)"
+        case .languageMismatch:
+            "输出语言不匹配"
+        }
+    }
 }
 
 enum AIReportValidationError: LocalizedError, Equatable, Sendable {
@@ -875,33 +943,66 @@ struct AIAnalysisAgent: Sendable {
         } catch {
             throw AIAnalysisPipelineError(stage: reportStage, underlying: error)
         }
-        if let payload = Self.decodePayload(raw, expectedLanguage: input.outputLanguage) {
-            return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: nil)
-        }
-
-        await progress?(.repairingReport)
-        let repaired: String
+        let totalValidationAttempts = AIReportRepairPolicy.maxRepairAttempts + 1
+        await progress?(.validatingModelOutput(attempt: 1, total: totalValidationAttempts))
         do {
-            repaired = try await repairReport(
-                rawReport: raw,
-                inputJSON: inputJSON,
-                toolResultsJSON: toolResultsJSON,
-                configuration: reportConfiguration,
-                apiKey: apiKey
-            )
+            let payload = try Self.validatedPayload(raw, expectedLanguage: input.outputLanguage)
+            return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: nil)
         } catch {
-            throw AIAnalysisPipelineError(stage: .repairingReport, underlying: error)
+            var validationError = Self.reportPayloadValidationError(from: error)
+            var candidate = raw
+            var lastRepaired: String?
+
+            for attempt in 1...AIReportRepairPolicy.maxRepairAttempts {
+                let repairProgress = AIAnalysisProgress.repairingReport(
+                    attempt: attempt,
+                    total: AIReportRepairPolicy.maxRepairAttempts,
+                    reason: validationError.progressReason
+                )
+                await progress?(repairProgress)
+                do {
+                    candidate = try await repairReport(
+                        rawReport: candidate,
+                        inputJSON: inputJSON,
+                        toolResultsJSON: toolResultsJSON,
+                        validationIssue: validationError.repairInstruction,
+                        repairAttempt: attempt,
+                        maxAttempts: AIReportRepairPolicy.maxRepairAttempts,
+                        configuration: reportConfiguration,
+                        apiKey: apiKey
+                    )
+                    lastRepaired = candidate
+                } catch {
+                    throw AIAnalysisPipelineError(stage: repairProgress, underlying: error)
+                }
+
+                await progress?(.validatingModelOutput(attempt: attempt + 1, total: totalValidationAttempts))
+                do {
+                    let payload = try Self.validatedPayload(candidate, expectedLanguage: input.outputLanguage)
+                    return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: lastRepaired)
+                } catch {
+                    validationError = Self.reportPayloadValidationError(from: error)
+                }
+            }
+
+            throw AIAnalysisPipelineError(
+                stage: .repairingReport(
+                    attempt: AIReportRepairPolicy.maxRepairAttempts,
+                    total: AIReportRepairPolicy.maxRepairAttempts,
+                    reason: validationError.progressReason
+                ),
+                underlying: validationError
+            )
         }
-        if let payload = Self.decodePayload(repaired, expectedLanguage: input.outputLanguage) {
-            return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: repaired)
-        }
-        throw AIAnalysisPipelineError(stage: .repairingReport, underlying: AIAnalysisAgentError.invalidReport)
     }
 
     fileprivate func repairReport(
         rawReport: String,
         inputJSON: String,
         toolResultsJSON: String,
+        validationIssue: String = "模型返回未通过结构校验，请按目标结构修复。",
+        repairAttempt: Int = 1,
+        maxAttempts: Int = 1,
         configuration: AIProviderConfiguration,
         apiKey: String
     ) async throws -> String {
@@ -910,7 +1011,10 @@ struct AIAnalysisAgent: Sendable {
             userPrompt: AIAnalysisPromptText.repairUser(
                 rawReport: rawReport,
                 inputJSON: inputJSON,
-                toolResultsJSON: toolResultsJSON
+                toolResultsJSON: toolResultsJSON,
+                validationIssue: validationIssue,
+                repairAttempt: repairAttempt,
+                maxAttempts: maxAttempts
             ),
             configuration: configuration,
             apiKey: apiKey
@@ -1340,32 +1444,106 @@ struct AIAnalysisAgent: Sendable {
         _ raw: String,
         expectedLanguage: AIResponseLanguage? = nil
     ) -> LLMReportPayload? {
+        try? validatedPayload(raw, expectedLanguage: expectedLanguage)
+    }
+
+    static func validatedPayload(
+        _ raw: String,
+        expectedLanguage: AIResponseLanguage? = nil
+    ) throws -> LLMReportPayload {
         let trimmed = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (try? AIInformationSecurityGuardrail.validateGeneratedText(trimmed)) != nil else { return nil }
-        guard
-            let data = trimmed.data(using: .utf8),
-            let payload = try? JSONDecoder().decode(LLMReportPayload.self, from: data),
-            (try? AIAnalysisSchemaValidator.validate(payload: payload)) != nil
-        else {
-            return nil
+
+        do {
+            try AIInformationSecurityGuardrail.validateGeneratedText(trimmed)
+        } catch let error as AIReportValidationError {
+            throw Self.reportPayloadValidationError(from: error)
         }
-        let text = [
+
+        guard let data = trimmed.data(using: .utf8) else {
+            throw AIReportPayloadValidationError.invalidJSON("响应无法使用 UTF-8 编码读取")
+        }
+
+        let payload: LLMReportPayload
+        do {
+            payload = try JSONDecoder().decode(LLMReportPayload.self, from: data)
+        } catch {
+            throw AIReportPayloadValidationError.invalidJSON(decodingFailureSummary(error))
+        }
+        let normalizedPayload = AIReportPayloadNormalizer.normalize(payload)
+
+        try AIAnalysisSchemaValidator.validate(payload: normalizedPayload)
+
+        let text = Self.userFacingReportText(normalizedPayload)
+        do {
+            try AIInformationSecurityGuardrail.validateGeneratedText(text)
+        } catch let error as AIReportValidationError {
+            throw Self.reportPayloadValidationError(from: error)
+        }
+        if let expectedLanguage, !expectedLanguage.matchesUserFacingText(text) {
+            throw AIReportPayloadValidationError.languageMismatch(expected: expectedLanguage)
+        }
+        return normalizedPayload
+    }
+
+    private static func userFacingReportText(_ payload: LLMReportPayload) -> String {
+        [
             payload.summary,
             payload.healthScoreExplanation,
             payload.riskItems.map { "\($0.title) \($0.evidence) \($0.impact)" }.joined(separator: " "),
             payload.assetAlerts.map { "\($0.title) \($0.reason)" }.joined(separator: " "),
             payload.rebalanceActions.map { "\($0.title) \($0.rationale) \($0.riskNote ?? "")" }.joined(separator: " "),
             payload.questionsToConsider.joined(separator: " "),
+            payload.dataQualityNotes.joined(separator: " "),
+            payload.limitations.joined(separator: " "),
         ].joined(separator: " ")
-        guard (try? AIInformationSecurityGuardrail.validateGeneratedText(text)) != nil else { return nil }
-        if let expectedLanguage, !expectedLanguage.matchesUserFacingText(text) {
-            return nil
+    }
+
+    private static func reportPayloadValidationError(from error: Error) -> AIReportPayloadValidationError {
+        if let payloadError = error as? AIReportPayloadValidationError {
+            return payloadError
         }
-        return payload
+        if let reportError = error as? AIReportValidationError {
+            switch reportError {
+            case let .informationSecurityViolation(fragment):
+                return .informationSecurityViolation(fragment)
+            case let .invalidField(field):
+                return .invalidField(field)
+            case let .invalidRelatedRef(ref):
+                return .invalidField("related_refs: \(ref)")
+            case let .insecureSourceURL(url):
+                return .invalidField("source_url: \(url)")
+            case let .invalidSourceDomain(domain), let .unreferencedSourceDomain(domain):
+                return .invalidField("source_domain: \(domain)")
+            }
+        }
+        return .invalidField(error.localizedDescription)
+    }
+
+    private static func decodingFailureSummary(_ error: Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return String(error.localizedDescription.prefix(160))
+        }
+        func path(_ codingPath: [CodingKey]) -> String {
+            let value = codingPath.map(\.stringValue).joined(separator: ".")
+            return value.isEmpty ? "root" : value
+        }
+        switch decodingError {
+        case let .keyNotFound(key, context):
+            let base = path(context.codingPath)
+            return "缺少字段 \(base == "root" ? key.stringValue : "\(base).\(key.stringValue)")"
+        case let .typeMismatch(_, context):
+            return "字段类型不匹配 \(path(context.codingPath))"
+        case let .valueNotFound(_, context):
+            return "字段值为空 \(path(context.codingPath))"
+        case let .dataCorrupted(context):
+            return "JSON 数据损坏 \(path(context.codingPath))"
+        @unknown default:
+            return "未知 JSON 解析错误"
+        }
     }
 
     static func decodeToolPlan(_ raw: String) -> AIWebSearchToolPlan? {
@@ -1972,6 +2150,10 @@ private struct AIReportWriterNode {
     }
 }
 
+private enum AIReportRepairPolicy {
+    static let maxRepairAttempts = 2
+}
+
 struct AIReportPolicyNormalization: Equatable {
     let report: AIAnalysisReport
     let notes: [String]
@@ -2048,6 +2230,66 @@ enum AIReportPolicyNormalizer {
             ),
             notes: []
         )
+    }
+}
+
+private enum AIReportPayloadNormalizer {
+    static func normalize(_ payload: LLMReportPayload) -> LLMReportPayload {
+        LLMReportPayload(
+            summary: clipped(payload.summary, max: 220),
+            healthScoreExplanation: clipped(payload.healthScoreExplanation, max: 320),
+            riskItems: payload.riskItems.prefix(12).map(normalizeRiskItem),
+            assetAlerts: payload.assetAlerts.prefix(12).map(normalizeAssetAlert),
+            rebalanceActions: payload.rebalanceActions.map(normalizeRebalanceAction),
+            questionsToConsider: payload.questionsToConsider.prefix(8).map { clipped($0, max: 180) },
+            dataQualityNotes: payload.dataQualityNotes.prefix(8).map { clipped($0, max: 180) },
+            limitations: payload.limitations.prefix(8).map { clipped($0, max: 180) }
+        )
+    }
+
+    private static func normalizeRiskItem(_ item: LLMRiskItemPayload) -> LLMRiskItemPayload {
+        let severities = Set(["info", "warning", "high"])
+        let categories = Set(["concentration", "asset_type_diversification", "data_quality", "volatility", "currency_exposure", "external_event", "risk_profile"])
+        return LLMRiskItemPayload(
+            severity: severities.contains(item.severity) ? item.severity : "info",
+            category: categories.contains(item.category) ? item.category : "data_quality",
+            title: clipped(item.title, max: 120),
+            evidence: clipped(item.evidence, max: 360),
+            impact: clipped(item.impact, max: 420),
+            relatedRefs: Array(item.relatedRefs.prefix(12))
+        )
+    }
+
+    private static func normalizeAssetAlert(_ alert: LLMAssetAlertPayload) -> LLMAssetAlertPayload {
+        LLMAssetAlertPayload(
+            assetName: clipped(alert.assetName, max: 120),
+            symbol: clipped(alert.symbol, max: 40),
+            title: clipped(alert.title, max: 140),
+            reason: clipped(alert.reason, max: 360),
+            sourceDomains: Array(alert.sourceDomains.prefix(6))
+        )
+    }
+
+    private static func normalizeRebalanceAction(_ action: LLMRebalanceActionPayload) -> LLMRebalanceActionPayload {
+        let actions = Set([
+            "observe", "maintain", "hold", "buy", "increase", "reduce", "sell", "exit",
+            "review_reduce", "review_replenish", "rebalance",
+        ])
+        return LLMRebalanceActionPayload(
+            action: actions.contains(action.action) ? action.action : "observe",
+            assetName: action.assetName.map { clipped($0, max: 120) },
+            symbol: action.symbol.map { clipped($0, max: 40) },
+            title: clipped(action.title, max: 140),
+            rationale: clipped(action.rationale, max: 360),
+            riskNote: action.riskNote.map { clipped($0, max: 260) }
+        )
+    }
+
+    private static func clipped(_ value: String, max: Int) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > max else { return trimmed }
+        let end = trimmed.index(trimmed.startIndex, offsetBy: max)
+        return String(trimmed[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -2238,37 +2480,41 @@ enum AIAnalysisSchemaValidator {
     }
 
     static func validate(payload: LLMReportPayload) throws {
-        guard bounded(payload.summary, min: 1, max: 180) else { throw AIAnalysisAgentError.invalidReport }
-        guard bounded(payload.healthScoreExplanation, min: 1, max: 260) else { throw AIAnalysisAgentError.invalidReport }
-        guard payload.riskItems.count <= 12, payload.assetAlerts.count <= 12 else { throw AIAnalysisAgentError.invalidReport }
+        guard bounded(payload.summary, min: 1, max: 220) else { throw AIReportPayloadValidationError.invalidField("summary.length") }
+        guard bounded(payload.healthScoreExplanation, min: 1, max: 320) else { throw AIReportPayloadValidationError.invalidField("health_score_explanation.length") }
+        guard payload.riskItems.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("risk_items") }
+        guard payload.assetAlerts.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("asset_alerts") }
         guard payload.questionsToConsider.count <= 8, payload.dataQualityNotes.count <= 8, payload.limitations.count <= 8 else {
-            throw AIAnalysisAgentError.invalidReport
+            throw AIReportPayloadValidationError.invalidListCount("questions_to_consider/data_quality_notes/limitations")
         }
         let severities = Set(["info", "warning", "high"])
         let categories = Set(["concentration", "asset_type_diversification", "data_quality", "volatility", "currency_exposure", "external_event", "risk_profile"])
         for item in payload.riskItems {
-            guard severities.contains(item.severity), categories.contains(item.category) else {
-                throw AIAnalysisAgentError.invalidReport
+            guard severities.contains(item.severity) else {
+                throw AIReportPayloadValidationError.invalidEnum("risk_items.severity")
+            }
+            guard categories.contains(item.category) else {
+                throw AIReportPayloadValidationError.invalidEnum("risk_items.category")
             }
             guard bounded(item.title, min: 1, max: 120), bounded(item.evidence, min: 1, max: 360), bounded(item.impact, min: 1, max: 420) else {
-                throw AIAnalysisAgentError.invalidReport
+                throw AIReportPayloadValidationError.invalidField("risk_items.text")
             }
-            guard item.relatedRefs.count <= 12 else { throw AIAnalysisAgentError.invalidReport }
+            guard item.relatedRefs.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("risk_items.related_refs") }
         }
         for alert in payload.assetAlerts {
             guard bounded(alert.title, min: 1, max: 140), bounded(alert.reason, min: 1, max: 360) else {
-                throw AIAnalysisAgentError.invalidReport
+                throw AIReportPayloadValidationError.invalidField("asset_alerts.text")
             }
-            guard alert.sourceDomains.count <= 6 else { throw AIAnalysisAgentError.invalidReport }
+            guard alert.sourceDomains.count <= 6 else { throw AIReportPayloadValidationError.invalidListCount("asset_alerts.source_domains") }
         }
         let actions = Set([
             "observe", "maintain", "hold", "buy", "increase", "reduce", "sell", "exit",
             "review_reduce", "review_replenish", "rebalance",
         ])
         for action in payload.rebalanceActions {
-            guard actions.contains(action.action) else { throw AIAnalysisAgentError.invalidReport }
+            guard actions.contains(action.action) else { throw AIReportPayloadValidationError.invalidEnum("rebalance_actions.action") }
             guard bounded(action.title, min: 1, max: 140), bounded(action.rationale, min: 1, max: 360) else {
-                throw AIAnalysisAgentError.invalidReport
+                throw AIReportPayloadValidationError.invalidField("rebalance_actions.text")
             }
         }
     }
@@ -2553,6 +2799,26 @@ struct LLMReportPayload: Decodable {
         dataQualityNotes = try container.decodeIfPresent([String].self, forKey: .dataQualityNotes) ?? []
         limitations = try container.decodeIfPresent([String].self, forKey: .limitations) ?? []
     }
+
+    init(
+        summary: String,
+        healthScoreExplanation: String,
+        riskItems: [LLMRiskItemPayload],
+        assetAlerts: [LLMAssetAlertPayload],
+        rebalanceActions: [LLMRebalanceActionPayload],
+        questionsToConsider: [String],
+        dataQualityNotes: [String],
+        limitations: [String]
+    ) {
+        self.summary = summary
+        self.healthScoreExplanation = healthScoreExplanation
+        self.riskItems = riskItems
+        self.assetAlerts = assetAlerts
+        self.rebalanceActions = rebalanceActions
+        self.questionsToConsider = questionsToConsider
+        self.dataQualityNotes = dataQualityNotes
+        self.limitations = limitations
+    }
 }
 
 struct LLMRiskItemPayload: Decodable {
@@ -2571,6 +2837,15 @@ struct LLMRiskItemPayload: Decodable {
         case impact
         case relatedRefs = "related_refs"
     }
+
+    init(severity: String, category: String, title: String, evidence: String, impact: String, relatedRefs: [String]) {
+        self.severity = severity
+        self.category = category
+        self.title = title
+        self.evidence = evidence
+        self.impact = impact
+        self.relatedRefs = relatedRefs
+    }
 }
 
 struct LLMAssetAlertPayload: Decodable {
@@ -2586,6 +2861,14 @@ struct LLMAssetAlertPayload: Decodable {
         case title
         case reason
         case sourceDomains = "source_domains"
+    }
+
+    init(assetName: String, symbol: String, title: String, reason: String, sourceDomains: [String]) {
+        self.assetName = assetName
+        self.symbol = symbol
+        self.title = title
+        self.reason = reason
+        self.sourceDomains = sourceDomains
     }
 }
 
@@ -2604,6 +2887,15 @@ struct LLMRebalanceActionPayload: Decodable {
         case title
         case rationale
         case riskNote = "risk_note"
+    }
+
+    init(action: String, assetName: String?, symbol: String?, title: String, rationale: String, riskNote: String?) {
+        self.action = action
+        self.assetName = assetName
+        self.symbol = symbol
+        self.title = title
+        self.rationale = rationale
+        self.riskNote = riskNote
     }
 }
 

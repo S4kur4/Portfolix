@@ -23,8 +23,8 @@ struct AIReportRoseOrbit: View {
 
 private enum RoseOrbitRenderer {
     private static let visualScale = 0.9
-    private static let particleCount = 140
-    private static let pathSteps = 480
+    private static let particleCount = 176
+    private static let pathSteps = 520
     private static let trailSpan = 0.4
     private static let orbitDuration = 5.0
     private static let rotationDuration = 20.0

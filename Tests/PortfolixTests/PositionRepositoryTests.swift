@@ -209,6 +209,18 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func aiChatRetentionOneWeekUsesCalendarDayCutoff() throws {
+        let calendar = Calendar.current
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 8, hour: 21)))
+        let cutoff = AIChatRetentionPeriod.oneWeek.cutoffDate(now: now)
+        let expectedCutoff = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 2)))
+        let julyFirstEvening = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 1, hour: 23, minute: 59)))
+
+        #expect(cutoff == expectedCutoff)
+        #expect(julyFirstEvening < cutoff)
+    }
+
+    @Test
     func repositoryPersistsAIAnalysisFallbackDiagnosticsInChatItems() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)
@@ -289,6 +301,30 @@ struct PositionRepositoryTests {
         #expect(latestReport.id == recentReport.id)
         let remainingChat = try repository.fetchAIAnalysisChatItems(since: oldDate.addingTimeInterval(-1))
         #expect(remainingChat.map(\.id) == [recentChat.id])
+    }
+
+    @Test
+    func repositoryDeletesAllAIAnalysisContent() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let runID = UUID()
+        let report = makeMinimalAIReport(summary: "需要清空的报告")
+        try repository.insertAIAnalysisRun(
+            makePersistedAIAnalysisRun(
+                id: runID,
+                report: report,
+                startedAt: report.generatedAt
+            )
+        )
+        try repository.upsertAIAnalysisChatItem(.report(report, AIAnalysisRun(status: .completed, model: "mock")))
+        try repository.upsertAIAnalysisChatItem(.assistant("需要清空的回答"))
+
+        try repository.deleteAllAIAnalysisContent()
+
+        #expect(try repository.fetchAIAnalysisRunCount() == 0)
+        #expect(try repository.fetchLatestAIAnalysisReport() == nil)
+        #expect(try repository.fetchAIAnalysisArtifacts(runID: runID) == nil)
+        #expect(try repository.fetchAIAnalysisChatItems(since: .distantPast).isEmpty)
     }
 
     @Test
@@ -1639,6 +1675,7 @@ struct PositionRepositoryTests {
             "preflight",
             "building_input",
             "generating_report",
+            "validating_model_output",
             "validating_report",
             "preparing_artifacts",
         ])
@@ -1782,6 +1819,87 @@ struct PositionRepositoryTests {
         #expect(result.artifacts.guardrailResultJSON.contains("passed"))
         #expect(await llm.requestCount() == 1)
         #expect(!(await progressRecorder.stageIDs().contains("repairing_report")))
+    }
+
+    @MainActor
+    @Test
+    func aiReportRepairLoopPublishesValidationAndRepairProgress() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Bitcoin",
+            symbol: "BTC",
+            category: .crypto,
+            quantity: 1,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 90
+        )
+        let llm = MockLLMCompleter(responses: [
+            """
+            {
+              "summary": "Portfolio risk remains observable",
+              "health_score_explanation": "Local constraints explain the risk boundary",
+              "risk_items": [],
+              "asset_alerts": [],
+              "rebalance_actions": [],
+              "questions_to_consider": ["Does this holding still match the risk preference?"],
+              "data_quality_notes": [],
+              "limitations": ["Local data only"]
+            }
+            """,
+            """
+            {
+              "health_score_explanation": "本地约束用于解释风险边界",
+              "risk_items": [],
+              "asset_alerts": [],
+              "rebalance_actions": [],
+              "questions_to_consider": ["当前持仓是否仍符合风险偏好"],
+              "data_quality_notes": [],
+              "limitations": ["仅基于本地数据"]
+            }
+            """,
+            """
+            {
+              "summary": "组合风险保持可观察",
+              "health_score_explanation": "本地约束用于解释风险边界",
+              "risk_items": [],
+              "asset_alerts": [],
+              "rebalance_actions": [],
+              "questions_to_consider": ["当前持仓是否仍符合风险偏好"],
+              "data_quality_notes": [],
+              "limitations": ["仅基于本地数据"]
+            }
+            """,
+        ])
+        let progressRecorder = AIAnalysisProgressRecorder()
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: MockTavilySearcher(),
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key"])
+        )
+
+        let result = try await agent.generateReportResult(
+            positions: store.positions,
+            storeContext: makeAIContext(from: store),
+            llmConfiguration: AIProviderConfiguration.default,
+            searchConfiguration: .default,
+            trigger: .manual,
+            progress: { progress in
+                await progressRecorder.record(progress)
+            }
+        )
+
+        let stageIDs = await progressRecorder.stageIDs()
+        let userPrompts = await llm.userPrompts()
+        let repairPrompts = Array(userPrompts.dropFirst())
+
+        #expect(result.report.summary == "组合风险保持可观察")
+        #expect(result.artifacts.repairedReportJSON?.contains("组合风险保持可观察") == true)
+        #expect(await llm.requestCount() == 3)
+        #expect(stageIDs.filter { $0 == "validating_model_output" }.count == 3)
+        #expect(stageIDs.filter { $0 == "repairing_report" }.count == 2)
+        #expect(repairPrompts.first?.contains("输出语言") == true)
+        #expect(repairPrompts.dropFirst().first?.contains("缺少字段") == true)
     }
 
     @MainActor
@@ -1948,14 +2066,14 @@ struct PositionRepositoryTests {
         #expect(AIAnalysisPromptText.reportSystem.contains("单项资产关注内容写入 asset_alerts"))
         #expect(AIAnalysisPromptText.toolPlanningSystem.contains("web_search"))
         #expect(!AIAnalysisPromptText.reportSystem.contains("risk_note 必须包含"))
-        #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("不超过 180 个 Unicode 字符"))
+        #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("不超过 220 个 Unicode 字符"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("只有没有任何单项关注点时才返回空数组"))
-        #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("240 个 Unicode 字符"))
+        #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("320 个 Unicode 字符"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("output_language = en"))
         #expect(AIAnalysisPromptText.followUpSystem.contains("response_language"))
         #expect(LLMRequestTimeoutPolicy.reportGeneration == 300)
         #expect(LLMOutputTokenPolicy.followUp == 6_400)
-        #expect(LLMOutputTokenPolicy.reportGeneration == 6_000)
+        #expect(LLMOutputTokenPolicy.reportGeneration == 10_000)
         #expect(AIAnalysisPromptText.repairUser(rawReport: "{}", inputJSON: "{}").contains("target_report_shape"))
     }
 

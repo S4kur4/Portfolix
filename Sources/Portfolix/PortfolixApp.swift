@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct RootView: View {
     @EnvironmentObject private var store: PortfolioStore
-    @State private var sidebarWidth: CGFloat = 198
+    @State private var sidebarWidth: CGFloat = 218
     private let relativeTimeTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -132,7 +132,7 @@ struct RootView: View {
 
         private let hitWidth: CGFloat = 12
         private let minimumSidebarWidth: CGFloat = 178
-        private let maximumSidebarWidth: CGFloat = 280
+        private let maximumSidebarWidth: CGFloat = 308
 
         var body: some View {
             Rectangle()

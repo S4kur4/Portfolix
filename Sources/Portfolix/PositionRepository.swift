@@ -812,6 +812,17 @@ final class PositionRepository {
         }
     }
 
+    func deleteAllAIAnalysisContent() throws {
+        try transaction {
+            try execute("DELETE FROM ai_analysis_chat_messages")
+            try execute("DELETE FROM ai_analysis_sources")
+            try execute("DELETE FROM ai_analysis_reports")
+            try execute("DELETE FROM ai_guardrail_results")
+            try execute("DELETE FROM ai_analysis_artifacts")
+            try execute("DELETE FROM ai_analysis_runs")
+        }
+    }
+
     func replaceDailySnapshots(positions: [Position], snapshotDate: Date = .now) throws {
         let day = Self.dayString(from: snapshotDate)
         let cutoff = Self.dayString(

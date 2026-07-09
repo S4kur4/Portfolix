@@ -399,6 +399,8 @@ struct PositionsView: View {
 struct AIReportView: View {
     @EnvironmentObject private var store: PortfolioStore
     @State private var draftMessage = ""
+    @State private var isClearHistoryConfirmationPresented = false
+    @State private var clearHistoryErrorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
@@ -419,11 +421,34 @@ struct AIReportView: View {
                 selectedAnalysisMode: aiAnalysisModeBinding,
                 draftMessage: $draftMessage,
                 language: store.appLanguage,
+                canClearHistory: hasAIAnalysisHistory,
+                clearHistory: { isClearHistoryConfirmationPresented = true },
                 generate: requestAnalysis,
                 sendFollowUp: sendFollowUp
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .alert(localizedText("清空智能分析历史？", "Clear analysis history?", language: store.appLanguage), isPresented: $isClearHistoryConfirmationPresented) {
+            Button(localizedText("取消", "Cancel", language: store.appLanguage), role: .cancel) {}
+            Button(localizedText("清空", "Clear", language: store.appLanguage), role: .destructive) {
+                clearAIAnalysisHistory()
+            }
+        } message: {
+            Text(
+                localizedText(
+                    "将删除智能分析报告、追问、回答和诊断记录。",
+                    "This will delete analysis reports, follow-up questions, answers, and diagnostics.",
+                    language: store.appLanguage
+                )
+            )
+        }
+        .alert(localizedText("无法清空历史", "Unable to clear history", language: store.appLanguage), isPresented: clearHistoryErrorPresented) {
+            Button(localizedText("好", "OK", language: store.appLanguage), role: .cancel) {
+                clearHistoryErrorMessage = nil
+            }
+        } message: {
+            Text(clearHistoryErrorMessage ?? localizedText("请稍后重试", "Please try again later", language: store.appLanguage))
+        }
         .onAppear {
             store.refreshProviderCredentialState()
             store.refreshAIAnalysisChatRetention()
@@ -437,6 +462,10 @@ struct AIReportView: View {
         return false
     }
 
+    private var hasAIAnalysisHistory: Bool {
+        store.aiAnalysisReport != nil || !store.aiAnalysisChatItems.isEmpty
+    }
+
     private func requestAnalysis() {
         store.generateAIAnalysis()
     }
@@ -446,6 +475,26 @@ struct AIReportView: View {
         guard !question.isEmpty, !store.isAnsweringAIAnalysisFollowUp else { return }
         draftMessage = ""
         store.submitAIAnalysisFollowUp(question)
+    }
+
+    private func clearAIAnalysisHistory() {
+        do {
+            try store.clearAIAnalysisHistory()
+            draftMessage = ""
+        } catch {
+            clearHistoryErrorMessage = error.localizedDescription
+        }
+    }
+
+    private var clearHistoryErrorPresented: Binding<Bool> {
+        Binding(
+            get: { clearHistoryErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    clearHistoryErrorMessage = nil
+                }
+            }
+        )
     }
 
     private var aiModelBinding: Binding<String> {
@@ -489,6 +538,33 @@ struct AIReportView: View {
     }
 }
 
+private enum AIReportChatRenderPolicy {
+    static let initialItemLimit = 32
+    static let loadBatchSize = 32
+    static let scrollThreshold: CGFloat = 280
+    static let scrollDeltaThreshold: CGFloat = 1.5
+    static let timestampWidth: CGFloat = 40
+}
+
+private struct AIReportChatScrollMetrics: Equatable {
+    let offsetY: CGFloat
+    let contentHeight: CGFloat
+    let visibleHeight: CGFloat
+
+    var isScrollable: Bool {
+        contentHeight > visibleHeight + AIReportChatRenderPolicy.scrollThreshold
+    }
+
+    var isNearTop: Bool {
+        offsetY <= AIReportChatRenderPolicy.scrollThreshold
+    }
+
+    var isNearBottom: Bool {
+        let bottomOffset = max(0, contentHeight - visibleHeight)
+        return bottomOffset - offsetY <= AIReportChatRenderPolicy.scrollThreshold
+    }
+}
+
 private struct AIReportChatSurface: View {
     let report: AIAnalysisReport?
     let items: [AIReportChatItem]
@@ -504,8 +580,12 @@ private struct AIReportChatSurface: View {
     @Binding var selectedAnalysisMode: SmartAnalysisMode
     @Binding var draftMessage: String
     let language: AppLanguage
+    let canClearHistory: Bool
+    let clearHistory: () -> Void
     let generate: () -> Void
     let sendFollowUp: () -> Void
+    @State private var renderedItemLimit = AIReportChatRenderPolicy.initialItemLimit
+    @State private var isExpandingHistory = false
 
     var body: some View {
         Panel(padding: 0) {
@@ -517,7 +597,9 @@ private struct AIReportChatSurface: View {
                     availableModels: availableModels,
                     selectedAnalysisMode: $selectedAnalysisMode,
                     isInteractionEnabled: !isRunning && !isSendingFollowUp,
-                    language: language
+                    language: language,
+                    canClearHistory: canClearHistory,
+                    clearHistory: clearHistory
                 )
 
                 Divider()
@@ -525,71 +607,103 @@ private struct AIReportChatSurface: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
+                            Color.clear
+                                .frame(height: 1)
+                                .id("chat-window-top")
+
                             if items.isEmpty && !isRunning {
                                 AIReportAgentBubble {
-                                    AIReportWelcomeMessage(
-                                        hasPositions: hasPositions,
-                                        hasLLMKey: hasLLMKey,
-                                        hasSearchKey: hasSearchKey,
-                                        usesConnectedMode: usesConnectedMode,
-                                        language: language
-                                    )
+                                    AIReportUntimestampedAgentRow {
+                                        AIReportWelcomeMessage(
+                                            hasPositions: hasPositions,
+                                            hasLLMKey: hasLLMKey,
+                                            hasSearchKey: hasSearchKey,
+                                            usesConnectedMode: usesConnectedMode,
+                                            language: language
+                                        )
+                                    }
                                 }
                                 .id("welcome")
                             }
 
-                            ForEach(items) { item in
-                                switch item.content {
-                                case let .user(text):
-                                    AIReportUserBubble(text: text)
-                                        .id(item.id)
-                                case let .report(report, reportRun):
-                                    AIReportAgentBubble {
-                                        AIReportChatReport(
-                                            report: report,
-                                            run: reportRun,
-                                            language: language
-                                        )
-                                    }
-                                    .id(item.id)
-                                case let .assistant(text):
-                                    AIReportAgentBubble {
-                                        AIReportFollowUpMessage(
-                                            text: text,
-                                            language: language,
-                                            showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text)
-                                        )
-                                    }
-                                    .id(item.id)
+                            if hiddenOlderItemCount > 0 {
+                                AIReportChatWindowBoundary(
+                                    count: hiddenOlderItemCount,
+                                    direction: .older,
+                                    language: language
+                                ) {
+                                    expandHistory(proxy: proxy)
                                 }
+                                .id("chat-window-top-boundary")
+                            }
+
+                            ForEach(Array(renderedItems.enumerated()), id: \.element.id) { index, item in
+                                VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
+                                    if shouldShowDateSeparator(for: item, at: index, items: renderedItems) {
+                                        AIReportChatDateSeparator(date: item.createdAt, language: language)
+                                            .id("\(item.id.uuidString)-date")
+                                    }
+
+                                    switch item.content {
+                                    case let .user(text):
+                                        AIReportUserBubble(text: text, createdAt: item.createdAt, language: language)
+                                            .id(item.id)
+                                    case let .report(report, reportRun):
+                                        AIReportAgentBubble {
+                                            AIReportChatReport(
+                                                report: report,
+                                                run: reportRun,
+                                                language: language
+                                            )
+                                        }
+                                        .id(item.id)
+                                    case let .assistant(text):
+                                        AIReportAgentBubble {
+                                            AIReportFollowUpMessage(
+                                                text: text,
+                                                createdAt: item.createdAt,
+                                                language: language,
+                                                showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text)
+                                            )
+                                        }
+                                        .id(item.id)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
 
                             if isRunning {
                                 AIReportAgentBubble {
-                                    AIReportAgentProgressMessage(
-                                        status: run.status,
-                                        language: language
-                                    )
+                                    AIReportUntimestampedAgentRow {
+                                        AIReportAgentProgressMessage(
+                                            status: run.status,
+                                            language: language
+                                        )
+                                    }
                                 }
                                 .id("analysis-progress")
                             } else if isSendingFollowUp {
                                 AIReportAgentBubble {
-                                    AIReportFollowUpProgressMessage(
-                                        progress: followUpProgress ?? .analyzing,
-                                        language: language
-                                    )
+                                    AIReportUntimestampedAgentRow {
+                                        AIReportFollowUpProgressMessage(
+                                            progress: followUpProgress ?? .analyzing,
+                                            language: language
+                                        )
+                                    }
                                 }
                                 .id("follow-up-progress")
                             } else if shouldShowStatusMessage {
                                 AIReportAgentBubble {
-                                    AIReportStaticStatusMessage(
-                                        status: run.status,
-                                        hasPositions: hasPositions,
-                                        hasLLMKey: hasLLMKey,
-                                        hasSearchKey: hasSearchKey,
-                                        usesConnectedMode: usesConnectedMode,
-                                        language: language
-                                    )
+                                    AIReportUntimestampedAgentRow {
+                                        AIReportStaticStatusMessage(
+                                            status: run.status,
+                                            hasPositions: hasPositions,
+                                            hasLLMKey: hasLLMKey,
+                                            hasSearchKey: hasSearchKey,
+                                            usesConnectedMode: usesConnectedMode,
+                                            language: language
+                                        )
+                                    }
                                 }
                                 .id("analysis-status")
                             }
@@ -601,14 +715,28 @@ private struct AIReportChatSurface: View {
                         .padding(.horizontal, PortfolixSpacing.lg)
                         .padding(.top, PortfolixSpacing.lg)
                         .padding(.bottom, PortfolixSpacing.md)
-                        .textSelection(.enabled)
+                    }
+                    .onScrollGeometryChange(for: AIReportChatScrollMetrics.self) { geometry in
+                        AIReportChatScrollMetrics(
+                            offsetY: geometry.visibleRect.minY,
+                            contentHeight: geometry.contentSize.height,
+                            visibleHeight: geometry.visibleRect.height
+                        )
+                    } action: { oldValue, newValue in
+                        handleScrollMetricsChange(oldValue, newValue, proxy: proxy)
                     }
                     .scrollIndicators(.hidden)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .onAppear {
+                        resetRenderedItemLimit()
                         scrollToBottom(proxy, animated: false, delay: 0.08)
                     }
                     .onChange(of: items.count) { _, _ in
+                        resetRenderedItemLimit()
+                        scrollToBottom(proxy)
+                    }
+                    .onChange(of: items.last?.id) { _, _ in
+                        resetRenderedItemLimit()
                         scrollToBottom(proxy)
                     }
                     .onChange(of: run.status) { _, _ in
@@ -640,6 +768,55 @@ private struct AIReportChatSurface: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func handleScrollMetricsChange(
+        _ oldValue: AIReportChatScrollMetrics,
+        _ newValue: AIReportChatScrollMetrics,
+        proxy: ScrollViewProxy
+    ) {
+        guard newValue.isScrollable, !isExpandingHistory else { return }
+        let delta = newValue.offsetY - oldValue.offsetY
+        if delta < -AIReportChatRenderPolicy.scrollDeltaThreshold,
+           newValue.isNearTop,
+           canLoadOlderItems {
+            expandHistory(proxy: proxy)
+        }
+    }
+
+    private func expandHistory(proxy: ScrollViewProxy) {
+        guard canLoadOlderItems, !isExpandingHistory else { return }
+        let anchorID = renderedItems.first?.id
+
+        withTransaction(Transaction(animation: nil)) {
+            isExpandingHistory = true
+            renderedItemLimit = min(
+                orderedItems.count,
+                renderedItemLimit + AIReportChatRenderPolicy.loadBatchSize
+            )
+        }
+
+        Task { @MainActor in
+            await Task.yield()
+            if let anchorID {
+                withTransaction(Transaction(animation: nil)) {
+                    proxy.scrollTo(anchorID, anchor: .top)
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            isExpandingHistory = false
+        }
+    }
+
+    private func resetRenderedItemLimit() {
+        renderedItemLimit = min(orderedItems.count, AIReportChatRenderPolicy.initialItemLimit)
+    }
+
+    private func shouldShowDateSeparator(for item: AIReportChatItem, at index: Int, items: [AIReportChatItem]) -> Bool {
+        guard index > 0 else { return true }
+        let previous = items[index - 1]
+        return !Calendar.current.isDate(previous.createdAt, inSameDayAs: item.createdAt)
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true, delay: TimeInterval = 0.02) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if animated {
@@ -647,7 +824,9 @@ private struct AIReportChatSurface: View {
                     proxy.scrollTo("chat-bottom", anchor: .bottom)
                 }
             } else {
-                proxy.scrollTo("chat-bottom", anchor: .bottom)
+                withTransaction(Transaction(animation: nil)) {
+                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                }
             }
         }
     }
@@ -659,6 +838,24 @@ private struct AIReportChatSurface: View {
             }
             return false
         }
+    }
+
+    private var renderedItems: [AIReportChatItem] {
+        let items = orderedItems
+        guard !items.isEmpty else { return [] }
+        return Array(items.suffix(renderedItemLimit))
+    }
+
+    private var orderedItems: [AIReportChatItem] {
+        items.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private var canLoadOlderItems: Bool {
+        renderedItemLimit < orderedItems.count
+    }
+
+    private var hiddenOlderItemCount: Int {
+        max(0, orderedItems.count - renderedItems.count)
     }
 
     private var shouldShowStatusMessage: Bool {
@@ -677,6 +874,45 @@ private struct AIReportChatSurface: View {
     }
 }
 
+private enum AIReportChatWindowDirection {
+    case older
+    case newer
+}
+
+private struct AIReportChatWindowBoundary: View {
+    let count: Int
+    let direction: AIReportChatWindowDirection
+    let language: AppLanguage
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.sm) {
+            Image(systemName: direction == .older ? "chevron.up.circle" : "chevron.down.circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(PortfolixTheme.tertiaryText)
+            Text(title)
+            .font(PortfolixTypography.caption)
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, PortfolixSpacing.md)
+        .padding(.vertical, PortfolixSpacing.sm)
+        .background(PortfolixTheme.panelSoft.opacity(0.64), in: Capsule())
+        .contentShape(Capsule())
+        .onTapGesture(perform: action)
+    }
+
+    private var title: String {
+        switch direction {
+        case .older:
+            localizedText("较早 \(count) 条", "\(count) older", language: language)
+        case .newer:
+            localizedText("较新 \(count) 条", "\(count) newer", language: language)
+        }
+    }
+}
+
 private struct AIReportChatHeader: View {
     let report: AIAnalysisReport?
     let run: AIAnalysisRun
@@ -685,6 +921,8 @@ private struct AIReportChatHeader: View {
     @Binding var selectedAnalysisMode: SmartAnalysisMode
     let isInteractionEnabled: Bool
     let language: AppLanguage
+    let canClearHistory: Bool
+    let clearHistory: () -> Void
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.md) {
@@ -698,6 +936,12 @@ private struct AIReportChatHeader: View {
             Text(localizedText("Portfolix Agent", "Portfolix Agent", language: language))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(PortfolixTheme.primaryText)
+
+            AIReportChatActionsMenu(
+                canClearHistory: isInteractionEnabled && canClearHistory,
+                language: language,
+                clearHistory: clearHistory
+            )
 
             Spacer()
 
@@ -786,19 +1030,66 @@ private struct AIReportHeaderMenuTag<Option: Hashable>: View {
     }
 }
 
-private struct AIReportUserBubble: View {
-    let text: String
+private struct AIReportChatActionsMenu: View {
+    let canClearHistory: Bool
+    let language: AppLanguage
+    let clearHistory: () -> Void
 
     var body: some View {
-        HStack {
-            Spacer(minLength: PortfolixSpacing.xxxl)
+        Menu {
+            Button(role: .destructive) {
+                clearHistory()
+            } label: {
+                Label(
+                    localizedText("清空智能分析历史", "Clear Analysis History", language: language),
+                    systemImage: "trash"
+                )
+            }
+            .disabled(!canClearHistory)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PortfolixTheme.secondaryText)
+                .frame(width: 36, height: 26)
+                .portfolixGlass(
+                    in: Capsule(),
+                    tint: PortfolixTheme.lilac.opacity(0.12),
+                    fallbackTint: PortfolixTheme.panelSoft,
+                    fallbackOpacity: 0.42
+                )
+                .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .disabled(!canClearHistory)
+        .opacity(canClearHistory ? 1 : 0.56)
+        .help(localizedText("管理智能分析历史", "Manage analysis history", language: language))
+    }
+}
+
+private struct AIReportUserBubble: View {
+    let text: String
+    let createdAt: Date
+    let language: AppLanguage
+
+    var body: some View {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
+            Spacer(minLength: PortfolixSpacing.sm)
+
+            AIReportMessageTimestamp(date: createdAt, language: language)
+                .frame(width: AIReportChatRenderPolicy.timestampWidth, alignment: .trailing)
+
             Text(text)
                 .font(PortfolixTypography.body)
                 .foregroundStyle(Color(hex: 0x120F20))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
                 .padding(.horizontal, PortfolixSpacing.lg)
                 .padding(.vertical, PortfolixSpacing.md)
                 .background(PortfolixTheme.purpleGradient, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+                .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
@@ -822,37 +1113,114 @@ private struct AIReportAgentBubble<Content: View>: View {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: PortfolixSpacing.xxxl)
+            Spacer(minLength: PortfolixSpacing.sm)
         }
     }
 }
 
 private struct AIReportFollowUpMessage: View {
     let text: String
+    let createdAt: Date
     let language: AppLanguage
     let showsDisclaimer: Bool
 
-    init(text: String, language: AppLanguage, showsDisclaimer: Bool = true) {
+    init(text: String, createdAt: Date, language: AppLanguage, showsDisclaimer: Bool = true) {
         self.text = text
+        self.createdAt = createdAt
         self.language = language
         self.showsDisclaimer = showsDisclaimer
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-            Text(AIUserFacingTextSanitizer.sanitize(text))
-                .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.primaryText)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, PortfolixSpacing.lg)
-                .padding(.vertical, PortfolixSpacing.md)
-                .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+            AIReportTimestampedAgentRow(date: createdAt, language: language) {
+                Text(AIUserFacingTextSanitizer.sanitize(text))
+                    .font(PortfolixTypography.body)
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, PortfolixSpacing.lg)
+                    .padding(.vertical, PortfolixSpacing.md)
+                    .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+            }
 
             if showsDisclaimer {
                 AIReportDisclaimer(language: language)
             }
         }
+    }
+}
+
+private struct AIReportTimestampedAgentRow<Content: View>: View {
+    let date: Date
+    let language: AppLanguage
+    let content: Content
+
+    init(date: Date, language: AppLanguage, @ViewBuilder content: () -> Content) {
+        self.date = date
+        self.language = language
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+            AIReportMessageTimestamp(date: date, language: language)
+                .frame(width: AIReportChatRenderPolicy.timestampWidth, alignment: .leading)
+        }
+    }
+}
+
+private struct AIReportUntimestampedAgentRow<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+            Color.clear
+                .frame(width: AIReportChatRenderPolicy.timestampWidth)
+        }
+    }
+}
+
+private struct AIReportChatDateSeparator: View {
+    let date: Date
+    let language: AppLanguage
+
+    var body: some View {
+        Text(chatDateText(date, language: language))
+            .font(PortfolixTypography.caption)
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .lineLimit(1)
+            .monospacedDigit()
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private struct AIReportMessageTimestamp: View {
+    let date: Date
+    let language: AppLanguage
+
+    var body: some View {
+        Text(chatTimestampText(date, language: language))
+            .font(PortfolixTypography.caption)
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .lineLimit(1)
+            .monospacedDigit()
+            .textSelection(.enabled)
     }
 }
 
@@ -878,6 +1246,7 @@ private struct AIReportWelcomeMessage: View {
             }
         }
         .padding(PortfolixSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
@@ -934,24 +1303,23 @@ private struct AIReportProgressCard: View {
     let detail: String
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-                AIReportAgentThinkingIcon(date: timeline.date)
+        HStack(alignment: .center, spacing: PortfolixSpacing.md) {
+            AIReportAgentThinkingIcon()
 
-                VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.primaryText)
-                    Text(detail)
-                        .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiaryText)
-                        .lineLimit(2)
-                }
-                Spacer()
+            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                Text(detail)
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .lineLimit(2)
             }
-            .padding(PortfolixSpacing.lg)
-            .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+            Spacer()
         }
+        .padding(PortfolixSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
 
@@ -976,6 +1344,7 @@ private struct AIReportStaticStatusMessage: View {
             }
         }
         .padding(PortfolixSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 
@@ -1034,96 +1403,114 @@ private struct AIReportChatReport: View {
                     CapsuleLabel(title: localizedText("安全回退", "Fallback", language: language), color: PortfolixTheme.amber, symbol: "exclamationmark.triangle.fill")
                 }
                 Spacer()
-                Text(relativeText(report.generatedAt, language: language))
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
             }
 
             if run.usedFallback {
-                HStack(alignment: .top, spacing: PortfolixSpacing.sm) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.amber)
-                        .padding(.top, 2)
-                    Text(
-                        run.fallbackReason
-                            ?? localizedText(
-                                "在线分析未完成，本报告由本地规则生成。",
-                                "Online analysis did not complete; this report was generated from local rules.",
-                                language: language
-                            )
+                AIReportUntimestampedAgentRow {
+                    HStack(alignment: .top, spacing: PortfolixSpacing.sm) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(PortfolixTheme.amber)
+                            .padding(.top, 2)
+                        Text(
+                            run.fallbackReason
+                                ?? localizedText(
+                                    "在线分析未完成，本报告由本地规则生成。",
+                                    "Online analysis did not complete; this report was generated from local rules.",
+                                    language: language
+                                )
+                        )
+                        .font(PortfolixTypography.caption)
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, PortfolixSpacing.md)
+                    .padding(.vertical, PortfolixSpacing.sm)
+                    .background(
+                        PortfolixTheme.amber.opacity(0.10),
+                        in: RoundedRectangle(
+                            cornerRadius: PortfolixRadius.compact,
+                            style: .continuous
+                        )
                     )
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, PortfolixSpacing.md)
-                .padding(.vertical, PortfolixSpacing.sm)
-                .background(PortfolixTheme.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
 
                 if let diagnostic = run.diagnostic {
-                    AIAnalysisDiagnosticCard(diagnostic: diagnostic, language: language)
-                }
-            }
-
-            AIReportChatSection(title: localizedText("核心结论", "Core Takeaway", language: language), symbol: "target") {
-                Text(AIUserFacingTextSanitizer.sanitize(report.summary))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
-                    .font(PortfolixTypography.body)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let actions = report.rebalanceActions, !actions.isEmpty {
-                AIReportChatSection(title: localizedText("投资组合建议", "Portfolio Recommendations", language: language), symbol: "arrow.triangle.2.circlepath") {
-                    ForEach(actions) { action in
-                        AIReportRebalanceMessageRow(action: action)
+                    AIReportUntimestampedAgentRow {
+                        AIAnalysisDiagnosticCard(diagnostic: diagnostic, language: language)
                     }
                 }
             }
 
-            AIReportChatSection(title: localizedText("重点关注", "Watchlist", language: language), symbol: "scope") {
-                if report.assetAlerts.isEmpty {
-                    AIReportBullet(
-                        title: localizedText("暂无需要单独关注的资产", "No individual holdings require special attention", language: language),
-                        body: localizedText(
-                            "当前报告未发现需要从组合中单独拎出的持仓，后续可继续观察集中度、币种敞口和区间表现变化。",
-                            "This report did not identify a holding that needs to be singled out; keep watching concentration, currency exposure, and recent performance.",
-                            language: language
-                        ),
-                        color: PortfolixTheme.secondaryText,
-                        symbol: "checkmark.circle.fill"
-                    )
-                } else {
-                    ForEach(report.assetAlerts) { alert in
-                        AIReportAssetAlertMessageRow(alert: alert, language: language)
+            AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
+                AIReportChatSection(title: localizedText("核心结论", "Core Takeaway", language: language), symbol: "target") {
+                    Text(AIUserFacingTextSanitizer.sanitize(report.summary))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
+                        .font(PortfolixTypography.body)
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if let actions = report.rebalanceActions, !actions.isEmpty {
+                AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
+                    AIReportChatSection(title: localizedText("投资组合建议", "Portfolio Recommendations", language: language), symbol: "arrow.triangle.2.circlepath") {
+                        ForEach(actions) { action in
+                            AIReportRebalanceMessageRow(action: action)
+                        }
+                    }
+                }
+            }
+
+            AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
+                AIReportChatSection(title: localizedText("重点关注", "Watchlist", language: language), symbol: "scope") {
+                    if report.assetAlerts.isEmpty {
+                        AIReportBullet(
+                            title: localizedText("暂无需要单独关注的资产", "No individual holdings require special attention", language: language),
+                            body: localizedText(
+                                "当前报告未发现需要从组合中单独拎出的持仓，后续可继续观察集中度、币种敞口和区间表现变化。",
+                                "This report did not identify a holding that needs to be singled out; keep watching concentration, currency exposure, and recent performance.",
+                                language: language
+                            ),
+                            color: PortfolixTheme.secondaryText,
+                            symbol: "checkmark.circle.fill"
+                        )
+                    } else {
+                        ForEach(report.assetAlerts) { alert in
+                            AIReportAssetAlertMessageRow(alert: alert, language: language)
+                        }
                     }
                 }
             }
 
             if !report.riskItems.isEmpty {
-                AIReportChatSection(title: localizedText("风险因素", "Risk Factors", language: language), symbol: "exclamationmark.triangle") {
-                    ForEach(report.riskItems) { item in
-                        AIReportBullet(
-                            title: AIUserFacingTextSanitizer.sanitize(item.title),
-                            body: AIUserFacingTextSanitizer.sanitize(item.impact),
-                            color: color(for: item.severity),
-                            symbol: item.severity == "high" ? "exclamationmark.octagon.fill" : "exclamationmark.circle.fill"
-                        )
+                AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
+                    AIReportChatSection(title: localizedText("风险因素", "Risk Factors", language: language), symbol: "exclamationmark.triangle") {
+                        ForEach(report.riskItems) { item in
+                            AIReportBullet(
+                                title: AIUserFacingTextSanitizer.sanitize(item.title),
+                                body: AIUserFacingTextSanitizer.sanitize(item.impact),
+                                color: color(for: item.severity),
+                                symbol: item.severity == "high" ? "exclamationmark.octagon.fill" : "exclamationmark.circle.fill"
+                            )
+                        }
                     }
                 }
             }
 
             if !report.questionsToConsider.isEmpty || !report.limitations.isEmpty {
-                AIReportChatSection(title: localizedText("后续复核", "Follow-up Review", language: language), symbol: "questionmark.circle") {
-                    ForEach(Array(report.questionsToConsider.enumerated()), id: \.offset) { _, question in
-                        AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(question), body: nil, color: PortfolixTheme.lilac, symbol: "checkmark.circle.fill")
-                    }
-                    ForEach(Array(report.limitations.enumerated()), id: \.offset) { _, limitation in
-                        AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(limitation), body: nil, color: PortfolixTheme.secondaryText, symbol: "info.circle.fill")
+                AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
+                    AIReportChatSection(title: localizedText("后续复核", "Follow-up Review", language: language), symbol: "questionmark.circle") {
+                        ForEach(Array(report.questionsToConsider.enumerated()), id: \.offset) { _, question in
+                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(question), body: nil, color: PortfolixTheme.lilac, symbol: "checkmark.circle.fill")
+                        }
+                        ForEach(Array(report.limitations.enumerated()), id: \.offset) { _, limitation in
+                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(limitation), body: nil, color: PortfolixTheme.secondaryText, symbol: "info.circle.fill")
+                        }
                     }
                 }
             }
@@ -1131,6 +1518,7 @@ private struct AIReportChatReport: View {
             AIReportDisclaimer(language: language)
                 .padding(.horizontal, 0)
         }
+        .textSelection(.enabled)
     }
 
     private func color(for severity: String) -> Color {
@@ -1185,11 +1573,16 @@ private struct AIAnalysisDiagnosticCard: View {
                     localizedText("ID", "ID", language: language),
                     diagnostic.displayID
                 )
+                diagnosticRow(
+                    localizedText("时间", "Time", language: language),
+                    diagnosticTimestampText(diagnostic.finishedAt)
+                )
                 diagnosticRow(localizedText("错误摘要", "Error", language: language), diagnostic.errorSummary)
                 diagnosticRow(localizedText("建议", "Suggestion", language: language), diagnostic.recoveryHint)
             }
         }
         .padding(PortfolixSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.amber.opacity(0.09), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
     }
 
@@ -1233,6 +1626,7 @@ private struct AIReportChatSection<Content: View>: View {
             }
         }
         .padding(PortfolixSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
@@ -1403,9 +1797,7 @@ private struct AIReportChatComposer: View {
     }
 
     private var placeholder: String {
-        hasReport
-            ? localizedText("继续追问这份报告", "Ask a follow-up about this report", language: language)
-            : localizedText("生成报告后可以继续追问", "Generate a report to continue the conversation", language: language)
+        localizedText("向 Portfolix Agent 提问", "Ask Portfolix Agent", language: language)
     }
 
     private var canSubmitFollowUp: Bool {
@@ -1491,15 +1883,13 @@ private struct AIReportStatusCard: View {
     var body: some View {
         Panel(padding: PortfolixSpacing.md) {
             if isRunningStatus {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-                    statusContent(
-                        title: title,
-                        detail: runningDetail,
-                        icon: {
-                            AIReportAgentThinkingIcon(date: timeline.date)
-                        }
-                    )
-                }
+                statusContent(
+                    title: title,
+                    detail: runningDetail,
+                    icon: {
+                        AIReportAgentThinkingIcon()
+                    }
+                )
             } else {
                 statusContent(
                     title: title,
@@ -1625,11 +2015,23 @@ private struct AIReportStatusCard: View {
 }
 
 private struct AIReportAgentThinkingIcon: View {
-    let date: Date
+    let size: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(size: CGFloat = 40) {
+        self.size = size
+    }
 
     var body: some View {
-        AIReportRoseOrbit(date: date, size: 40)
-            .frame(width: 40, height: 40, alignment: .center)
+        if reduceMotion {
+            AIReportRoseOrbit(date: Date(timeIntervalSinceReferenceDate: 0), size: size)
+                .frame(width: size, height: size, alignment: .center)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                AIReportRoseOrbit(date: timeline.date, size: size)
+            }
+            .frame(width: size, height: size, alignment: .center)
+        }
     }
 }
 
@@ -2173,13 +2575,11 @@ private struct AIReportLoadingBlock: View {
     let lineCount: Int
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            VStack(spacing: PortfolixSpacing.sm) {
-                AIReportRoseOrbit(date: timeline.date, size: 78)
-            }
-            .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
-            .accessibilityLabel("Generating analysis")
+        VStack(spacing: PortfolixSpacing.sm) {
+            AIReportAgentThinkingIcon(size: 78)
         }
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+        .accessibilityLabel("Generating analysis")
     }
 }
 
@@ -2198,6 +2598,30 @@ private func relativeText(_ date: Date, language: AppLanguage) -> String {
     }
     let days = hours / 24
     return language == .english ? "\(days)d ago" : "\(days) 天前"
+}
+
+private func chatTimestampText(_ date: Date, language _: AppLanguage) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "HH:mm"
+    return formatter.string(from: date)
+}
+
+private func chatDateText(_ date: Date, language: AppLanguage) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = language == .english ? Locale(identifier: "en_US_POSIX") : Locale(identifier: "zh_CN")
+    formatter.dateFormat = language == .english ? "MMM d" : "M月d日"
+    return formatter.string(from: date)
+}
+
+private func diagnosticTimestampText(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    return formatter.string(from: date)
 }
 
 struct RiskProfileView: View {

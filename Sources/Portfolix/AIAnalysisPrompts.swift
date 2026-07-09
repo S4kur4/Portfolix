@@ -425,8 +425,8 @@ enum AIAnalysisPromptText {
         - 操作性建议的 risk_note 不得为 null，只写该建议特有的风险与失效条件；非操作性建议可使用 JSON null。
 
         【内容密度】
-        - summary：1 至 2 句，不超过 180 个 Unicode 字符，完整说明最重要的组合级结论与主要依据。
-        - health_score_explanation：最多 4 句、240 个 Unicode 字符；只能解释约束匹配结果，不做安全性评价。
+        - summary：1 至 2 句，不超过 220 个 Unicode 字符，完整说明最重要的组合级结论与主要依据。
+        - health_score_explanation：最多 4 句、320 个 Unicode 字符；只能解释约束匹配结果，不做安全性评价。
         - risk_items：0 至 4 条，只保留重要且有证据的风险。
         - asset_alerts：0 至 3 条；当存在单只持仓、基金、股票、数字货币或资产主题需要用户单独观察时必须填写，只有没有任何单项关注点时才返回空数组。
         - rebalance_actions、questions_to_consider：各不超过 3 条。
@@ -467,9 +467,22 @@ enum AIAnalysisPromptText {
     只返回一个合法 JSON 对象，不得输出 Markdown、解释或 JSON 之外的文字。
     """
 
-    static func repairUser(rawReport: String, inputJSON: String, toolResultsJSON: String = "[]") -> String {
+    static func repairUser(
+        rawReport: String,
+        inputJSON: String,
+        toolResultsJSON: String = "[]",
+        validationIssue: String = "模型返回未通过结构校验，请按目标结构修复。",
+        repairAttempt: Int = 1,
+        maxAttempts: Int = 1
+    ) -> String {
         """
         请按目标结构修复候选报告。修复完成后检查字段完整性、枚举值、数组上限、引用来源与数字可追溯性。
+
+        <repair_context>
+        当前修复轮次：\(repairAttempt)/\(maxAttempts)
+        上一轮校验失败原因：\(validationIssue)
+        请优先修复上述问题；如果还有其他结构或安全问题，也一并修复。
+        </repair_context>
 
         <target_report_shape>
         \(reportOutputContract)
