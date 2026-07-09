@@ -250,7 +250,6 @@ private struct PriceRefreshButton: View {
         )
         .opacity(store.isRefreshing ? 0.58 : 1)
         .onHover { isHovering = $0 }
-        .help(localizedText("刷新最新行情", "Refresh latest prices", language: store.appLanguage))
         .accessibilityLabel(localizedText("刷新最新行情", "Refresh latest prices", language: store.appLanguage))
         .disabled(store.isRefreshing)
     }
@@ -934,18 +933,22 @@ private struct DistributionLegendRow: View {
 
 private struct RecentPositionsCard: View {
     @EnvironmentObject private var store: PortfolioStore
-    private let maximumPrimaryPositionCount = 10
+    @AppStorage("dashboard_primary_positions_limit")
+    private var displayLimitRawValue = PrimaryPositionDisplayLimit.top10Percent.rawValue
+    @State private var sortField: PrimaryPositionSortField = .marketValue
+    @State private var sortDirection: PrimaryPositionSortDirection = .descending
+
+    private var displayLimit: PrimaryPositionDisplayLimit {
+        PrimaryPositionDisplayLimit(rawValue: displayLimitRawValue) ?? .top10Percent
+    }
 
     private var primaryPositions: [Position] {
-        Array(
-            store.positions
-                .sorted {
-                    if $0.marketValueCNY == $1.marketValueCNY {
-                        return $0.name.localizedCompare($1.name) == .orderedAscending
-                    }
-                    return $0.marketValueCNY > $1.marketValueCNY
-                }
-                .prefix(maximumPrimaryPositionCount)
+        PrimaryPositionOrdering.visiblePositions(
+            from: store.positions,
+            limit: displayLimit,
+            sortField: sortField,
+            direction: sortDirection,
+            todayProfit: { store.todayProfitCNY(for: $0) }
         )
     }
 
@@ -953,19 +956,34 @@ private struct RecentPositionsCard: View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 SectionHeader(title: localizedText("主要持仓", "Top Holdings", language: store.appLanguage), symbol: "list.bullet.rectangle") {
-                    Button(localizedText("查看明细", "View Details", language: store.appLanguage)) {
-                        store.selection = .positions
+                    PortfolixGlassGroup(spacing: PortfolixSpacing.md) {
+                        HStack(spacing: PortfolixSpacing.md) {
+                            PrimaryPositionLimitMenu(
+                                selection: Binding(
+                                    get: { displayLimit },
+                                    set: { displayLimitRawValue = $0.rawValue }
+                                ),
+                                language: store.appLanguage
+                            )
+
+                            DashboardGlassCapsuleButton(
+                                title: localizedText("查看明细", "View Details", language: store.appLanguage),
+                                symbol: "list.bullet"
+                            ) {
+                                store.selection = .positions
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(PortfolixTheme.lilac)
                 }
 
                 if primaryPositions.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无持仓", "No holdings yet", language: store.appLanguage))
                         .frame(maxWidth: .infinity, minHeight: 82)
                 } else {
-                    PositionHeaderRow()
+                    PositionHeaderRow(
+                        sortField: $sortField,
+                        sortDirection: $sortDirection
+                    )
 
                     ForEach(primaryPositions) { position in
                         CompactPositionRow(position: position)
@@ -977,17 +995,208 @@ private struct RecentPositionsCard: View {
     }
 }
 
+enum PrimaryPositionDisplayLimit: String, CaseIterable, Identifiable {
+    case top10Percent
+    case top30Percent
+    case top50Percent
+    case all
+
+    var id: String { rawValue }
+
+    func maximumCount(totalCount: Int) -> Int? {
+        switch self {
+        case .top10Percent:
+            percentageCount(0.10, totalCount: totalCount)
+        case .top30Percent:
+            percentageCount(0.30, totalCount: totalCount)
+        case .top50Percent:
+            percentageCount(0.50, totalCount: totalCount)
+        case .all: nil
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .top10Percent:
+            localizedText("市值前 10%", "Top 10% by Market Value", language: language)
+        case .top30Percent:
+            localizedText("市值前 30%", "Top 30% by Market Value", language: language)
+        case .top50Percent:
+            localizedText("市值前 50%", "Top 50% by Market Value", language: language)
+        case .all:
+            localizedText("全部持仓", "All Holdings", language: language)
+        }
+    }
+
+    private func percentageCount(_ percentage: Double, totalCount: Int) -> Int {
+        guard totalCount > 0 else { return 0 }
+        return max(1, Int(ceil(Double(totalCount) * percentage)))
+    }
+}
+
+enum PrimaryPositionSortField: Hashable {
+    case marketValue
+    case profitRate
+    case todayProfit
+}
+
+enum PrimaryPositionSortDirection: Hashable {
+    case ascending
+    case descending
+
+    mutating func toggle() {
+        self = self == .ascending ? .descending : .ascending
+    }
+}
+
+enum PrimaryPositionOrdering {
+    static func visiblePositions(
+        from positions: [Position],
+        limit: PrimaryPositionDisplayLimit,
+        sortField: PrimaryPositionSortField,
+        direction: PrimaryPositionSortDirection,
+        todayProfit: (Position) -> Decimal
+    ) -> [Position] {
+        let rankedByMarketValue = positions.sorted(by: marketValueRank)
+        let limited: [Position]
+        if let maximumCount = limit.maximumCount(totalCount: rankedByMarketValue.count) {
+            limited = Array(rankedByMarketValue.prefix(maximumCount))
+        } else {
+            limited = rankedByMarketValue
+        }
+
+        return limited.sorted { lhs, rhs in
+            let lhsValue = sortValue(for: lhs, field: sortField, todayProfit: todayProfit)
+            let rhsValue = sortValue(for: rhs, field: sortField, todayProfit: todayProfit)
+            if lhsValue == rhsValue {
+                return marketValueRank(lhs, rhs)
+            }
+            return direction == .ascending ? lhsValue < rhsValue : lhsValue > rhsValue
+        }
+    }
+
+    private static func sortValue(
+        for position: Position,
+        field: PrimaryPositionSortField,
+        todayProfit: (Position) -> Decimal
+    ) -> Decimal {
+        switch field {
+        case .marketValue:
+            position.marketValueCNY
+        case .profitRate:
+            position.profitRate
+        case .todayProfit:
+            todayProfit(position)
+        }
+    }
+
+    private static func marketValueRank(_ lhs: Position, _ rhs: Position) -> Bool {
+        if lhs.marketValueCNY == rhs.marketValueCNY {
+            return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+        }
+        return lhs.marketValueCNY > rhs.marketValueCNY
+    }
+}
+
+private struct PrimaryPositionLimitMenu: View {
+    @Binding var selection: PrimaryPositionDisplayLimit
+    let language: AppLanguage
+
+    var body: some View {
+        Menu {
+            ForEach(PrimaryPositionDisplayLimit.allCases) { option in
+                Button(option.title(language: language)) {
+                    selection = option
+                }
+            }
+        } label: {
+            DashboardGlassCapsuleLabel(
+                title: selection.title(language: language),
+                symbol: "line.3.horizontal.decrease",
+                showsChevron: true
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+    }
+}
+
+private struct DashboardGlassCapsuleButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            DashboardGlassCapsuleLabel(title: title, symbol: symbol)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct DashboardGlassCapsuleLabel: View {
+    let title: String
+    let symbol: String
+    var showsChevron = false
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.sm) {
+            Image(systemName: symbol)
+            Text(title)
+                .fixedSize(horizontal: true, vertical: false)
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+            }
+        }
+        .font(PortfolixTypography.captionEmphasis)
+        .lineLimit(1)
+        .foregroundStyle(PortfolixTheme.secondaryText)
+        .padding(.horizontal, PortfolixSpacing.sm)
+        .padding(.vertical, 6)
+        .portfolixGlass(
+            in: Capsule(),
+            tint: PortfolixTheme.lilac.opacity(0.16),
+            fallbackTint: PortfolixTheme.panelSoft,
+            fallbackOpacity: 0.48,
+            interactive: true
+        )
+        .contentShape(Capsule())
+    }
+}
+
 private struct PositionHeaderRow: View {
     @EnvironmentObject private var store: PortfolioStore
+    @Binding var sortField: PrimaryPositionSortField
+    @Binding var sortDirection: PrimaryPositionSortDirection
 
     var body: some View {
         HStack(spacing: 0) {
             Text(localizedText("资产", "Asset", language: store.appLanguage)).positionColumn(alignment: .center)
             Text(localizedText("近 1 周走势", "1W Trend", language: store.appLanguage)).positionColumn(alignment: .center)
             Text(localizedText("类型", "Type", language: store.appLanguage)).positionColumn(alignment: .center)
-            Text(localizedText("当前市值", "Market Value", language: store.appLanguage)).positionColumn(alignment: .center)
-            Text(localizedText("持仓收益率", "Return Rate", language: store.appLanguage)).positionColumn(alignment: .center)
-            Text(localizedText("今日收益", "Today Return", language: store.appLanguage)).positionColumn(alignment: .center)
+            SortablePositionHeader(
+                title: localizedText("当前市值", "Market Value", language: store.appLanguage),
+                field: .marketValue,
+                selectedField: $sortField,
+                direction: $sortDirection
+            )
+            .positionColumn(alignment: .center)
+            SortablePositionHeader(
+                title: localizedText("持仓收益率", "Return Rate", language: store.appLanguage),
+                field: .profitRate,
+                selectedField: $sortField,
+                direction: $sortDirection
+            )
+            .positionColumn(alignment: .center)
+            SortablePositionHeader(
+                title: localizedText("今日收益", "Today Return", language: store.appLanguage),
+                field: .todayProfit,
+                selectedField: $sortField,
+                direction: $sortDirection
+            )
+            .positionColumn(alignment: .center)
             Text(localizedText("价格日期", "Price Date", language: store.appLanguage)).positionColumn(alignment: .center)
         }
         .font(.system(size: 10, weight: .medium))
@@ -998,6 +1207,48 @@ private struct PositionHeaderRow: View {
     }
 }
 
+private struct SortablePositionHeader: View {
+    let title: String
+    let field: PrimaryPositionSortField
+    @Binding var selectedField: PrimaryPositionSortField
+    @Binding var direction: PrimaryPositionSortDirection
+
+    private var isSelected: Bool {
+        selectedField == field
+    }
+
+    var body: some View {
+        Button {
+            if isSelected {
+                direction.toggle()
+            } else {
+                selectedField = field
+                direction = .descending
+            }
+        } label: {
+            HStack(spacing: PortfolixSpacing.xs) {
+                Text(title)
+                Image(systemName: direction == .ascending ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .foregroundStyle(isSelected ? PortfolixTheme.lilac : PortfolixTheme.tertiaryText)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? accessibilitySortValue : "")
+    }
+
+    private var accessibilitySortValue: String {
+        switch direction {
+        case .ascending: "Ascending"
+        case .descending: "Descending"
+        }
+    }
+}
+
 private struct CompactPositionRow: View {
     @EnvironmentObject private var store: PortfolioStore
     let position: Position
@@ -1005,14 +1256,23 @@ private struct CompactPositionRow: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: PortfolixSpacing.sm) {
-                Circle()
-                    .fill(position.category.color.opacity(0.18))
-                    .frame(width: 28, height: 28)
-                    .overlay {
-                        Text(String(position.name.prefix(1)))
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(position.category.color)
-                    }
+                Button {
+                    store.presentPositionEditor(for: position.id)
+                } label: {
+                    Circle()
+                        .fill(position.category.color.opacity(0.18))
+                        .frame(width: 28, height: 28)
+                        .overlay {
+                            Text(String(position.name.prefix(1)))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(position.category.color)
+                        }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: 32, height: 32)
+                .help(localizedText("编辑持仓", "Edit Holding", language: store.appLanguage))
+                .accessibilityLabel(localizedText("编辑 \(position.name)", "Edit \(position.name)", language: store.appLanguage))
 
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(position.name)

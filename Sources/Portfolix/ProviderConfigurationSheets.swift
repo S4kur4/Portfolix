@@ -319,7 +319,7 @@ struct LLMConfigurationSheet: View {
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     isValidatingAPIKey = false
-                    connectionStatus = .success(text("API 配置有效", "API configuration valid"))
+                    connectionStatus = .success(text("API 已验证", "API validated"))
                     connectionStatusFingerprint = fingerprint
                 }
             } catch {
@@ -362,7 +362,7 @@ struct LLMConfigurationSheet: View {
             )
             try await LLMAPIKeyValidationProbe.validate(configuration: validationConfiguration, apiKey: activeAPIKey)
             connectionStatusFingerprint = validationFingerprint(apiKey: activeAPIKey)
-            connectionStatus = .success(text("API 配置有效", "API configuration valid"))
+            connectionStatus = .success(text("API 已验证", "API validated"))
         } catch {
             connectionStatus = .failure(error.localizedDescription)
             connectionStatusFingerprint = validationFingerprint(apiKey: activeAPIKey)
@@ -371,7 +371,7 @@ struct LLMConfigurationSheet: View {
 
     private var noticeSymbol: String {
         if case .failure = connectionStatus {
-            return "exclamationmark.circle.fill"
+            return "xmark.circle.fill"
         }
         if case .success = connectionStatus {
             return "checkmark.circle.fill"
@@ -641,7 +641,7 @@ struct SearchConfigurationSheet: View {
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     isValidatingAPIKey = false
-                    connectionStatus = .success(text("API Key 有效", "API Key valid"))
+                    connectionStatus = .success(text("API 已验证", "API validated"))
                 }
             } catch {
                 await MainActor.run {
@@ -665,7 +665,7 @@ struct SearchConfigurationSheet: View {
 
     private var noticeSymbol: String {
         if case .failure = connectionStatus {
-            return "exclamationmark.circle.fill"
+            return "xmark.circle.fill"
         }
         if case .success = connectionStatus {
             return "checkmark.circle.fill"

@@ -78,6 +78,10 @@ struct PositionEditorSheet: View {
         presentation.position != nil
     }
 
+    private var locksAssetIdentity: Bool {
+        isEditing
+    }
+
     private var language: AppLanguage {
         store.appLanguage
     }
@@ -118,15 +122,27 @@ struct PositionEditorSheet: View {
                         .lineLimit(1)
                         .allowsHitTesting(false)
                 }
-                TextField("", text: text)
-                    .textFieldStyle(.plain)
-                    .font(PortfolixTypography.body)
-                    .monospacedDigit()
-                    .multilineTextAlignment(.trailing)
-                    .foregroundStyle(isLocked ? PortfolixTheme.secondaryText : inputColor(for: field))
-                    .focused($focusedField, equals: field)
-                    .allowsHitTesting(!isLocked)
-                    .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
+                if isLocked {
+                    Text(text.wrappedValue)
+                        .font(PortfolixTypography.body)
+                        .monospacedDigit()
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .lineLimit(1)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: PositionEditorLayout.valueFieldHeight,
+                            alignment: .trailing
+                        )
+                } else {
+                    TextField("", text: text)
+                        .textFieldStyle(.plain)
+                        .font(PortfolixTypography.body)
+                        .monospacedDigit()
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(inputColor(for: field))
+                        .focused($focusedField, equals: field)
+                        .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
+                }
             }
             .frame(
                 width: PositionEditorLayout.valueFieldWidth,
@@ -134,7 +150,11 @@ struct PositionEditorSheet: View {
                 alignment: .trailing
             )
         } label: {
-            EditorFieldLabel(title: title, isInvalid: shouldHighlight(field))
+            EditorFieldLabel(
+                title: title,
+                isInvalid: shouldHighlight(field),
+                showsRequiredIndicator: !isLocked
+            )
         }
     }
 
@@ -154,12 +174,12 @@ struct PositionEditorSheet: View {
                             Text(category.title(language: language)).tag(category)
                         }
                     }
-                    .disabled(!isManualAssetEntry)
+                    .disabled(locksAssetIdentity || !isManualAssetEntry)
                     .onChange(of: category) { _, _ in
                         handleCategoryChange()
                     }
 
-                    if !isManualAssetEntry {
+                    if !locksAssetIdentity, !isManualAssetEntry {
                         HStack(spacing: PortfolixSpacing.sm) {
                             Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
                                 .font(.system(size: 11))
@@ -180,23 +200,29 @@ struct PositionEditorSheet: View {
                         title: sheetText("资产名称", "Asset Name"),
                         text: $name,
                         field: .name,
-                        placeholder: sheetText("输入名称搜索", "Search by name")
+                        placeholder: sheetText("输入名称搜索", "Search by name"),
+                        isLocked: locksAssetIdentity
                     )
                         .onChange(of: name) { _, value in
-                            scheduleAssetSearch(for: value)
+                            if !locksAssetIdentity {
+                                scheduleAssetSearch(for: value)
+                            }
                         }
 
                     editorTextField(
                         title: sheetText("资产代码", "Asset Code"),
                         text: $symbol,
                         field: .symbol,
-                        placeholder: sheetText("输入代码搜索", "Search by code")
+                        placeholder: sheetText("输入代码搜索", "Search by code"),
+                        isLocked: locksAssetIdentity
                     )
                         .onChange(of: symbol) { _, value in
-                            scheduleAssetSearch(for: value)
+                            if !locksAssetIdentity {
+                                scheduleAssetSearch(for: value)
+                            }
                         }
 
-                    if isSearchingAssets || isResolvingAsset {
+                    if !locksAssetIdentity, isSearchingAssets || isResolvingAsset {
                         HStack(spacing: PortfolixSpacing.sm) {
                             ProgressView()
                                 .controlSize(.small)
@@ -206,7 +232,7 @@ struct PositionEditorSheet: View {
                         }
                     }
 
-                    if !assetCandidates.isEmpty {
+                    if !locksAssetIdentity, !assetCandidates.isEmpty {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                             Text(sheetText("数据候选", "Data Candidates"))
                                 .font(.system(size: 10, weight: .medium))
@@ -221,7 +247,7 @@ struct PositionEditorSheet: View {
                         .padding(.vertical, PortfolixSpacing.xs)
                     }
 
-                    if let assetLookupMessage {
+                    if !locksAssetIdentity, let assetLookupMessage {
                         Text(assetLookupMessage)
                             .font(.system(size: 10))
                             .foregroundStyle(PortfolixTheme.tertiaryText)
@@ -265,7 +291,7 @@ struct PositionEditorSheet: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .disabled(!isManualAssetEntry)
+                .disabled(locksAssetIdentity || !isManualAssetEntry)
 
                 LabeledContent(sheetText("当前价格", "Current Price")) {
                     Text(currentPriceText)
@@ -475,18 +501,20 @@ struct PositionEditorSheet: View {
             return false
         }
 
-        let finalName = refreshedQuote?.name ?? name
-        let finalSymbol = refreshedQuote?.symbol ?? symbol
-        let finalCategory = refreshedQuote?.category ?? category
-        let finalCostCurrency = refreshedQuote?.quoteCurrency ?? costCurrency
+        let finalName = presentation.position?.name ?? refreshedQuote?.name ?? name
+        let finalSymbol = presentation.position?.symbol ?? refreshedQuote?.symbol ?? symbol
+        let finalCategory = presentation.position?.category ?? refreshedQuote?.category ?? category
+        let finalCostCurrency = presentation.position?.quoteCurrency ?? refreshedQuote?.quoteCurrency ?? costCurrency
         let finalLatestPrice = refreshedQuote?.latestPrice ?? latestPrice
         let quoteMetadata = quoteMetadata(for: finalLatestPrice, refreshedQuote: refreshedQuote)
 
         if let refreshedQuote, let price = refreshedQuote.latestPrice {
-            name = refreshedQuote.name
-            symbol = refreshedQuote.symbol
-            category = refreshedQuote.category
-            costCurrency = refreshedQuote.quoteCurrency
+            if !locksAssetIdentity {
+                name = refreshedQuote.name
+                symbol = refreshedQuote.symbol
+                category = refreshedQuote.category
+                costCurrency = refreshedQuote.quoteCurrency
+            }
             self.latestPrice = decimalString(price)
             selectedQuoteTime = refreshedQuote.quoteTime
         }
@@ -958,15 +986,18 @@ private extension PositionEditorSheet {
 private struct EditorFieldLabel: View {
     let title: String
     let isInvalid: Bool
+    var showsRequiredIndicator = true
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.xs) {
             Text(title)
-            Text("·")
-                .font(.system(size: 22, weight: .heavy))
-                .baselineOffset(1)
-                .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
-                .accessibilityHidden(true)
+            if showsRequiredIndicator {
+                Text("·")
+                    .font(.system(size: 22, weight: .heavy))
+                    .baselineOffset(1)
+                    .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }

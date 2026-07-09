@@ -414,8 +414,14 @@ struct AIReportView: View {
                 isSendingFollowUp: store.isAnsweringAIAnalysisFollowUp,
                 followUpProgress: store.aiAnalysisFollowUpProgress,
                 hasPositions: !store.positions.isEmpty,
-                hasLLMKey: store.hasValidLLMAPIKey,
-                hasSearchKey: store.hasValidSearchAPIKey,
+                llmReadiness: AIReportReadiness.credential(
+                    isConfigured: store.hasLLMAPIKey,
+                    validationState: store.llmAPIKeyValidationState
+                ),
+                searchReadiness: AIReportReadiness.credential(
+                    isConfigured: store.hasSearchAPIKey,
+                    validationState: store.searchAPIKeyValidationState
+                ),
                 selectedModel: aiModelBinding,
                 availableModels: availableModelOptions,
                 selectedAnalysisMode: aiAnalysisModeBinding,
@@ -573,8 +579,8 @@ private struct AIReportChatSurface: View {
     let isSendingFollowUp: Bool
     let followUpProgress: AIFollowUpProgress?
     let hasPositions: Bool
-    let hasLLMKey: Bool
-    let hasSearchKey: Bool
+    let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     @Binding var selectedModel: String
     let availableModels: [String]
     @Binding var selectedAnalysisMode: SmartAnalysisMode
@@ -616,8 +622,8 @@ private struct AIReportChatSurface: View {
                                     AIReportUntimestampedAgentRow {
                                         AIReportWelcomeMessage(
                                             hasPositions: hasPositions,
-                                            hasLLMKey: hasLLMKey,
-                                            hasSearchKey: hasSearchKey,
+                                            llmReadiness: llmReadiness,
+                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -698,8 +704,8 @@ private struct AIReportChatSurface: View {
                                         AIReportStaticStatusMessage(
                                             status: run.status,
                                             hasPositions: hasPositions,
-                                            hasLLMKey: hasLLMKey,
-                                            hasSearchKey: hasSearchKey,
+                                            llmReadiness: llmReadiness,
+                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -862,15 +868,36 @@ private struct AIReportChatSurface: View {
         switch run.status {
         case .idle, .completed:
             false
-        case .missingConfiguration, .failed:
+        case let .missingConfiguration(message):
+            !lastAssistantMessageMatches(message)
+        case .failed:
             true
         case .running:
             false
         }
     }
 
+    private func lastAssistantMessageMatches(_ message: String) -> Bool {
+        guard
+            let lastItem = orderedItems.last,
+            case let .assistant(text) = lastItem.content
+        else {
+            return false
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            == message.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var usesConnectedMode: Bool {
         selectedAnalysisMode == .connected
+    }
+
+    private var hasLLMKey: Bool {
+        llmReadiness == .ready
+    }
+
+    private var hasSearchKey: Bool {
+        searchReadiness == .ready
     }
 }
 
@@ -952,8 +979,7 @@ private struct AIReportChatHeader: View {
                     options: availableModels,
                     selection: $selectedModel,
                     isEnabled: isInteractionEnabled && !availableModels.isEmpty,
-                    optionTitle: { $0 },
-                    help: localizedText("快速切换 LLM 模型", "Quickly switch LLM model", language: language)
+                    optionTitle: { $0 }
                 )
 
                 AIReportHeaderMenuTag(
@@ -962,10 +988,7 @@ private struct AIReportChatHeader: View {
                     options: Array(SmartAnalysisMode.allCases),
                     selection: $selectedAnalysisMode,
                     isEnabled: isInteractionEnabled,
-                    optionTitle: { $0.title(language: language) },
-                    help: selectedAnalysisMode == .connected
-                        ? localizedText("允许按需联网搜索", "Connected search is available when needed", language: language)
-                        : localizedText("仅使用持仓数据和模型知识", "Uses holdings and model knowledge only", language: language)
+                    optionTitle: { $0.title(language: language) }
                 )
             }
         }
@@ -989,7 +1012,6 @@ private struct AIReportHeaderMenuTag<Option: Hashable>: View {
     @Binding var selection: Option
     let isEnabled: Bool
     let optionTitle: (Option) -> String
-    let help: String
 
     var body: some View {
         Menu {
@@ -1026,7 +1048,6 @@ private struct AIReportHeaderMenuTag<Option: Hashable>: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.64)
-        .help(help)
     }
 }
 
@@ -1063,7 +1084,6 @@ private struct AIReportChatActionsMenu: View {
         .buttonStyle(.plain)
         .disabled(!canClearHistory)
         .opacity(canClearHistory ? 1 : 0.56)
-        .help(localizedText("管理智能分析历史", "Manage analysis history", language: language))
     }
 }
 
@@ -1224,10 +1244,98 @@ private struct AIReportMessageTimestamp: View {
     }
 }
 
+enum AIReportReadiness: Equatable {
+    case ready
+    case missing
+    case needsValidation
+    case invalid
+
+    static func credential(
+        isConfigured: Bool,
+        validationState: ProviderCredentialValidationState
+    ) -> AIReportReadiness {
+        guard isConfigured else { return .missing }
+        return switch validationState {
+        case .unknown: .needsValidation
+        case .valid: .ready
+        case .invalid: .invalid
+        }
+    }
+
+    func apiStatusText(name: String, language: AppLanguage) -> String {
+        switch self {
+        case .ready:
+            localizedText("\(name) 已验证", "\(name) validated", language: language)
+        case .missing:
+            localizedText("\(name) 未配置", "\(name) not configured", language: language)
+        case .needsValidation:
+            localizedText("\(name) 待验证", "\(name) needs validation", language: language)
+        case .invalid:
+            localizedText("\(name) 验证失败", "\(name) validation failed", language: language)
+        }
+    }
+
+    func configurationGuidance(name: String, language: AppLanguage) -> String {
+        switch self {
+        case .ready:
+            ""
+        case .missing:
+            localizedText(
+                "请在系统设置中配置 \(name)",
+                "Configure \(name) in Settings",
+                language: language
+            )
+        case .needsValidation:
+            localizedText(
+                "请在系统设置中验证已配置的 \(name)",
+                "Validate the configured \(name) in Settings",
+                language: language
+            )
+        case .invalid:
+            localizedText(
+                "\(name) 验证失败，请检查配置后重试",
+                "\(name) validation failed. Check the configuration and try again",
+                language: language
+            )
+        }
+    }
+
+    func shortStatusText(language: AppLanguage) -> String {
+        switch self {
+        case .ready:
+            localizedText("已验证", "Validated", language: language)
+        case .missing:
+            localizedText("未配置", "Not configured", language: language)
+        case .needsValidation:
+            localizedText("待验证", "Needs validation", language: language)
+        case .invalid:
+            localizedText("验证失败", "Validation failed", language: language)
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ready: "checkmark.circle.fill"
+        case .missing: "minus.circle.fill"
+        case .needsValidation: "exclamationmark.circle.fill"
+        case .invalid: "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .ready: PortfolixTheme.mint
+        case .missing: PortfolixTheme.tertiaryText
+        case .needsValidation: PortfolixTheme.amber
+        case .invalid: PortfolixTheme.danger
+        }
+    }
+}
+
 private struct AIReportWelcomeMessage: View {
     let hasPositions: Bool
-    let hasLLMKey: Bool
-    let hasSearchKey: Bool
+    let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1238,10 +1346,21 @@ private struct AIReportWelcomeMessage: View {
                 .foregroundStyle(PortfolixTheme.primaryText)
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                AIReportReadinessRow(isReady: hasPositions, text: localizedText("已有持仓数据", "Holdings available", language: language))
-                AIReportReadinessRow(isReady: hasLLMKey, text: localizedText("LLM API 已验证", "LLM API validated", language: language))
+                AIReportReadinessRow(
+                    readiness: hasPositions ? .ready : .missing,
+                    text: hasPositions
+                        ? localizedText("持仓数据已就绪", "Holdings ready", language: language)
+                        : localizedText("尚未添加持仓", "No holdings added", language: language)
+                )
+                AIReportReadinessRow(
+                    readiness: llmReadiness,
+                    text: llmReadiness.apiStatusText(name: "LLM API", language: language)
+                )
                 if usesConnectedMode {
-                    AIReportReadinessRow(isReady: hasSearchKey, text: localizedText("Search API 已验证", "Search API validated", language: language))
+                    AIReportReadinessRow(
+                        readiness: searchReadiness,
+                        text: searchReadiness.apiStatusText(name: "Search API", language: language)
+                    )
                 }
             }
         }
@@ -1252,19 +1371,20 @@ private struct AIReportWelcomeMessage: View {
 }
 
 private struct AIReportReadinessRow: View {
-    let isReady: Bool
+    let readiness: AIReportReadiness
     let text: String
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.sm) {
-            Image(systemName: isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+            Image(systemName: readiness.symbol)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isReady ? PortfolixTheme.mint : PortfolixTheme.amber)
+                .foregroundStyle(readiness.color)
             Text(text)
                 .font(PortfolixTypography.caption)
                 .foregroundStyle(PortfolixTheme.secondaryText)
         }
     }
+
 }
 
 private struct AIReportAgentProgressMessage: View {
@@ -1326,8 +1446,8 @@ private struct AIReportProgressCard: View {
 private struct AIReportStaticStatusMessage: View {
     let status: AIAnalysisRunStatus
     let hasPositions: Bool
-    let hasLLMKey: Bool
-    let hasSearchKey: Bool
+    let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1352,7 +1472,10 @@ private struct AIReportStaticStatusMessage: View {
         if !hasPositions {
             return localizedText("等待持仓数据", "Waiting for holdings", language: language)
         }
-        if !hasLLMKey || (usesConnectedMode && !hasSearchKey) {
+        if hasInvalidRequiredCredential {
+            return localizedText("API 验证失败", "API validation failed", language: language)
+        }
+        if llmReadiness != .ready || (usesConnectedMode && searchReadiness != .ready) {
             return localizedText("需要完成 API 配置", "API configuration required", language: language)
         }
         return status.title(language: language)
@@ -1362,17 +1485,26 @@ private struct AIReportStaticStatusMessage: View {
         if !hasPositions {
             return localizedText("添加持仓后即可生成分析", "Add holdings to generate an analysis", language: language)
         }
-        if !hasLLMKey {
-            return localizedText("请在系统设置中配置并验证 LLM API Key", "Configure and validate an LLM API key in Settings", language: language)
+        if llmReadiness != .ready, usesConnectedMode, searchReadiness != .ready {
+            return [
+                llmReadiness.configurationGuidance(name: "LLM API", language: language),
+                searchReadiness.configurationGuidance(name: "Search API", language: language),
+            ].joined(separator: localizedText("；", "; ", language: language))
         }
-        if usesConnectedMode && !hasSearchKey {
-            return localizedText("联网增强模式需要验证 Search API Key", "Connected mode requires a validated Search API key", language: language)
+        if llmReadiness != .ready {
+            return llmReadiness.configurationGuidance(name: "LLM API", language: language)
+        }
+        if usesConnectedMode && searchReadiness != .ready {
+            return searchReadiness.configurationGuidance(name: "Search API", language: language)
         }
         return localizedText("请检查配置或稍后重试", "Check settings or try again later", language: language)
     }
 
     private var symbol: String {
-        switch status {
+        if hasInvalidRequiredCredential {
+            return "xmark.circle.fill"
+        }
+        return switch status {
         case .failed:
             "exclamationmark.triangle.fill"
         default:
@@ -1381,12 +1513,19 @@ private struct AIReportStaticStatusMessage: View {
     }
 
     private var color: Color {
-        switch status {
+        if hasInvalidRequiredCredential {
+            return PortfolixTheme.danger
+        }
+        return switch status {
         case .failed:
             PortfolixTheme.danger
         default:
             PortfolixTheme.amber
         }
+    }
+
+    private var hasInvalidRequiredCredential: Bool {
+        llmReadiness == .invalid || (usesConnectedMode && searchReadiness == .invalid)
     }
 }
 
@@ -3494,26 +3633,14 @@ struct SettingsView: View {
         hasKey: Bool,
         validationState: ProviderCredentialValidationState
     ) -> (title: String, color: Color, symbol: String) {
-        guard hasKey else {
-            return (
-                settingsText("尚未配置", "Not configured"),
-                PortfolixTheme.amber,
-                "exclamationmark.circle.fill"
-            )
-        }
-
-        if validationState == .invalid {
-            return (
-                settingsText("Key 无效或已失效", "Key invalid or expired"),
-                PortfolixTheme.danger,
-                "exclamationmark.circle.fill"
-            )
-        }
-
+        let readiness = AIReportReadiness.credential(
+            isConfigured: hasKey,
+            validationState: validationState
+        )
         return (
-            settingsText("已配置", "Configured"),
-            PortfolixTheme.mint,
-            "checkmark.circle.fill"
+            readiness.shortStatusText(language: store.appLanguage),
+            readiness.color,
+            readiness.symbol
         )
     }
 }
