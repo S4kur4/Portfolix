@@ -11,6 +11,13 @@
 
 中文 | [English](#english)
 
+<div align="left">
+  <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="500">
+  <img src="/Resources/Screenshot-2.png?raw=true" alt="Overview" width="500">
+</div>
+</br>
+
+
 ## 简介
 
 Portfolix 是一个原生 macOS 投资组合管理 App，面向希望自主记录资产、理解组合结构、跟踪收益变化，并通过 AI 获得辅助分析的个人投资者。
