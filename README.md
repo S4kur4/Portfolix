@@ -11,9 +11,8 @@
 
 中文 | [English](#english)
 
-<div align="left">
-  <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="500">
-  <img src="/Resources/Screenshot-2.png?raw=true" alt="Overview" width="500">
+<div align="center">
+  <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="600">
 </div>
 </br>
 
