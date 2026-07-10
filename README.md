@@ -1,25 +1,21 @@
+<div align="center"><img src="/Portfolix.png" alt="Portfolix" width="96" height="96"/>
+
 # Portfolix
 
-</div>
-
-<div align="center">
-  <img src="/Portfolix.png?raw=true" alt="Portfolix" width="96">
-</div>
-</br>
-
-**Portfolix 是一款运行在 macOS 上的投资组合管理工具，提供记录、追踪与智能分析功能。**
-
 中文 | [English](#english)
-
-<div align="center">
-  <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="600">
 </div>
-</br>
-
 
 ## 简介
 
 Portfolix 是一个原生 macOS 投资组合管理 App，面向希望自主记录资产、理解组合结构、跟踪收益变化，并通过 AI 获得辅助分析的个人投资者。
+
+<div align="center">
+  <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="600">
+</div>
+
+<div align="center">
+  <img src="/Resources/Screenshot-2.png?raw=true" alt="Overview" width="600">
+</div>
 
 Portfolix 不连接券商账户，不要求输入任何第三方金融账户密码、Cookie 或交易 Session Token。持仓、历史收益、资产价格快照和设置默认保存在本机，由你自行记录、修改并跟踪。
 
