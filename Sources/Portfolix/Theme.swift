@@ -2,16 +2,18 @@ import AppKit
 import SwiftUI
 
 enum PortfolixTheme {
-    static let canvas = adaptive(light: 0xF5F4F8, dark: 0x06060D)
-    static let sidebar = adaptive(light: 0xECEAF2, dark: 0x090913)
-    static let panel = adaptive(light: 0xFFFFFF, dark: 0x0C0C16)
-    static let panelElevated = adaptive(light: 0xF1EFF6, dark: 0x11111E)
-    static let panelSoft = adaptive(light: 0xE7E3EF, dark: 0x161526)
+    static let canvas = adaptive(light: 0xF6F6F8, dark: 0x07080A)
+    static let sidebar = adaptive(light: 0xEFF0F3, dark: 0x0A0B0E)
+    static let panel = adaptive(light: 0xFFFFFF, dark: 0x0F1014)
+    static let panelElevated = adaptive(light: 0xF3F4F6, dark: 0x14161B)
+    static let panelSoft = adaptive(light: 0xE9EAEE, dark: 0x1A1C22)
+    static let selectionFill = adaptive(light: 0xE8E3FA, dark: 0x211D30)
+    static let selectionText = adaptive(light: 0x513AB6, dark: 0xC9BEFF)
     static let border = Color(nsColor: .separatorColor)
     static let borderStrong = Color(nsColor: .gridColor)
     static let primaryText = Color.primary
     static let secondaryText = Color.secondary
-    static let tertiaryText = Color(nsColor: .tertiaryLabelColor)
+    static let tertiaryText = Color(nsColor: .secondaryLabelColor).opacity(0.78)
     static let lilac = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
     static let violet = adaptive(light: 0x7253DB, dark: 0x8C75FF)
     static let blue = adaptive(light: 0x3B6FCC, dark: 0x7FA7FF)
@@ -100,33 +102,9 @@ extension Decimal {
     }
 }
 
-struct AmbientGlow: View {
-    var body: some View {
-        GeometryReader { proxy in
-            Circle()
-                .fill(PortfolixTheme.violet.opacity(0.13))
-                .frame(width: 420, height: 420)
-                .blur(radius: 110)
-                .offset(x: -120, y: -210)
-
-            Circle()
-                .fill(PortfolixTheme.lilac.opacity(0.08))
-                .frame(width: 340, height: 340)
-                .blur(radius: 120)
-                .offset(x: proxy.size.width - 250, y: proxy.size.height - 210)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 struct PortfolixSidebarBackground: View {
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.regularMaterial)
-            Rectangle()
-                .fill(PortfolixTheme.sidebar.opacity(0.74))
-        }
+        PortfolixTheme.sidebar
         .ignoresSafeArea()
     }
 }
@@ -137,7 +115,7 @@ struct PortfolixSheetBackground: View {
             Rectangle()
                 .fill(.regularMaterial)
             Rectangle()
-                .fill(PortfolixTheme.canvas.opacity(0.56))
+                .fill(PortfolixTheme.canvas.opacity(0.88))
         }
     }
 }

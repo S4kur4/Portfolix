@@ -226,9 +226,14 @@ struct PositionsView: View {
             .width(min: 130, ideal: 170)
 
             TableColumn(localizedText("类别", "Type", language: store.appLanguage)) { position in
-                Text(position.category.title(language: store.appLanguage))
-                    .foregroundStyle(isSelected(position) ? Color.white : position.category.color)
-                    .lineLimit(1)
+                HStack(spacing: PortfolixSpacing.xs) {
+                    Circle()
+                        .fill(isSelected(position) ? Color.white : position.category.color)
+                        .frame(width: 5, height: 5)
+                    Text(position.category.title(language: store.appLanguage))
+                        .foregroundStyle(isSelected(position) ? Color.white : PortfolixTheme.secondaryText)
+                        .lineLimit(1)
+                }
             }
             .width(76)
 
@@ -1038,7 +1043,6 @@ private struct AIReportHeaderMenuTag<Option: Hashable>: View {
             .padding(.vertical, 6)
             .portfolixGlass(
                 in: Capsule(),
-                tint: PortfolixTheme.lilac.opacity(0.16),
                 fallbackTint: PortfolixTheme.panelSoft,
                 fallbackOpacity: 0.48
             )
@@ -1074,7 +1078,6 @@ private struct AIReportChatActionsMenu: View {
                 .frame(width: 36, height: 26)
                 .portfolixGlass(
                     in: Capsule(),
-                    tint: PortfolixTheme.lilac.opacity(0.12),
                     fallbackTint: PortfolixTheme.panelSoft,
                     fallbackOpacity: 0.42
                 )

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP_NAME="${PORTFOLIX_APP_NAME:-Portfolix}"
+EXECUTABLE_NAME="${PORTFOLIX_EXECUTABLE_NAME:-Portfolix}"
 BUNDLE_ID="${PORTFOLIX_BUNDLE_ID:-app.portfolix.mac}"
 HELPER_BUNDLE_ID="${BUNDLE_ID}.PriceUpdater"
 VERSION="${PORTFOLIX_VERSION:-0.1.4}"
@@ -73,7 +74,7 @@ elif [[ "$SKIP_SWIFT_BUILD" == "1" ]]; then
     "$BUILD_DIR/x86_64-apple-macosx/release" \
     "$BUILD_DIR/release"
   do
-    if [[ -x "$candidate/$APP_NAME" && -x "$candidate/PortfolixPriceUpdater" ]]; then
+    if [[ -x "$candidate/$EXECUTABLE_NAME" && -x "$candidate/PortfolixPriceUpdater" ]]; then
       BIN_DIR="$candidate"
       break
     fi
@@ -86,12 +87,12 @@ else
   BIN_DIR="$(CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE_DIR" swift build --package-path "$ROOT_DIR" --configuration release --scratch-path "$BUILD_DIR" --cache-path "$SWIFTPM_CACHE_DIR" --show-bin-path)"
 fi
 
-if [[ ! -x "$BIN_DIR/$APP_NAME" || ! -x "$BIN_DIR/PortfolixPriceUpdater" ]]; then
+if [[ ! -x "$BIN_DIR/$EXECUTABLE_NAME" || ! -x "$BIN_DIR/PortfolixPriceUpdater" ]]; then
   echo "missing release binaries in $BIN_DIR" >&2
   exit 1
 fi
 
-cp "$BIN_DIR/$APP_NAME" "$APP_MACOS/$APP_NAME"
+cp "$BIN_DIR/$EXECUTABLE_NAME" "$APP_MACOS/$APP_NAME"
 cp "$BIN_DIR/PortfolixPriceUpdater" "$HELPER_MACOS/PortfolixPriceUpdater"
 chmod +x "$APP_MACOS/$APP_NAME" "$HELPER_MACOS/PortfolixPriceUpdater"
 /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_MACOS/$APP_NAME" 2>/dev/null || true

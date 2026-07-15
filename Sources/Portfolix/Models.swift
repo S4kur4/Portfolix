@@ -795,7 +795,10 @@ final class PortfolioStore: ObservableObject {
     private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
     private static let aiAnalysisGenerationTimeoutNanoseconds: UInt64 = 420_000_000_000
-    private static let loginItemIdentifier = "app.portfolix.mac.PriceUpdater"
+    private static var loginItemIdentifier: String {
+        let mainBundleIdentifier = Bundle.main.bundleIdentifier ?? "app.portfolix.mac"
+        return "\(mainBundleIdentifier).PriceUpdater"
+    }
     private static let isoDateFormatter = ISO8601DateFormatter()
 
     private struct AIFallbackReportArtifact: Encodable {

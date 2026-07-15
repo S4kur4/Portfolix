@@ -100,12 +100,8 @@ struct RootView: View {
     }
 
     private var detailBackground: some View {
-        ZStack {
-            PortfolixTheme.canvas
-                .ignoresSafeArea()
-
-            AmbientGlow()
-        }
+        PortfolixTheme.canvas
+            .ignoresSafeArea()
     }
 
     @ViewBuilder

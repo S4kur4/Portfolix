@@ -178,14 +178,6 @@ private struct PortfolioHeroCard: View {
             }
             .frame(height: PortfolixLayout.dashboardHeroContentHeight, alignment: .topLeading)
         }
-        .overlay(alignment: .bottomTrailing) {
-            Circle()
-                .fill(PortfolixTheme.violet.opacity(0.16))
-                .frame(width: 130, height: 130)
-                .blur(radius: 35)
-                .offset(x: 15, y: 35)
-                .allowsHitTesting(false)
-        }
     }
 
     private var updateSummary: String {
@@ -484,14 +476,6 @@ private struct PerformanceTrendCard: View {
                 }
             }
             .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
-        }
-        .overlay(alignment: .bottomLeading) {
-            Ellipse()
-                .fill(PortfolixTheme.violet.opacity(0.14))
-                .frame(width: 360, height: 90)
-                .blur(radius: 40)
-                .offset(x: 150, y: 26)
-                .allowsHitTesting(false)
         }
     }
 
@@ -1157,7 +1141,6 @@ private struct DashboardGlassCapsuleLabel: View {
         .padding(.vertical, 6)
         .portfolixGlass(
             in: Capsule(),
-            tint: PortfolixTheme.lilac.opacity(0.16),
             fallbackTint: PortfolixTheme.panelSoft,
             fallbackOpacity: 0.48,
             interactive: true

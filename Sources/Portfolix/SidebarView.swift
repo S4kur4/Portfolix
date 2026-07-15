@@ -170,13 +170,17 @@ private struct SidebarItem: View {
 
                 Spacer()
             }
-            .foregroundStyle(isSelected ? Color(hex: 0x171025) : PortfolixTheme.secondaryText)
+            .foregroundStyle(isSelected ? PortfolixTheme.selectionText : PortfolixTheme.secondaryText)
             .padding(.horizontal, PortfolixSpacing.md)
             .padding(.vertical, PortfolixSpacing.md)
             .background {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(PortfolixTheme.purpleGradient)
+                        .fill(PortfolixTheme.selectionFill)
+                        .opacity(isSelected ? 1 : 0)
+
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(PortfolixTheme.violet.opacity(0.18), lineWidth: 1)
                         .opacity(isSelected ? 1 : 0)
 
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
