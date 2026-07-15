@@ -131,6 +131,7 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
     case invalidField(String)
     case invalidEnum(String)
     case invalidListCount(String)
+    case invalidEvidenceRef(String)
     case languageMismatch(expected: AIResponseLanguage)
 
     var errorDescription: String? {
@@ -145,6 +146,8 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
             "模型返回枚举值不符合要求：\(field)"
         case let .invalidListCount(field):
             "模型返回列表数量不符合要求：\(field)"
+        case let .invalidEvidenceRef(ref):
+            "模型引用了不存在的证据：\(ref)"
         case let .languageMismatch(expected):
             expected == .english
                 ? "模型返回语言不匹配：应使用英文正文，资产名称可保持原文"
@@ -164,6 +167,8 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
             return "修复字段 \(field) 的枚举值，只能使用目标结构列出的允许值。"
         case let .invalidListCount(field):
             return "压缩字段 \(field) 的数组数量，保留最重要的项目。"
+        case let .invalidEvidenceRef(ref):
+            return "删除或替换不存在的 evidence_ref：\(ref)。只能引用 allowed_evidence_ledger.items 中真实存在的 id。"
         case let .languageMismatch(expected):
             if expected == .english {
                 return "输出语言不匹配：将所有面向用户的正文改为英文；中文资产名、基金名、证券代码和专有名词保持原文。"
@@ -184,6 +189,8 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
             "枚举值不符合要求：\(field)"
         case let .invalidListCount(field):
             "列表数量不符合要求：\(field)"
+        case let .invalidEvidenceRef(ref):
+            "证据引用不存在：\(ref)"
         case .languageMismatch:
             "输出语言不匹配"
         }
@@ -196,6 +203,7 @@ enum AIReportValidationError: LocalizedError, Equatable, Sendable {
     case insecureSourceURL(String)
     case invalidSourceDomain(String)
     case unreferencedSourceDomain(String)
+    case invalidEvidenceRef(String)
     case informationSecurityViolation(String)
 
     var errorDescription: String? {
@@ -210,6 +218,8 @@ enum AIReportValidationError: LocalizedError, Equatable, Sendable {
             "报告来源域名无效：\(domain)"
         case let .unreferencedSourceDomain(domain):
             "资产提醒引用了未经检索验证的来源域名：\(domain)"
+        case let .invalidEvidenceRef(ref):
+            "报告引用了不存在的证据：\(ref)"
         case let .informationSecurityViolation(phrase):
             "报告包含潜在的信息安全敏感内容：\(phrase)"
         }
@@ -1113,6 +1123,7 @@ struct AIAnalysisAgent: Sendable {
         await progress?(.validatingModelOutput(attempt: 1, total: totalValidationAttempts))
         do {
             let payload = try Self.validatedPayload(raw, expectedLanguage: input.outputLanguage)
+            try AIReportEvidenceValidator.validate(payload: payload, ledger: evidenceLedger)
             return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: nil)
         } catch {
             var validationError = Self.reportPayloadValidationError(from: error)
@@ -1146,6 +1157,7 @@ struct AIAnalysisAgent: Sendable {
                 await progress?(.validatingModelOutput(attempt: attempt + 1, total: totalValidationAttempts))
                 do {
                     let payload = try Self.validatedPayload(candidate, expectedLanguage: input.outputLanguage)
+                    try AIReportEvidenceValidator.validate(payload: payload, ledger: evidenceLedger)
                     return AIReportPayloadResult(payload: payload, rawReport: raw, repairedReport: lastRepaired)
                 } catch {
                     validationError = Self.reportPayloadValidationError(from: error)
@@ -1475,13 +1487,21 @@ struct AIAnalysisAgent: Sendable {
                 referencedDomainsByRef[ref, default: []].formUnion(alert.sourceDomains.map { $0.lowercased() })
             }
         }
+        let citedEvidenceRefs = Set(
+            payload.riskItems.flatMap { $0.evidenceRefs ?? [] }
+                + payload.assetAlerts.flatMap { $0.evidenceRefs ?? [] }
+                + payload.rebalanceActions.flatMap { $0.evidenceRefs ?? [] }
+        )
         var seenURLs = Set<String>()
         let sources = toolResults.flatMap { result in
             let assetName = result.positionRefs.compactMap { positionsByRef[$0]?.name }.first ?? "相关持仓"
             let allowedDomains = result.positionRefs.reduce(into: Set<String>()) { partial, ref in
                 partial.formUnion(referencedDomainsByRef[ref] ?? [])
             }
-            return result.sources.filter { allowedDomains.contains($0.domain.lowercased()) }.prefix(3).compactMap { source -> AIReportSource? in
+            return result.sources.enumerated().filter { index, source in
+                let evidenceID = "web.\(result.callID).\(index + 1)"
+                return citedEvidenceRefs.contains(evidenceID) || allowedDomains.contains(source.domain.lowercased())
+            }.prefix(3).compactMap { _, source -> AIReportSource? in
                 guard seenURLs.insert(source.url).inserted else { return nil }
                 return AIReportSource(
                     title: source.title,
@@ -1690,6 +1710,8 @@ struct AIAnalysisAgent: Sendable {
                 return .invalidField("source_url: \(url)")
             case let .invalidSourceDomain(domain), let .unreferencedSourceDomain(domain):
                 return .invalidField("source_domain: \(domain)")
+            case let .invalidEvidenceRef(ref):
+                return .invalidEvidenceRef(ref)
             }
         }
         return .invalidField(error.localizedDescription)
@@ -2454,7 +2476,13 @@ struct AIAnalysisHarness {
             riskProfileVersion: request.storeContext.riskProfileVersion
         )
         let normalization = AIReportPolicyNormalizer.normalize(report: generatedReport, input: input)
-        let report = normalization.report
+        let attribution = AIReportEvidenceAttributor.attribute(
+            report: normalization.report,
+            input: input,
+            ledger: evidenceLedger
+        )
+        let report = attribution.report
+        let reportProcessingNotes = normalization.notes + attribution.notes
         await request.progress?(.validatingReport)
         let validationStartedAt = Date()
         let finalReportJSON: String
@@ -2473,12 +2501,14 @@ struct AIAnalysisHarness {
 
         let guardrailResultJSON: String
         do {
-            guardrailResultJSON = try AIReportGuardrailNode.validate(
+            let guardrailOutput = try AIReportGuardrailNode.validate(
                 report: report,
                 input: input,
                 inputJSON: inputJSON,
-                normalizationNotes: normalization.notes
+                evidenceLedger: evidenceLedger,
+                normalizationNotes: reportProcessingNotes
             )
+            guardrailResultJSON = guardrailOutput.json
             await traceRecorder.record(
                 stageID: "validating_report",
                 kind: "guardrail",
@@ -2486,7 +2516,10 @@ struct AIAnalysisHarness {
                 outcome: "passed",
                 metadata: [
                     "final_report_characters": String(finalReportJSON.count),
-                    "normalization_note_count": String(normalization.notes.count),
+                    "normalization_note_count": String(reportProcessingNotes.count),
+                    "quality_score": String(guardrailOutput.scorecard.score),
+                    "evidence_coverage_pct": String(format: "%.2f", guardrailOutput.scorecard.evidenceCoveragePct),
+                    "numeric_grounding_pct": String(format: "%.2f", guardrailOutput.scorecard.numericGroundingPct),
                 ]
             )
         } catch {
@@ -2753,7 +2786,8 @@ private enum AIReportPayloadNormalizer {
             title: clipped(item.title, max: 120),
             evidence: clipped(item.evidence, max: 360),
             impact: clipped(item.impact, max: 420),
-            relatedRefs: Array(item.relatedRefs.prefix(12))
+            relatedRefs: Array(item.relatedRefs.prefix(12)),
+            evidenceRefs: item.evidenceRefs.map { Array($0.prefix(8)) }
         )
     }
 
@@ -2763,7 +2797,8 @@ private enum AIReportPayloadNormalizer {
             symbol: clipped(alert.symbol, max: 40),
             title: clipped(alert.title, max: 140),
             reason: clipped(alert.reason, max: 360),
-            sourceDomains: Array(alert.sourceDomains.prefix(6))
+            sourceDomains: Array(alert.sourceDomains.prefix(6)),
+            evidenceRefs: alert.evidenceRefs.map { Array($0.prefix(8)) }
         )
     }
 
@@ -2778,7 +2813,8 @@ private enum AIReportPayloadNormalizer {
             symbol: action.symbol.map { clipped($0, max: 40) },
             title: clipped(action.title, max: 140),
             rationale: clipped(action.rationale, max: 360),
-            riskNote: action.riskNote.map { clipped($0, max: 260) }
+            riskNote: action.riskNote.map { clipped($0, max: 260) },
+            evidenceRefs: action.evidenceRefs.map { Array($0.prefix(8)) }
         )
     }
 
@@ -2842,14 +2878,21 @@ private enum AIReportGuardrailNode {
         report: AIAnalysisReport,
         input: AIAnalysisInput,
         inputJSON: String,
+        evidenceLedger: AIEvidenceLedger,
         normalizationNotes: [String]
-    ) throws -> String {
+    ) throws -> (json: String, scorecard: AIReportQualityScorecard) {
         try AIAnalysisAgent.validate(
             report: report,
             allowedPositionRefs: Set(input.metrics.positions.map(\.positionRef)),
             inputJSON: inputJSON
         )
-        return String(
+        try AIReportEvidenceValidator.validate(report: report, ledger: evidenceLedger)
+        let scorecard = AIReportQualityEvaluator.evaluate(
+            report: report,
+            inputJSON: inputJSON,
+            ledger: evidenceLedger
+        )
+        let json = String(
             data: try AIAnalysisAgent.encoder.encode(
                 AIReportGuardrailResult(
                     status: "passed",
@@ -2858,11 +2901,14 @@ private enum AIReportGuardrailNode {
                     notes: [
                         "schema_validation_passed",
                         "information_security_guardrail_passed",
-                    ] + normalizationNotes
+                        "evidence_reference_validation_passed",
+                    ] + normalizationNotes + scorecard.warnings,
+                    scorecard: scorecard
                 )
             ),
             encoding: .utf8
         ) ?? #"{"status":"passed"}"#
+        return (json, scorecard)
     }
 }
 
@@ -3003,12 +3049,14 @@ enum AIAnalysisSchemaValidator {
                 throw AIReportPayloadValidationError.invalidField("risk_items.text")
             }
             guard item.relatedRefs.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("risk_items.related_refs") }
+            guard (item.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportPayloadValidationError.invalidListCount("risk_items.evidence_refs") }
         }
         for alert in payload.assetAlerts {
             guard bounded(alert.title, min: 1, max: 140), bounded(alert.reason, min: 1, max: 360) else {
                 throw AIReportPayloadValidationError.invalidField("asset_alerts.text")
             }
             guard alert.sourceDomains.count <= 6 else { throw AIReportPayloadValidationError.invalidListCount("asset_alerts.source_domains") }
+            guard (alert.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportPayloadValidationError.invalidListCount("asset_alerts.evidence_refs") }
         }
         let actions = Set([
             "observe", "maintain", "hold", "buy", "increase", "reduce", "sell", "exit",
@@ -3019,6 +3067,7 @@ enum AIAnalysisSchemaValidator {
             guard bounded(action.title, min: 1, max: 140), bounded(action.rationale, min: 1, max: 360) else {
                 throw AIReportPayloadValidationError.invalidField("rebalance_actions.text")
             }
+            guard (action.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportPayloadValidationError.invalidListCount("rebalance_actions.evidence_refs") }
         }
     }
 
@@ -3041,12 +3090,17 @@ enum AIAnalysisSchemaValidator {
             if let ref = item.relatedRefs.first(where: { !allowedPositionRefs.contains($0) && !$0.hasPrefix("source_") }) {
                 throw AIReportValidationError.invalidRelatedRef(ref)
             }
+            guard (item.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportValidationError.invalidField("risk_item.evidence_refs") }
         }
         for alert in report.assetAlerts {
             guard bounded(alert.title, min: 1, max: 140), bounded(alert.reason, min: 1, max: 360) else {
                 throw AIReportValidationError.invalidField("asset_alert.text")
             }
             guard alert.sourceDomains.count <= 6 else { throw AIReportValidationError.invalidField("asset_alert.source_domains") }
+            guard (alert.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportValidationError.invalidField("asset_alert.evidence_refs") }
+        }
+        for action in report.rebalanceActions ?? [] {
+            guard (action.evidenceRefs?.count ?? 0) <= 8 else { throw AIReportValidationError.invalidField("rebalance_action.evidence_refs") }
         }
         for source in report.sources {
             guard URL(string: source.url)?.scheme?.lowercased() == "https" else {
@@ -3150,6 +3204,22 @@ enum AIAnalysisOfflineEvaluationSuite {
                     allowedPositionRefs: []
                 )
             },
+            expectsInvalid(name: "rejects_unknown_evidence_reference") {
+                let report = sampleReport(
+                    riskRefs: ["position_allowed"],
+                    evidenceRefs: ["local.unknown"]
+                )
+                try AIAnalysisAgent.validate(report: report, allowedPositionRefs: ["position_allowed"])
+                try AIReportEvidenceValidator.validate(report: report, ledger: sampleEvidenceLedger())
+            },
+            expectsValid(name: "accepts_known_evidence_reference") {
+                let report = sampleReport(
+                    riskRefs: ["position_allowed"],
+                    evidenceRefs: ["local.constraints.fit_score"]
+                )
+                try AIAnalysisAgent.validate(report: report, allowedPositionRefs: ["position_allowed"])
+                try AIReportEvidenceValidator.validate(report: report, ledger: sampleEvidenceLedger())
+            },
         ]
     }
 
@@ -3174,6 +3244,7 @@ enum AIAnalysisOfflineEvaluationSuite {
     private static func sampleReport(
         summary: String = "组合风险保持可观察",
         riskRefs: [String] = [],
+        evidenceRefs: [String]? = nil,
         sourceURL: String = "https://example.com/news"
     ) -> AIAnalysisReport {
         AIAnalysisReport(
@@ -3191,7 +3262,8 @@ enum AIAnalysisOfflineEvaluationSuite {
                     title: "集中度复核",
                     evidence: "本地约束显示该指标需要关注",
                     impact: "需要结合风险偏好继续观察",
-                    relatedRefs: riskRefs
+                    relatedRefs: riskRefs,
+                    evidenceRefs: evidenceRefs
                 ),
             ],
             assetAlerts: [],
@@ -3205,6 +3277,28 @@ enum AIAnalysisOfflineEvaluationSuite {
                     domain: "example.com",
                     assetName: "Example",
                     credibility: .general
+                ),
+            ]
+        )
+    }
+
+    private static func sampleEvidenceLedger() -> AIEvidenceLedger {
+        AIEvidenceLedger(
+            schemaVersion: "agent-evidence-ledger.v1",
+            generatedAt: .now,
+            items: [
+                AIEvidenceItem(
+                    id: "local.constraints.fit_score",
+                    kind: "calculation",
+                    metric: "constraint_fit_score",
+                    valueText: "100",
+                    numericValue: 100,
+                    unit: "score_0_100",
+                    positionRefs: [],
+                    asOf: ISO8601DateFormatter().string(from: .now),
+                    source: "portfolix_local_financial_tool",
+                    confidence: "deterministic",
+                    sourceURL: nil
                 ),
             ]
         )
@@ -3268,6 +3362,21 @@ fileprivate struct AIReportGuardrailResult: Encodable {
     let validator: String
     let checkedAt: String
     let notes: [String]
+    let scorecard: AIReportQualityScorecard?
+
+    init(
+        status: String,
+        validator: String,
+        checkedAt: String,
+        notes: [String],
+        scorecard: AIReportQualityScorecard? = nil
+    ) {
+        self.status = status
+        self.validator = validator
+        self.checkedAt = checkedAt
+        self.notes = notes
+        self.scorecard = scorecard
+    }
 }
 
 struct LLMReportPayload: Decodable {

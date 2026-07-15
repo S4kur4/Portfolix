@@ -1857,6 +1857,11 @@ final class PortfolioStore: ObservableObject {
         if description.contains("语言不匹配") {
             return localizedText("模型输出语言不匹配", "Model response language mismatch", language: appLanguage)
         }
+        if description.contains("证据引用不存在")
+            || description.contains("不存在的证据")
+            || description.contains("invalid evidence") {
+            return localizedText("模型引用了不存在的证据", "Model referenced unavailable evidence", language: appLanguage)
+        }
         if description.contains("字段不符合")
             || description.contains("枚举值不符合")
             || description.contains("列表数量不符合")
@@ -1922,6 +1927,15 @@ final class PortfolioStore: ObservableObject {
             return localizedText(
                 "模型未按当前界面语言返回报告。App 已自动要求模型改写语言；若仍失败，可重试或切换模型。",
                 "The model did not answer in the current interface language. The app asked it to rewrite the language automatically; if it still fails, retry or switch models.",
+                language: appLanguage
+            )
+        }
+        if description.contains("证据引用不存在")
+            || description.contains("不存在的证据")
+            || description.contains("invalid evidence") {
+            return localizedText(
+                "模型引用了本轮证据账本中不存在的项目。App 已自动要求模型删除或替换该引用；若仍失败，请分享诊断信息以便检查模型兼容性。",
+                "The model referenced an item that was not present in this run's evidence ledger. The app asked it to remove or replace the reference; if it still fails, share the diagnostic for compatibility review.",
                 language: appLanguage
             )
         }

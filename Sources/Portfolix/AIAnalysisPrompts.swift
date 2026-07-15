@@ -1,7 +1,7 @@
 import Foundation
 
 enum AIAnalysisPromptText {
-    static let reportVersion = "portfolio-agent-report.v14-stable-sections"
+    static let reportVersion = "portfolio-agent-report.v15-evidence-grounded"
     static let investmentProfileVersion = "investment-profile-radar.v3-zh-grounded"
 
     static let followUpSystem = """

@@ -2066,6 +2066,138 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
+    func aiReportRepairLoopReplacesUnknownEvidenceReference() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Bitcoin",
+            symbol: "BTC",
+            category: .crypto,
+            quantity: 1,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 90
+        )
+        let unknownEvidenceReport = """
+        {
+          "summary": "组合风险保持可观察",
+          "health_score_explanation": "本地约束用于解释风险边界",
+          "risk_items": [{
+            "severity": "warning",
+            "category": "risk_profile",
+            "title": "复核风险约束",
+            "evidence": "组合风险约束需要继续观察",
+            "impact": "应结合个人承受能力判断",
+            "related_refs": [],
+            "evidence_refs": ["local.not_real"]
+          }],
+          "asset_alerts": [],
+          "rebalance_actions": [],
+          "questions_to_consider": ["当前持仓是否仍符合风险偏好"],
+          "data_quality_notes": [],
+          "limitations": ["仅基于当前数据"]
+        }
+        """
+        let repairedReport = unknownEvidenceReport.replacingOccurrences(
+            of: "local.not_real",
+            with: "local.constraints.fit_score"
+        )
+        let llm = MockLLMCompleter(responses: [unknownEvidenceReport, repairedReport])
+        let progressRecorder = AIAnalysisProgressRecorder()
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: MockTavilySearcher(),
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key"])
+        )
+
+        let result = try await agent.generateReportResult(
+            positions: store.positions,
+            storeContext: makeAIContext(from: store),
+            llmConfiguration: AIProviderConfiguration.default,
+            searchConfiguration: .default,
+            trigger: .manual,
+            progress: { progress in
+                await progressRecorder.record(progress)
+            }
+        )
+
+        let prompts = await llm.userPrompts()
+        #expect(await llm.requestCount() == 2)
+        #expect(result.artifacts.repairedReportJSON?.contains("local.constraints.fit_score") == true)
+        #expect(result.report.riskItems.first?.evidenceRefs == ["local.constraints.fit_score"])
+        #expect(result.artifacts.guardrailResultJSON.contains("report-quality-scorecard.v1"))
+        #expect(result.artifacts.guardrailResultJSON.contains("evidence_reference_validation_passed"))
+        #expect(prompts.last?.contains("local.not_real") == true)
+        #expect(await progressRecorder.stageIDs().contains("repairing_report"))
+    }
+
+    @MainActor
+    @Test
+    func aiReportAttributorAddsDeterministicEvidenceAndQualityScore() throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            quantity: 10,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 120
+        )
+        let input = AIAnalysisAgent.makeInput(
+            positions: store.positions,
+            context: makeAIContext(from: store),
+            configuration: .default,
+            trigger: .manual,
+            generatedAt: .now
+        )
+        let ledger = AIEvidenceLedgerBuilder.build(
+            localResults: AILocalFinancialToolExecutor.baselineResults(input: input),
+            webResults: []
+        )
+        let positionRef = try #require(input.metrics.positions.first?.positionRef)
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptVersion.report,
+            riskProfileVersion: 1,
+            summary: "组合集中度需要继续观察",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [
+                AIReportRiskItem(
+                    severity: "warning",
+                    category: "concentration",
+                    title: "复核集中度",
+                    evidence: "最大持仓占比较高",
+                    impact: "组合波动可能更集中",
+                    relatedRefs: [positionRef]
+                ),
+            ],
+            assetAlerts: [],
+            questionsToConsider: ["是否需要分散持仓"],
+            dataQualityNotes: [],
+            limitations: ["仅基于当前持仓"],
+            sources: []
+        )
+
+        let attribution = AIReportEvidenceAttributor.attribute(report: report, input: input, ledger: ledger)
+        let attributedRefs = try #require(attribution.report.riskItems.first?.evidenceRefs)
+        let inputJSON = try AIAnalysisSchemaValidator.encodedInputJSON(input)
+        let scorecard = AIReportQualityEvaluator.evaluate(
+            report: attribution.report,
+            inputJSON: inputJSON,
+            ledger: ledger
+        )
+
+        #expect(attributedRefs.contains { $0.contains("concentration") })
+        #expect(attribution.notes == ["deterministic_evidence_attribution_count:1"])
+        #expect(scorecard.claimCount == 1)
+        #expect(scorecard.citedClaimCount == 1)
+        #expect(scorecard.evidenceCoveragePct == 100)
+    }
+
+    @MainActor
+    @Test
     func aiHarnessIncludesCompleteHoldingAndPerformanceWindowsInInput() async throws {
         let store = try makeStore()
         try store.addPosition(
@@ -2218,7 +2350,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v14-stable-sections")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v15-evidence-grounded")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
