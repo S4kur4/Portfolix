@@ -284,20 +284,6 @@ private struct AIFollowUpPositionIdentity: Encodable {
     }
 }
 
-private struct AIFollowUpConversationEntry: Encodable {
-    let kind: String
-    let createdAt: Date
-    let text: String?
-    let report: AIAnalysisReport?
-
-    enum CodingKeys: String, CodingKey {
-        case kind
-        case createdAt = "created_at"
-        case text
-        case report
-    }
-}
-
 struct AIAnalysisAgent: Sendable {
     fileprivate static let toolLogger = Logger(
         subsystem: "app.portfolix.mac",
@@ -392,7 +378,11 @@ struct AIAnalysisAgent: Sendable {
         let responseLanguage = AIResponseLanguage.detecting(from: normalizedQuestion)
         let reportJSON = String(data: try Self.encoder.encode(report), encoding: .utf8) ?? "{}"
         let artifactSummary = artifacts.map(Self.followUpArtifactSummary) ?? "没有可用的持久化审计摘要。"
-        let conversationHistoryJSON = Self.followUpConversationHistoryJSON(chatHistory)
+        let conversationHistoryJSON = Self.followUpConversationHistoryJSON(
+            chatHistory,
+            excludingCurrentQuestion: normalizedQuestion,
+            latestReportID: report.id
+        )
         let portfolioContextJSON = Self.followUpPortfolioContextJSON(portfolioContext)
         var searchMode = "disabled"
         var toolCallCount = 0
@@ -719,18 +709,18 @@ struct AIAnalysisAgent: Sendable {
         return json
     }
 
-    private static func followUpConversationHistoryJSON(_ items: [AIReportChatItem]) -> String {
-        let entries = items
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { item in
-                AIFollowUpConversationEntry(
-                    kind: item.kind.rawValue,
-                    createdAt: item.createdAt,
-                    text: item.text,
-                    report: item.kind == .report ? item.report : nil
-                )
-            }
-        return String(data: (try? Self.encoder.encode(entries)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
+    private static func followUpConversationHistoryJSON(
+        _ items: [AIReportChatItem],
+        excludingCurrentQuestion question: String,
+        latestReportID: UUID
+    ) -> String {
+        AIFollowUpContextOrchestrator.encodedJSON(
+            AIFollowUpContextOrchestrator.make(
+                question: question,
+                items: items,
+                excludingItemIDs: [latestReportID]
+            )
+        )
     }
 
     private static func followUpRequiresSearch(_ question: String) -> Bool {

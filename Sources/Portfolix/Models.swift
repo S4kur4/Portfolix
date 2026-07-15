@@ -1401,12 +1401,13 @@ final class PortfolioStore: ObservableObject {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp else { return }
         pruneAIAnalysisChatHistory()
+        let priorChatHistory = aiAnalysisChatItems
         appendAIAnalysisChatItem(.user(trimmed))
         isAnsweringAIAnalysisFollowUp = true
         aiAnalysisFollowUpProgress = .analyzing
 
         Task {
-            let answer = await answerAIAnalysisFollowUp(trimmed)
+            let answer = await answerAIAnalysisFollowUp(trimmed, chatHistory: priorChatHistory)
             appendAIAnalysisChatItem(
                 .assistant(answer.text, followUpRunSnapshot: answer.runSnapshot)
             )
@@ -1461,7 +1462,8 @@ final class PortfolioStore: ObservableObject {
     }
 
     private func answerAIAnalysisFollowUp(
-        _ question: String
+        _ question: String,
+        chatHistory: [AIReportChatItem]
     ) async -> (text: String, runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
@@ -1490,7 +1492,7 @@ final class PortfolioStore: ObservableObject {
                 question: question,
                 report: report,
                 artifacts: artifacts,
-                chatHistory: aiAnalysisChatItems,
+                chatHistory: chatHistory,
                 positions: positions,
                 portfolioContext: followUpContext,
                 llmConfiguration: aiConfiguration,

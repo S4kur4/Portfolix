@@ -3162,6 +3162,57 @@ struct PositionRepositoryTests {
         #expect(results.allSatisfy { $0.passed })
     }
 
+    @Test
+    func aiFollowUpContextSelectsRecentAndRelevantHistoryWithoutDuplicatingQuestion() {
+        let baseDate = Date(timeIntervalSince1970: 1_750_000_000)
+        let question = "请继续分析 AAPL 的风险"
+        var history = [
+            AIReportChatItem.user("之前讨论过 AAPL 的估值和集中度", createdAt: baseDate),
+            AIReportChatItem.assistant("另一段较早的无关对话", createdAt: baseDate.addingTimeInterval(1)),
+            AIReportChatItem.user("我曾经关注过现金比例", createdAt: baseDate.addingTimeInterval(2)),
+        ]
+        for index in 0..<12 {
+            history.append(
+                .assistant(
+                    "近期对话 \(index)",
+                    createdAt: baseDate.addingTimeInterval(TimeInterval(index + 3))
+                )
+            )
+        }
+        history.append(.user(question, createdAt: baseDate.addingTimeInterval(20)))
+
+        let context = AIFollowUpContextOrchestrator.make(question: question, items: history)
+        let allIncluded = context.relevantEarlierHistory + context.recentHistory
+
+        #expect(context.sourceItemCount == history.count - 1)
+        #expect(context.recentHistory.count == 10)
+        #expect(context.relevantEarlierHistory.contains { $0.content.contains("AAPL") })
+        #expect(!allIncluded.contains { $0.content == question })
+        #expect((context.earlierHistorySummary?.omittedItemCount ?? 0) > 0)
+        #expect(AIFollowUpContextOrchestrator.encodedJSON(context).utf8.count <= AIFollowUpContextOrchestrator.maximumEncodedCharacterCount)
+    }
+
+    @Test
+    func aiFollowUpContextHonorsCharacterBudgetForLongHistory() {
+        let longText = String(repeating: "这是一段用于验证上下文预算的历史消息。", count: 120)
+        let history = (0..<30).map { index in
+            AIReportChatItem.assistant(
+                "\(index) \(longText)",
+                createdAt: Date(timeIntervalSince1970: TimeInterval(1_750_000_000 + index))
+            )
+        }
+        let budget = 3_500
+
+        let context = AIFollowUpContextOrchestrator.make(
+            question: "请总结最近的讨论",
+            items: history,
+            characterBudget: budget
+        )
+
+        #expect(!context.recentHistory.isEmpty)
+        #expect(AIFollowUpContextOrchestrator.encodedJSON(context).utf8.count <= budget)
+    }
+
     @MainActor
     @Test
     func aiFollowUpIncludesSavedConversationHistory() async throws {
@@ -3229,7 +3280,11 @@ struct PositionRepositoryTests {
         #expect(await llm.userPrompts().last?.contains("<response_language>\nzh-CN\n</response_language>") == true)
         #expect(await llm.userPrompts().last?.contains("<conversation_history>") == true)
         #expect(await llm.userPrompts().last?.contains("我刚刚已经卖出一半半导体基金仓位") == true)
-        #expect(await llm.userPrompts().last?.contains(#""kind":"report""#) == true)
+        let followUpPrompt = try #require(await llm.userPrompts().last)
+        #expect(followUpPrompt.components(separatedBy: question).count - 1 == 1)
+        #expect(followUpPrompt.contains(#""schema_version":"follow-up-context.v1""#))
+        #expect(!followUpPrompt.contains(#""kind":"report""#))
+        #expect(followUpPrompt.contains("组合风险保持可观察"))
         #expect(await llm.outputTokenLimits() == [LLMOutputTokenPolicy.followUp])
     }
 
