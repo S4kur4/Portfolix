@@ -33,16 +33,17 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/portfolix-sparkle-appcast.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-cp "$ARCHIVE_PATH" "$WORK_DIR/"
+cp -p "$ARCHIVE_PATH" "$WORK_DIR/"
 for extension in html md txt; do
   notes_path="$RELEASE_DIR/$ARCHIVE_BASENAME.$extension"
   if [[ -f "$notes_path" ]]; then
-    cp "$notes_path" "$WORK_DIR/"
+    cp -p "$notes_path" "$WORK_DIR/"
   fi
 done
 
 "$SPARKLE_BIN" \
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+  --embed-release-notes \
   --link "https://github.com/S4kur4/Portfolix/releases" \
   -o "$WORK_DIR/appcast.xml" \
   "$WORK_DIR"
