@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR=${0:A:h:h}
 BUILD_DIR="$ROOT_DIR/.build"
-APP_VERSION="0.1.3"
-BUILD_NUMBER="11"
+APP_VERSION="0.1.4"
+BUILD_NUMBER="12"
 COPYRIGHT_TEXT="Copyright © 2026 S4kur4. All rights reserved."
 SPARKLE_FEED_URL="${PORTFOLIX_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/S4kur4/Portfolix/main/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${PORTFOLIX_SPARKLE_PUBLIC_ED_KEY:-BX7U6Nmwk+IBB5lluFk8rJ3KFopJfeYJS7DFOR+wqZM=}"

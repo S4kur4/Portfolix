@@ -56,11 +56,11 @@ private struct SidebarVersion: View {
     @EnvironmentObject private var sparkleUpdater: PortfolixSparkleUpdater
 
     private var version: String {
-        normalizedBundleValue(for: "CFBundleShortVersionString") ?? "0.1.3"
+        normalizedBundleValue(for: "CFBundleShortVersionString") ?? "0.1.4"
     }
 
     private var build: String {
-        normalizedBundleValue(for: "CFBundleVersion") ?? "9"
+        normalizedBundleValue(for: "CFBundleVersion") ?? "12"
     }
 
     var body: some View {
