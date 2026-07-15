@@ -606,6 +606,24 @@ final class PositionRepository {
                 try bind(artifacts.guardrailResultJSON, to: 8, in: artifactsStatement)
                 try stepDone(artifactsStatement)
 
+                if let trace = artifacts.trace {
+                    let traceStatement = try prepare(
+                        """
+                        INSERT INTO ai_agent_run_traces (run_id, trace_json, created_at)
+                        VALUES (?, ?, ?)
+                        """
+                    )
+                    defer { sqlite3_finalize(traceStatement) }
+                    let traceJSON = String(
+                        data: try aiArtifactEncoder.encode(trace),
+                        encoding: .utf8
+                    ) ?? "{}"
+                    try bind(run.id.uuidString, to: 1, in: traceStatement)
+                    try bind(traceJSON, to: 2, in: traceStatement)
+                    try bind(Self.timestamp(), to: 3, in: traceStatement)
+                    try stepDone(traceStatement)
+                }
+
                 let guardrailStatement = try prepare(
                     """
                     INSERT INTO ai_guardrail_results (
@@ -717,14 +735,15 @@ final class PositionRepository {
             rawReportJSON: text(at: 3, in: statement),
             repairedReportJSON: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : text(at: 4, in: statement),
             finalReportJSON: text(at: 5, in: statement),
-            guardrailResultJSON: text(at: 6, in: statement)
+            guardrailResultJSON: text(at: 6, in: statement),
+            trace: try fetchAIAgentRunTrace(runID: runID)
         )
     }
 
     func fetchLatestAIAnalysisArtifacts() throws -> AIAnalysisArtifactBundle? {
         let statement = try prepare(
             """
-            SELECT artifacts.input_json, artifacts.research_results_json,
+            SELECT runs.id, artifacts.input_json, artifacts.research_results_json,
                    artifacts.research_brief_json, artifacts.raw_report_json,
                    artifacts.repaired_report_json, artifacts.final_report_json,
                    artifacts.guardrail_result_json
@@ -738,15 +757,39 @@ final class PositionRepository {
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return nil
         }
+        guard let runID = UUID(uuidString: text(at: 0, in: statement)) else {
+            throw PositionRepositoryError.invalidStoredData("无法解析 AI 运行 ID")
+        }
         return AIAnalysisArtifactBundle(
-            inputJSON: text(at: 0, in: statement),
-            toolResultsJSON: text(at: 1, in: statement),
-            toolPlanJSON: text(at: 2, in: statement),
-            rawReportJSON: text(at: 3, in: statement),
-            repairedReportJSON: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : text(at: 4, in: statement),
-            finalReportJSON: text(at: 5, in: statement),
-            guardrailResultJSON: text(at: 6, in: statement)
+            inputJSON: text(at: 1, in: statement),
+            toolResultsJSON: text(at: 2, in: statement),
+            toolPlanJSON: text(at: 3, in: statement),
+            rawReportJSON: text(at: 4, in: statement),
+            repairedReportJSON: sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : text(at: 5, in: statement),
+            finalReportJSON: text(at: 6, in: statement),
+            guardrailResultJSON: text(at: 7, in: statement),
+            trace: try fetchAIAgentRunTrace(runID: runID)
         )
+    }
+
+    private func fetchAIAgentRunTrace(runID: UUID) throws -> AIAgentRunTrace? {
+        let statement = try prepare(
+            """
+            SELECT trace_json
+            FROM ai_agent_run_traces
+            WHERE run_id = ?
+            LIMIT 1
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(runID.uuidString, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return nil
+        }
+        guard let data = text(at: 0, in: statement).data(using: .utf8) else {
+            throw PositionRepositoryError.invalidStoredData("无法解析 Agent 运行轨迹")
+        }
+        return try aiArtifactDecoder.decode(AIAgentRunTrace.self, from: data)
     }
 
     func upsertAIAnalysisChatItem(_ item: AIReportChatItem) throws {
@@ -1089,6 +1132,15 @@ final class PositionRepository {
                 risk_profile_version INTEGER NOT NULL,
                 generated_at TEXT NOT NULL,
                 report_json TEXT NOT NULL
+            )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_agent_run_traces (
+                run_id TEXT PRIMARY KEY NOT NULL REFERENCES ai_analysis_runs(id) ON DELETE CASCADE,
+                trace_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
             """
         )

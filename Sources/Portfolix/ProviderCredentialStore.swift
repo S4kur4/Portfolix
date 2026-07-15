@@ -231,9 +231,11 @@ struct AIProviderConfiguration: Equatable {
 }
 
 enum LLMRequestTimeoutPolicy {
-    static let standard: TimeInterval = 90
+    static let standard = AIAgentExecutionBudget.production.planningSeconds
     static let validationProbe: TimeInterval = 30
-    static let reportGeneration: TimeInterval = 300
+    static let reportGeneration = AIAgentExecutionBudget.production.reportSeconds
+    static let reportRepair = AIAgentExecutionBudget.production.repairSeconds
+    static let followUp = AIAgentExecutionBudget.production.followUpSeconds
 }
 
 enum LLMOutputTokenPolicy {

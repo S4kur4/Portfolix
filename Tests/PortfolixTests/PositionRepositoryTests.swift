@@ -1668,6 +1668,19 @@ struct PositionRepositoryTests {
         #expect(!result.artifacts.inputJSON.contains("research_results"))
         #expect(result.artifacts.toolResultsJSON == "[]")
         #expect(result.artifacts.guardrailResultJSON.contains("AIReportGuardrailNode"))
+        let trace = try #require(result.artifacts.trace)
+        #expect(trace.schemaVersion == "agent-trace.v1")
+        #expect(trace.outcome == "passed")
+        #expect(trace.events.map(\.stageID) == [
+            "preflight",
+            "building_input",
+            "planning_tool_calls",
+            "generating_report",
+            "validating_report",
+            "preparing_artifacts",
+        ])
+        #expect(trace.events.allSatisfy { $0.durationMilliseconds >= 0 })
+        #expect(trace.events.first { $0.stageID == "building_input" }?.metadata["position_count"] == "1")
         #expect(await llm.requestCount() == 1)
         #expect(await llm.requestTimeouts() == [LLMRequestTimeoutPolicy.reportGeneration])
         #expect(await llm.outputTokenLimits() == [LLMOutputTokenPolicy.reportGeneration])
@@ -2071,7 +2084,9 @@ struct PositionRepositoryTests {
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("320 个 Unicode 字符"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("output_language = en"))
         #expect(AIAnalysisPromptText.followUpSystem.contains("response_language"))
-        #expect(LLMRequestTimeoutPolicy.reportGeneration == 300)
+        #expect(LLMRequestTimeoutPolicy.reportGeneration == AIAgentExecutionBudget.production.reportSeconds)
+        #expect(LLMRequestTimeoutPolicy.reportRepair < LLMRequestTimeoutPolicy.reportGeneration)
+        #expect(AIAgentExecutionBudget.production.totalSeconds >= 300)
         #expect(LLMOutputTokenPolicy.followUp == 6_400)
         #expect(LLMOutputTokenPolicy.reportGeneration == 10_000)
         #expect(AIAnalysisPromptText.repairUser(rawReport: "{}", inputJSON: "{}").contains("target_report_shape"))
@@ -3615,6 +3630,27 @@ struct PositionRepositoryTests {
                 ),
             ]
         )
+        let traceStartedAt = generatedAt.addingTimeInterval(-2)
+        let trace = AIAgentRunTrace(
+            schemaVersion: "agent-trace.v1",
+            id: UUID(),
+            startedAt: traceStartedAt,
+            finishedAt: generatedAt,
+            outcome: "passed",
+            budget: .production,
+            events: [
+                AIAgentTraceEvent(
+                    sequence: 1,
+                    stageID: "preflight",
+                    kind: "harness",
+                    startedAt: traceStartedAt,
+                    finishedAt: generatedAt,
+                    durationMilliseconds: 2_000,
+                    outcome: "passed",
+                    metadata: ["position_count": "1"]
+                ),
+            ]
+        )
         let artifacts = AIAnalysisArtifactBundle(
             inputJSON: #"{"snapshot":{"snapshot_id":"test"}}"#,
             toolResultsJSON: "[]",
@@ -3622,7 +3658,8 @@ struct PositionRepositoryTests {
             rawReportJSON: #"{"summary":"组合风险保持可观察"}"#,
             repairedReportJSON: nil,
             finalReportJSON: #"{"summary":"组合风险保持可观察"}"#,
-            guardrailResultJSON: #"{"status":"passed","validator":"AIAnalysisAgent.validate"}"#
+            guardrailResultJSON: #"{"status":"passed","validator":"AIAnalysisAgent.validate"}"#,
+            trace: trace
         )
         let run = PersistedAIAnalysisRun(
             id: runID,
@@ -3652,6 +3689,8 @@ struct PositionRepositoryTests {
         #expect(persistedArtifacts.inputJSON == artifacts.inputJSON)
         #expect(persistedArtifacts.repairedReportJSON == nil)
         #expect(persistedArtifacts.guardrailResultJSON.contains("passed"))
+        #expect(persistedArtifacts.trace == trace)
+        #expect(try repository.fetchLatestAIAnalysisArtifacts()?.trace == trace)
     }
 
     @Test

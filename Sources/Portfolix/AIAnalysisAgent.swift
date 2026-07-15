@@ -34,15 +34,39 @@ struct AIAnalysisPipelineError: LocalizedError, Sendable, CustomStringConvertibl
     let stage: AIAnalysisProgress
     let underlyingDescription: String
     let partialArtifacts: AIAnalysisArtifactBundle?
+    let trace: AIAgentRunTrace?
 
     init(
         stage: AIAnalysisProgress,
         underlying: Error,
-        partialArtifacts: AIAnalysisArtifactBundle? = nil
+        partialArtifacts: AIAnalysisArtifactBundle? = nil,
+        trace: AIAgentRunTrace? = nil
     ) {
         self.stage = stage
         underlyingDescription = underlying.localizedDescription
         self.partialArtifacts = partialArtifacts
+        self.trace = trace
+    }
+
+    private init(
+        stage: AIAnalysisProgress,
+        underlyingDescription: String,
+        partialArtifacts: AIAnalysisArtifactBundle?,
+        trace: AIAgentRunTrace?
+    ) {
+        self.stage = stage
+        self.underlyingDescription = underlyingDescription
+        self.partialArtifacts = partialArtifacts
+        self.trace = trace
+    }
+
+    func attachingTrace(_ trace: AIAgentRunTrace) -> AIAnalysisPipelineError {
+        AIAnalysisPipelineError(
+            stage: stage,
+            underlyingDescription: underlyingDescription,
+            partialArtifacts: partialArtifacts?.withTrace(trace),
+            trace: trace
+        )
     }
 
     var errorDescription: String? {
@@ -54,6 +78,51 @@ struct AIAnalysisPipelineError: LocalizedError, Sendable, CustomStringConvertibl
     }
 
     var debugDescription: String { description }
+}
+
+private actor AIAgentTraceRecorder {
+    private let id = UUID()
+    private let startedAt = Date()
+    private let budget: AIAgentExecutionBudget
+    private var events: [AIAgentTraceEvent] = []
+
+    init(budget: AIAgentExecutionBudget) {
+        self.budget = budget
+    }
+
+    func record(
+        stageID: String,
+        kind: String,
+        startedAt: Date,
+        outcome: String,
+        metadata: [String: String] = [:],
+        finishedAt: Date = Date()
+    ) {
+        events.append(
+            AIAgentTraceEvent(
+                sequence: events.count + 1,
+                stageID: stageID,
+                kind: kind,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                durationMilliseconds: max(0, Int(finishedAt.timeIntervalSince(startedAt) * 1_000)),
+                outcome: outcome,
+                metadata: metadata
+            )
+        )
+    }
+
+    func snapshot(outcome: String, finishedAt: Date = Date()) -> AIAgentRunTrace {
+        AIAgentRunTrace(
+            schemaVersion: "agent-trace.v1",
+            id: id,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            outcome: outcome,
+            budget: budget,
+            events: events
+        )
+    }
 }
 
 enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
@@ -399,7 +468,9 @@ struct AIAnalysisAgent: Sendable {
 
         await progress?(.composing)
         let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
-        let followUpConfiguration = llmConfiguration.withMaxOutputTokens(LLMOutputTokenPolicy.followUp)
+        let followUpConfiguration = llmConfiguration
+            .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
+            .withMaxOutputTokens(LLMOutputTokenPolicy.followUp)
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.followUpSystem,
             userPrompt: AIAnalysisPromptText.followUpUser(
@@ -485,7 +556,7 @@ struct AIAnalysisAgent: Sendable {
                 question: question,
                 responseLanguage: responseLanguage
             ),
-            configuration: configuration,
+            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
             apiKey: apiKey
         )
         guard let validated = try? Self.validatedFollowUpPayload(repaired, responseLanguage: responseLanguage) else {
@@ -1016,7 +1087,7 @@ struct AIAnalysisAgent: Sendable {
                 repairAttempt: repairAttempt,
                 maxAttempts: maxAttempts
             ),
-            configuration: configuration,
+            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
             apiKey: apiKey
         )
     }
@@ -1918,15 +1989,51 @@ struct AIAnalysisHarness {
     let agent: AIAnalysisAgent
 
     func execute(request: AIAnalysisHarnessRequest) async throws -> AIAnalysisAgentResult {
+        let traceRecorder = AIAgentTraceRecorder(budget: .production)
+        do {
+            return try await executePipeline(request: request, traceRecorder: traceRecorder)
+        } catch let error as AIAnalysisPipelineError {
+            throw error.attachingTrace(await traceRecorder.snapshot(outcome: "failed"))
+        }
+    }
+
+    private func executePipeline(
+        request: AIAnalysisHarnessRequest,
+        traceRecorder: AIAgentTraceRecorder
+    ) async throws -> AIAnalysisAgentResult {
         await request.progress?(.preflight)
-        let preflight = try AIPreflightNode(
-            credentialStore: agent.credentialStore
-        ).run(
-            positions: request.positions,
-            llmConfiguration: request.llmConfiguration,
-            searchConfiguration: request.searchConfiguration
-        )
+        let preflightStartedAt = Date()
+        let preflight: AIPreflightOutput
+        do {
+            preflight = try AIPreflightNode(
+                credentialStore: agent.credentialStore
+            ).run(
+                positions: request.positions,
+                llmConfiguration: request.llmConfiguration,
+                searchConfiguration: request.searchConfiguration
+            )
+            await traceRecorder.record(
+                stageID: "preflight",
+                kind: "harness",
+                startedAt: preflightStartedAt,
+                outcome: "passed",
+                metadata: [
+                    "analysis_mode": preflight.analysisMode,
+                    "position_count": String(request.positions.count),
+                ]
+            )
+        } catch {
+            await traceRecorder.record(
+                stageID: "preflight",
+                kind: "harness",
+                startedAt: preflightStartedAt,
+                outcome: "failed",
+                metadata: ["error_type": String(describing: type(of: error))]
+            )
+            throw error
+        }
         await request.progress?(.buildingInput)
+        let inputStartedAt = Date()
         let input = AIAnalysisInputBuilderNode.build(
             positions: request.positions,
             context: request.storeContext,
@@ -1940,7 +2047,24 @@ struct AIAnalysisHarness {
         let inputJSON: String
         do {
             inputJSON = try AIAnalysisSchemaValidator.encodedInputJSON(input)
+            await traceRecorder.record(
+                stageID: "building_input",
+                kind: "harness",
+                startedAt: inputStartedAt,
+                outcome: "passed",
+                metadata: [
+                    "input_characters": String(inputJSON.count),
+                    "position_count": String(input.metrics.positions.count),
+                ]
+            )
         } catch {
+            await traceRecorder.record(
+                stageID: "building_input",
+                kind: "harness",
+                startedAt: inputStartedAt,
+                outcome: "failed",
+                metadata: ["error_type": String(describing: type(of: error))]
+            )
             throw AIAnalysisPipelineError(stage: .buildingInput, underlying: error)
         }
 
@@ -1948,6 +2072,7 @@ struct AIAnalysisHarness {
         var toolResults: [AIWebSearchToolResult] = []
         if preflight.usesConnectedSearch, let searchKey = preflight.searchKey {
             await request.progress?(.planningToolCalls)
+            let planningStartedAt = Date()
             do {
                 toolPlan = try await agent.makeToolPlan(
                     input: input,
@@ -1956,6 +2081,16 @@ struct AIAnalysisHarness {
                 )
                 AIAnalysisAgent.toolLogger.info(
                     "Report tool plan accepted with \(toolPlan.toolCalls.count, privacy: .public) call(s)"
+                )
+                await traceRecorder.record(
+                    stageID: "planning_tool_calls",
+                    kind: "model",
+                    startedAt: planningStartedAt,
+                    outcome: "passed",
+                    metadata: [
+                        "model": request.llmConfiguration.model,
+                        "tool_call_count": String(toolPlan.toolCalls.count),
+                    ]
                 )
             } catch {
                 toolPlan = AIWebSearchToolPlan(
@@ -1966,7 +2101,18 @@ struct AIAnalysisHarness {
                 AIAnalysisAgent.toolLogger.error(
                     "Report tool plan rejected or unavailable: \(String(describing: type(of: error)), privacy: .public)"
                 )
+                await traceRecorder.record(
+                    stageID: "planning_tool_calls",
+                    kind: "model",
+                    startedAt: planningStartedAt,
+                    outcome: "degraded",
+                    metadata: [
+                        "error_type": String(describing: type(of: error)),
+                        "tool_call_count": "0",
+                    ]
+                )
             }
+            let searchStartedAt = Date()
             toolResults = await agent.executeToolCalls(
                 toolPlan,
                 positions: request.positions,
@@ -1983,19 +2129,68 @@ struct AIAnalysisHarness {
             AIAnalysisAgent.toolLogger.info(
                 "Report web search completed with \(toolResults.count, privacy: .public) result(s)"
             )
+            let sourceCount = toolResults.reduce(0) { $0 + $1.sources.count }
+            let failedCount = toolResults.filter { $0.status == "failed" }.count
+            await traceRecorder.record(
+                stageID: "executing_tools",
+                kind: "tool",
+                startedAt: searchStartedAt,
+                outcome: failedCount == 0 ? "passed" : "degraded",
+                metadata: [
+                    "tool_call_count": String(toolResults.count),
+                    "source_count": String(sourceCount),
+                    "failed_tool_count": String(failedCount),
+                ]
+            )
+        } else {
+            let skippedAt = Date()
+            await traceRecorder.record(
+                stageID: "planning_tool_calls",
+                kind: "model",
+                startedAt: skippedAt,
+                outcome: "skipped",
+                metadata: ["reason": "connected_search_disabled"]
+            )
         }
         let searchedAt = toolResults.map(\.searchedAt).max() ?? Date()
         let toolResultsJSON = String(data: try AIAnalysisAgent.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
         let toolPlanJSON = String(data: try AIAnalysisAgent.encoder.encode(toolPlan), encoding: .utf8) ?? #"{"tool_calls":[]}"#
 
         await request.progress?(.generatingReport(model: request.llmConfiguration.model))
-        let reportPayloadResult = try await AIReportWriterNode(agent: agent).write(
-            input: input,
-            toolResults: toolResults,
-            configuration: request.llmConfiguration,
-            apiKey: preflight.llmKey,
-            progress: request.progress
-        )
+        let reportStartedAt = Date()
+        let reportPayloadResult: AIReportPayloadResult
+        do {
+            reportPayloadResult = try await AIReportWriterNode(agent: agent).write(
+                input: input,
+                toolResults: toolResults,
+                configuration: request.llmConfiguration,
+                apiKey: preflight.llmKey,
+                progress: request.progress
+            )
+            await traceRecorder.record(
+                stageID: "generating_report",
+                kind: "model",
+                startedAt: reportStartedAt,
+                outcome: "passed",
+                metadata: [
+                    "model": request.llmConfiguration.model,
+                    "raw_output_characters": String(reportPayloadResult.rawReport.count),
+                    "repair_used": reportPayloadResult.repairedReport == nil ? "false" : "true",
+                ]
+            )
+        } catch {
+            await traceRecorder.record(
+                stageID: "generating_report",
+                kind: "model",
+                startedAt: reportStartedAt,
+                outcome: "failed",
+                metadata: [
+                    "model": request.llmConfiguration.model,
+                    "error_type": String(describing: type(of: error)),
+                ]
+            )
+            throw error
+        }
         let generatedReport = AIAnalysisAgent.report(
             from: reportPayloadResult.payload,
             toolResults: toolResults,
@@ -2008,10 +2203,18 @@ struct AIAnalysisHarness {
         let normalization = AIReportPolicyNormalizer.normalize(report: generatedReport, input: input)
         let report = normalization.report
         await request.progress?(.validatingReport)
+        let validationStartedAt = Date()
         let finalReportJSON: String
         do {
             finalReportJSON = String(data: try AIAnalysisAgent.encoder.encode(report), encoding: .utf8) ?? "{}"
         } catch {
+            await traceRecorder.record(
+                stageID: "validating_report",
+                kind: "guardrail",
+                startedAt: validationStartedAt,
+                outcome: "failed",
+                metadata: ["error_type": String(describing: type(of: error))]
+            )
             throw AIAnalysisPipelineError(stage: .validatingReport, underlying: error)
         }
 
@@ -2023,7 +2226,24 @@ struct AIAnalysisHarness {
                 inputJSON: inputJSON,
                 normalizationNotes: normalization.notes
             )
+            await traceRecorder.record(
+                stageID: "validating_report",
+                kind: "guardrail",
+                startedAt: validationStartedAt,
+                outcome: "passed",
+                metadata: [
+                    "final_report_characters": String(finalReportJSON.count),
+                    "normalization_note_count": String(normalization.notes.count),
+                ]
+            )
         } catch {
+            await traceRecorder.record(
+                stageID: "validating_report",
+                kind: "guardrail",
+                startedAt: validationStartedAt,
+                outcome: "failed",
+                metadata: ["error_type": String(describing: type(of: error))]
+            )
             let rejectedGuardrailJSON = String(
                 data: try AIAnalysisAgent.encoder.encode(
                     AIReportGuardrailResult(
@@ -2041,7 +2261,8 @@ struct AIAnalysisHarness {
                 toolPlanJSON: toolPlanJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
-                guardrailResultJSON: rejectedGuardrailJSON
+                guardrailResultJSON: rejectedGuardrailJSON,
+                trace: await traceRecorder.snapshot(outcome: "failed")
             )
             throw AIAnalysisPipelineError(
                 stage: .validatingReport,
@@ -2051,6 +2272,18 @@ struct AIAnalysisHarness {
         }
 
         await request.progress?(.preparingArtifacts)
+        let artifactStartedAt = Date()
+        await traceRecorder.record(
+            stageID: "preparing_artifacts",
+            kind: "harness",
+            startedAt: artifactStartedAt,
+            outcome: "passed",
+            metadata: [
+                "tool_result_count": String(toolResults.count),
+                "source_count": String(toolResults.reduce(0) { $0 + $1.sources.count }),
+            ]
+        )
+        let trace = await traceRecorder.snapshot(outcome: "passed")
 
         return AIAnalysisAgentResult(
             report: report,
@@ -2060,7 +2293,8 @@ struct AIAnalysisHarness {
                 toolPlanJSON: toolPlanJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
-                guardrailResultJSON: guardrailResultJSON
+                guardrailResultJSON: guardrailResultJSON,
+                trace: trace
             )
         )
     }
@@ -2376,7 +2610,8 @@ private enum AIArtifactWriterNode {
         toolPlanJSON: String,
         reportPayloadResult: AIReportPayloadResult,
         finalReportJSON: String,
-        guardrailResultJSON: String
+        guardrailResultJSON: String,
+        trace: AIAgentRunTrace? = nil
     ) -> AIAnalysisArtifactBundle {
         AIAnalysisArtifactBundle(
             inputJSON: inputJSON,
@@ -2385,7 +2620,8 @@ private enum AIArtifactWriterNode {
             rawReportJSON: reportPayloadResult.rawReport,
             repairedReportJSON: reportPayloadResult.repairedReport,
             finalReportJSON: finalReportJSON,
-            guardrailResultJSON: guardrailResultJSON
+            guardrailResultJSON: guardrailResultJSON,
+            trace: trace
         )
     }
 }

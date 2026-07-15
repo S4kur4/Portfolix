@@ -794,7 +794,9 @@ final class PortfolioStore: ObservableObject {
     private static let latestAIReportDefaultsKey = "portfolix.ai.latestReport"
     private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
-    private static let aiAnalysisGenerationTimeoutNanoseconds: UInt64 = 420_000_000_000
+    private static let aiAnalysisGenerationTimeoutNanoseconds = UInt64(
+        AIAgentExecutionBudget.production.totalSeconds * 1_000_000_000
+    )
     private static var loginItemIdentifier: String {
         let mainBundleIdentifier = Bundle.main.bundleIdentifier ?? "app.portfolix.mac"
         return "\(mainBundleIdentifier).PriceUpdater"
@@ -1721,7 +1723,8 @@ final class PortfolioStore: ObservableObject {
             outputLanguage: appLanguage.aiResponseLanguage
         )
         let finishedAt = Date()
-        let artifacts = (error as? AIAnalysisPipelineError)?.partialArtifacts
+        let pipelineError = error as? AIAnalysisPipelineError
+        let artifacts = (pipelineError?.partialArtifacts
             ?? fallbackAIArtifacts(
                 report: fallback,
                 trigger: trigger,
@@ -1729,7 +1732,7 @@ final class PortfolioStore: ObservableObject {
                 reason: errorDescription,
                 previousReport: aiAnalysisReport,
                 context: context
-            )
+            )).withTrace(pipelineError?.trace)
         aiAnalysisReport = fallback
         persistAIAnalysisReport(fallback)
         let runID = persistAIAnalysisRun(

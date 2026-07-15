@@ -195,6 +195,49 @@ struct AIAnalysisRun: Equatable {
     var diagnostic: AIAnalysisDiagnostic?
 }
 
+struct AIAgentExecutionBudget: Codable, Equatable, Sendable {
+    let totalSeconds: TimeInterval
+    let planningSeconds: TimeInterval
+    let searchSecondsPerCall: TimeInterval
+    let reportSeconds: TimeInterval
+    let repairSeconds: TimeInterval
+    let followUpSeconds: TimeInterval
+    let maxLoopTurns: Int
+    let maxToolCalls: Int
+
+    static let production = AIAgentExecutionBudget(
+        totalSeconds: 420,
+        planningSeconds: 60,
+        searchSecondsPerCall: 25,
+        reportSeconds: 180,
+        repairSeconds: 60,
+        followUpSeconds: 150,
+        maxLoopTurns: 4,
+        maxToolCalls: 6
+    )
+}
+
+struct AIAgentTraceEvent: Codable, Equatable, Sendable {
+    let sequence: Int
+    let stageID: String
+    let kind: String
+    let startedAt: Date
+    let finishedAt: Date
+    let durationMilliseconds: Int
+    let outcome: String
+    let metadata: [String: String]
+}
+
+struct AIAgentRunTrace: Codable, Equatable, Sendable {
+    let schemaVersion: String
+    let id: UUID
+    let startedAt: Date
+    let finishedAt: Date
+    let outcome: String
+    let budget: AIAgentExecutionBudget
+    let events: [AIAgentTraceEvent]
+}
+
 struct AIAnalysisDiagnostic: Codable, Identifiable, Equatable {
     let id: UUID
     let runID: UUID?
@@ -423,6 +466,40 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
     let repairedReportJSON: String?
     let finalReportJSON: String
     let guardrailResultJSON: String
+    let trace: AIAgentRunTrace?
+
+    init(
+        inputJSON: String,
+        toolResultsJSON: String,
+        toolPlanJSON: String,
+        rawReportJSON: String,
+        repairedReportJSON: String?,
+        finalReportJSON: String,
+        guardrailResultJSON: String,
+        trace: AIAgentRunTrace? = nil
+    ) {
+        self.inputJSON = inputJSON
+        self.toolResultsJSON = toolResultsJSON
+        self.toolPlanJSON = toolPlanJSON
+        self.rawReportJSON = rawReportJSON
+        self.repairedReportJSON = repairedReportJSON
+        self.finalReportJSON = finalReportJSON
+        self.guardrailResultJSON = guardrailResultJSON
+        self.trace = trace
+    }
+
+    func withTrace(_ trace: AIAgentRunTrace?) -> AIAnalysisArtifactBundle {
+        AIAnalysisArtifactBundle(
+            inputJSON: inputJSON,
+            toolResultsJSON: toolResultsJSON,
+            toolPlanJSON: toolPlanJSON,
+            rawReportJSON: rawReportJSON,
+            repairedReportJSON: repairedReportJSON,
+            finalReportJSON: finalReportJSON,
+            guardrailResultJSON: guardrailResultJSON,
+            trace: trace
+        )
+    }
 }
 
 struct AIAnalysisFollowUpResult: Equatable {
