@@ -658,6 +658,7 @@ struct AIAnalysisAgent: Sendable {
     private static func followUpArtifactSummary(_ artifacts: AIAnalysisArtifactBundle) -> String {
         [
             "组合分析数据摘要：\(String(artifacts.inputJSON.prefix(1200)))",
+            "本地金融证据摘要：\(String((artifacts.evidenceLedgerJSON ?? "{}").prefix(1200)))",
             "联网资料摘要：\(String(artifacts.toolResultsJSON.prefix(800)))",
             "安全校验摘要：\(String(artifacts.guardrailResultJSON.prefix(500)))",
         ].joined(separator: "\n")
@@ -989,12 +990,14 @@ struct AIAnalysisAgent: Sendable {
     fileprivate func makeReportPayload(
         input: AIAnalysisInput,
         toolResults: [AIWebSearchToolResult],
+        evidenceLedger: AIEvidenceLedger,
         configuration: AIProviderConfiguration,
         apiKey: String,
         progress: AIAnalysisProgressHandler? = nil
     ) async throws -> AIReportPayloadResult {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
         let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
+        let evidenceLedgerJSON = String(data: try Self.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
         let reportConfiguration = configuration
             .withRequestTimeout(LLMRequestTimeoutPolicy.reportGeneration)
             .withMaxOutputTokens(LLMOutputTokenPolicy.reportGeneration)
@@ -1006,7 +1009,8 @@ struct AIAnalysisAgent: Sendable {
                 systemPrompt: AIAnalysisPromptText.reportSystem,
                 userPrompt: AIAnalysisPromptText.reportUser(
                     inputJSON: inputJSON,
-                    toolResultsJSON: toolResultsJSON
+                    toolResultsJSON: toolResultsJSON,
+                    evidenceLedgerJSON: evidenceLedgerJSON
                 ),
                 configuration: reportConfiguration,
                 apiKey: apiKey
@@ -1036,6 +1040,7 @@ struct AIAnalysisAgent: Sendable {
                         rawReport: candidate,
                         inputJSON: inputJSON,
                         toolResultsJSON: toolResultsJSON,
+                        evidenceLedgerJSON: evidenceLedgerJSON,
                         validationIssue: validationError.repairInstruction,
                         repairAttempt: attempt,
                         maxAttempts: AIReportRepairPolicy.maxRepairAttempts,
@@ -1071,6 +1076,7 @@ struct AIAnalysisAgent: Sendable {
         rawReport: String,
         inputJSON: String,
         toolResultsJSON: String,
+        evidenceLedgerJSON: String,
         validationIssue: String = "模型返回未通过结构校验，请按目标结构修复。",
         repairAttempt: Int = 1,
         maxAttempts: Int = 1,
@@ -1083,6 +1089,7 @@ struct AIAnalysisAgent: Sendable {
                 rawReport: rawReport,
                 inputJSON: inputJSON,
                 toolResultsJSON: toolResultsJSON,
+                evidenceLedgerJSON: evidenceLedgerJSON,
                 validationIssue: validationIssue,
                 repairAttempt: repairAttempt,
                 maxAttempts: maxAttempts
@@ -1409,7 +1416,8 @@ struct AIAnalysisAgent: Sendable {
                     title: $0.title,
                     evidence: $0.evidence,
                     impact: $0.impact,
-                    relatedRefs: $0.relatedRefs
+                    relatedRefs: $0.relatedRefs,
+                    evidenceRefs: $0.evidenceRefs
                 )
             },
             assetAlerts: payload.assetAlerts.map {
@@ -1418,7 +1426,8 @@ struct AIAnalysisAgent: Sendable {
                     symbol: $0.symbol,
                     title: $0.title,
                     reason: $0.reason,
-                    sourceDomains: $0.sourceDomains
+                    sourceDomains: $0.sourceDomains,
+                    evidenceRefs: $0.evidenceRefs
                 )
             },
             rebalanceActions: payload.rebalanceActions.map {
@@ -1428,7 +1437,8 @@ struct AIAnalysisAgent: Sendable {
                     symbol: $0.symbol,
                     title: $0.title,
                     rationale: $0.rationale,
-                    riskNote: $0.riskNote
+                    riskNote: $0.riskNote,
+                    evidenceRefs: $0.evidenceRefs
                 )
             },
             questionsToConsider: payload.questionsToConsider,
@@ -2068,6 +2078,19 @@ struct AIAnalysisHarness {
             throw AIAnalysisPipelineError(stage: .buildingInput, underlying: error)
         }
 
+        let localToolsStartedAt = Date()
+        let localToolResults = AILocalFinancialToolExecutor.baselineResults(input: input)
+        await traceRecorder.record(
+            stageID: "executing_local_financial_tools",
+            kind: "tool",
+            startedAt: localToolsStartedAt,
+            outcome: "passed",
+            metadata: [
+                "tool_call_count": String(localToolResults.count),
+                "evidence_item_count": String(localToolResults.flatMap(\.evidence).count),
+            ]
+        )
+
         var toolPlan = AIWebSearchToolPlan(toolCalls: [], status: "disabled", limitations: [])
         var toolResults: [AIWebSearchToolResult] = []
         if preflight.usesConnectedSearch, let searchKey = preflight.searchKey {
@@ -2155,6 +2178,14 @@ struct AIAnalysisHarness {
         let searchedAt = toolResults.map(\.searchedAt).max() ?? Date()
         let toolResultsJSON = String(data: try AIAnalysisAgent.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
         let toolPlanJSON = String(data: try AIAnalysisAgent.encoder.encode(toolPlan), encoding: .utf8) ?? #"{"tool_calls":[]}"#
+        let evidenceLedger = AIEvidenceLedgerBuilder.build(
+            localResults: localToolResults,
+            webResults: toolResults
+        )
+        let evidenceLedgerJSON = String(
+            data: try AIAnalysisAgent.encoder.encode(evidenceLedger),
+            encoding: .utf8
+        ) ?? "{}"
 
         await request.progress?(.generatingReport(model: request.llmConfiguration.model))
         let reportStartedAt = Date()
@@ -2163,6 +2194,7 @@ struct AIAnalysisHarness {
             reportPayloadResult = try await AIReportWriterNode(agent: agent).write(
                 input: input,
                 toolResults: toolResults,
+                evidenceLedger: evidenceLedger,
                 configuration: request.llmConfiguration,
                 apiKey: preflight.llmKey,
                 progress: request.progress
@@ -2259,6 +2291,7 @@ struct AIAnalysisHarness {
                 inputJSON: inputJSON,
                 toolResultsJSON: toolResultsJSON,
                 toolPlanJSON: toolPlanJSON,
+                evidenceLedgerJSON: evidenceLedgerJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
                 guardrailResultJSON: rejectedGuardrailJSON,
@@ -2281,6 +2314,7 @@ struct AIAnalysisHarness {
             metadata: [
                 "tool_result_count": String(toolResults.count),
                 "source_count": String(toolResults.reduce(0) { $0 + $1.sources.count }),
+                "evidence_item_count": String(evidenceLedger.items.count),
             ]
         )
         let trace = await traceRecorder.snapshot(outcome: "passed")
@@ -2291,6 +2325,7 @@ struct AIAnalysisHarness {
                 inputJSON: inputJSON,
                 toolResultsJSON: toolResultsJSON,
                 toolPlanJSON: toolPlanJSON,
+                evidenceLedgerJSON: evidenceLedgerJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
                 guardrailResultJSON: guardrailResultJSON,
@@ -2370,6 +2405,7 @@ private struct AIReportWriterNode {
     func write(
         input: AIAnalysisInput,
         toolResults: [AIWebSearchToolResult],
+        evidenceLedger: AIEvidenceLedger,
         configuration: AIProviderConfiguration,
         apiKey: String,
         progress: AIAnalysisProgressHandler?
@@ -2377,6 +2413,7 @@ private struct AIReportWriterNode {
         try await agent.makeReportPayload(
             input: input,
             toolResults: toolResults,
+            evidenceLedger: evidenceLedger,
             configuration: configuration,
             apiKey: apiKey,
             progress: progress
@@ -2414,7 +2451,8 @@ enum AIReportPolicyNormalizer {
                         title: AIUserFacingTextSanitizer.sanitize(item.title, language: input.outputLanguage),
                         evidence: AIUserFacingTextSanitizer.sanitize(item.evidence, language: input.outputLanguage),
                         impact: AIUserFacingTextSanitizer.sanitize(item.impact, language: input.outputLanguage),
-                        relatedRefs: item.relatedRefs
+                        relatedRefs: item.relatedRefs,
+                        evidenceRefs: item.evidenceRefs
                     )
                 },
                 assetAlerts: report.assetAlerts.map { alert in
@@ -2424,7 +2462,8 @@ enum AIReportPolicyNormalizer {
                         symbol: alert.symbol,
                         title: AIUserFacingTextSanitizer.sanitize(alert.title, language: input.outputLanguage),
                         reason: AIUserFacingTextSanitizer.sanitize(alert.reason, language: input.outputLanguage),
-                        sourceDomains: alert.sourceDomains
+                        sourceDomains: alert.sourceDomains,
+                        evidenceRefs: alert.evidenceRefs
                     )
                 },
                 rebalanceActions: report.rebalanceActions?.map { action in
@@ -2438,7 +2477,8 @@ enum AIReportPolicyNormalizer {
                         riskNote: action.riskNote.flatMap { note in
                             let sanitized = AIUserFacingTextSanitizer.sanitize(note, language: input.outputLanguage)
                             return sanitized.isEmpty ? nil : sanitized
-                        }
+                        },
+                        evidenceRefs: action.evidenceRefs
                     )
                 },
                 questionsToConsider: report.questionsToConsider.map {
@@ -2608,6 +2648,7 @@ private enum AIArtifactWriterNode {
         inputJSON: String,
         toolResultsJSON: String,
         toolPlanJSON: String,
+        evidenceLedgerJSON: String,
         reportPayloadResult: AIReportPayloadResult,
         finalReportJSON: String,
         guardrailResultJSON: String,
@@ -2617,6 +2658,7 @@ private enum AIArtifactWriterNode {
             inputJSON: inputJSON,
             toolResultsJSON: toolResultsJSON,
             toolPlanJSON: toolPlanJSON,
+            evidenceLedgerJSON: evidenceLedgerJSON,
             rawReportJSON: reportPayloadResult.rawReport,
             repairedReportJSON: reportPayloadResult.repairedReport,
             finalReportJSON: finalReportJSON,
@@ -3064,6 +3106,7 @@ struct LLMRiskItemPayload: Decodable {
     let evidence: String
     let impact: String
     let relatedRefs: [String]
+    let evidenceRefs: [String]?
 
     enum CodingKeys: String, CodingKey {
         case severity
@@ -3072,15 +3115,25 @@ struct LLMRiskItemPayload: Decodable {
         case evidence
         case impact
         case relatedRefs = "related_refs"
+        case evidenceRefs = "evidence_refs"
     }
 
-    init(severity: String, category: String, title: String, evidence: String, impact: String, relatedRefs: [String]) {
+    init(
+        severity: String,
+        category: String,
+        title: String,
+        evidence: String,
+        impact: String,
+        relatedRefs: [String],
+        evidenceRefs: [String]? = nil
+    ) {
         self.severity = severity
         self.category = category
         self.title = title
         self.evidence = evidence
         self.impact = impact
         self.relatedRefs = relatedRefs
+        self.evidenceRefs = evidenceRefs
     }
 }
 
@@ -3090,6 +3143,7 @@ struct LLMAssetAlertPayload: Decodable {
     let title: String
     let reason: String
     let sourceDomains: [String]
+    let evidenceRefs: [String]?
 
     enum CodingKeys: String, CodingKey {
         case assetName = "asset_name"
@@ -3097,14 +3151,23 @@ struct LLMAssetAlertPayload: Decodable {
         case title
         case reason
         case sourceDomains = "source_domains"
+        case evidenceRefs = "evidence_refs"
     }
 
-    init(assetName: String, symbol: String, title: String, reason: String, sourceDomains: [String]) {
+    init(
+        assetName: String,
+        symbol: String,
+        title: String,
+        reason: String,
+        sourceDomains: [String],
+        evidenceRefs: [String]? = nil
+    ) {
         self.assetName = assetName
         self.symbol = symbol
         self.title = title
         self.reason = reason
         self.sourceDomains = sourceDomains
+        self.evidenceRefs = evidenceRefs
     }
 }
 
@@ -3115,6 +3178,7 @@ struct LLMRebalanceActionPayload: Decodable {
     let title: String
     let rationale: String
     let riskNote: String?
+    let evidenceRefs: [String]?
 
     enum CodingKeys: String, CodingKey {
         case action
@@ -3123,15 +3187,25 @@ struct LLMRebalanceActionPayload: Decodable {
         case title
         case rationale
         case riskNote = "risk_note"
+        case evidenceRefs = "evidence_refs"
     }
 
-    init(action: String, assetName: String?, symbol: String?, title: String, rationale: String, riskNote: String?) {
+    init(
+        action: String,
+        assetName: String?,
+        symbol: String?,
+        title: String,
+        rationale: String,
+        riskNote: String?,
+        evidenceRefs: [String]? = nil
+    ) {
         self.action = action
         self.assetName = assetName
         self.symbol = symbol
         self.title = title
         self.rationale = rationale
         self.riskNote = riskNote
+        self.evidenceRefs = evidenceRefs
     }
 }
 

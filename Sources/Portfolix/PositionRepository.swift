@@ -624,6 +624,20 @@ final class PositionRepository {
                     try stepDone(traceStatement)
                 }
 
+                if let evidenceLedgerJSON = artifacts.evidenceLedgerJSON {
+                    let evidenceStatement = try prepare(
+                        """
+                        INSERT INTO ai_agent_evidence_ledgers (run_id, evidence_json, created_at)
+                        VALUES (?, ?, ?)
+                        """
+                    )
+                    defer { sqlite3_finalize(evidenceStatement) }
+                    try bind(run.id.uuidString, to: 1, in: evidenceStatement)
+                    try bind(evidenceLedgerJSON, to: 2, in: evidenceStatement)
+                    try bind(Self.timestamp(), to: 3, in: evidenceStatement)
+                    try stepDone(evidenceStatement)
+                }
+
                 let guardrailStatement = try prepare(
                     """
                     INSERT INTO ai_guardrail_results (
@@ -732,6 +746,7 @@ final class PositionRepository {
             inputJSON: text(at: 0, in: statement),
             toolResultsJSON: text(at: 1, in: statement),
             toolPlanJSON: text(at: 2, in: statement),
+            evidenceLedgerJSON: try fetchAIAgentEvidenceLedgerJSON(runID: runID),
             rawReportJSON: text(at: 3, in: statement),
             repairedReportJSON: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : text(at: 4, in: statement),
             finalReportJSON: text(at: 5, in: statement),
@@ -764,6 +779,7 @@ final class PositionRepository {
             inputJSON: text(at: 1, in: statement),
             toolResultsJSON: text(at: 2, in: statement),
             toolPlanJSON: text(at: 3, in: statement),
+            evidenceLedgerJSON: try fetchAIAgentEvidenceLedgerJSON(runID: runID),
             rawReportJSON: text(at: 4, in: statement),
             repairedReportJSON: sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : text(at: 5, in: statement),
             finalReportJSON: text(at: 6, in: statement),
@@ -790,6 +806,23 @@ final class PositionRepository {
             throw PositionRepositoryError.invalidStoredData("无法解析 Agent 运行轨迹")
         }
         return try aiArtifactDecoder.decode(AIAgentRunTrace.self, from: data)
+    }
+
+    private func fetchAIAgentEvidenceLedgerJSON(runID: UUID) throws -> String? {
+        let statement = try prepare(
+            """
+            SELECT evidence_json
+            FROM ai_agent_evidence_ledgers
+            WHERE run_id = ?
+            LIMIT 1
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(runID.uuidString, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return nil
+        }
+        return text(at: 0, in: statement)
     }
 
     func upsertAIAnalysisChatItem(_ item: AIReportChatItem) throws {
@@ -1140,6 +1173,15 @@ final class PositionRepository {
             CREATE TABLE IF NOT EXISTS ai_agent_run_traces (
                 run_id TEXT PRIMARY KEY NOT NULL REFERENCES ai_analysis_runs(id) ON DELETE CASCADE,
                 trace_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_agent_evidence_ledgers (
+                run_id TEXT PRIMARY KEY NOT NULL REFERENCES ai_analysis_runs(id) ON DELETE CASCADE,
+                evidence_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
             """

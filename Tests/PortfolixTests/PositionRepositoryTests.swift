@@ -1668,12 +1668,20 @@ struct PositionRepositoryTests {
         #expect(!result.artifacts.inputJSON.contains("research_results"))
         #expect(result.artifacts.toolResultsJSON == "[]")
         #expect(result.artifacts.guardrailResultJSON.contains("AIReportGuardrailNode"))
+        let evidenceData = try #require(result.artifacts.evidenceLedgerJSON?.data(using: .utf8))
+        let evidenceDecoder = JSONDecoder()
+        evidenceDecoder.dateDecodingStrategy = .iso8601
+        let evidenceLedger = try evidenceDecoder.decode(AIEvidenceLedger.self, from: evidenceData)
+        #expect(evidenceLedger.schemaVersion == "agent-evidence-ledger.v1")
+        #expect(evidenceLedger.items.first { $0.id == "local.concentration.investable_hhi" }?.numericValue == 10_000)
+        #expect(evidenceLedger.items.first { $0.id == "local.concentration.effective_investable_holdings" }?.numericValue == 1)
         let trace = try #require(result.artifacts.trace)
         #expect(trace.schemaVersion == "agent-trace.v1")
         #expect(trace.outcome == "passed")
         #expect(trace.events.map(\.stageID) == [
             "preflight",
             "building_input",
+            "executing_local_financial_tools",
             "planning_tool_calls",
             "generating_report",
             "validating_report",
@@ -3655,6 +3663,7 @@ struct PositionRepositoryTests {
             inputJSON: #"{"snapshot":{"snapshot_id":"test"}}"#,
             toolResultsJSON: "[]",
             toolPlanJSON: #"{"tool_calls":[]}"#,
+            evidenceLedgerJSON: #"{"schema_version":"agent-evidence-ledger.v1","items":[]}"#,
             rawReportJSON: #"{"summary":"组合风险保持可观察"}"#,
             repairedReportJSON: nil,
             finalReportJSON: #"{"summary":"组合风险保持可观察"}"#,
@@ -3689,6 +3698,7 @@ struct PositionRepositoryTests {
         #expect(persistedArtifacts.inputJSON == artifacts.inputJSON)
         #expect(persistedArtifacts.repairedReportJSON == nil)
         #expect(persistedArtifacts.guardrailResultJSON.contains("passed"))
+        #expect(persistedArtifacts.evidenceLedgerJSON == artifacts.evidenceLedgerJSON)
         #expect(persistedArtifacts.trace == trace)
         #expect(try repository.fetchLatestAIAnalysisArtifacts()?.trace == trace)
     }

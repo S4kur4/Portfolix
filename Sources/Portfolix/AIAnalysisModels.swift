@@ -462,6 +462,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
     let inputJSON: String
     let toolResultsJSON: String
     let toolPlanJSON: String
+    let evidenceLedgerJSON: String?
     let rawReportJSON: String
     let repairedReportJSON: String?
     let finalReportJSON: String
@@ -472,6 +473,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
         inputJSON: String,
         toolResultsJSON: String,
         toolPlanJSON: String,
+        evidenceLedgerJSON: String? = nil,
         rawReportJSON: String,
         repairedReportJSON: String?,
         finalReportJSON: String,
@@ -481,6 +483,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
         self.inputJSON = inputJSON
         self.toolResultsJSON = toolResultsJSON
         self.toolPlanJSON = toolPlanJSON
+        self.evidenceLedgerJSON = evidenceLedgerJSON
         self.rawReportJSON = rawReportJSON
         self.repairedReportJSON = repairedReportJSON
         self.finalReportJSON = finalReportJSON
@@ -493,6 +496,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
             inputJSON: inputJSON,
             toolResultsJSON: toolResultsJSON,
             toolPlanJSON: toolPlanJSON,
+            evidenceLedgerJSON: evidenceLedgerJSON,
             rawReportJSON: rawReportJSON,
             repairedReportJSON: repairedReportJSON,
             finalReportJSON: finalReportJSON,
@@ -747,6 +751,7 @@ struct AIReportRiskItem: Codable, Identifiable, Equatable {
     let evidence: String
     let impact: String
     let relatedRefs: [String]
+    let evidenceRefs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -755,7 +760,8 @@ struct AIReportRiskItem: Codable, Identifiable, Equatable {
         title: String,
         evidence: String,
         impact: String,
-        relatedRefs: [String]
+        relatedRefs: [String],
+        evidenceRefs: [String]? = nil
     ) {
         self.id = id
         self.severity = severity
@@ -764,6 +770,7 @@ struct AIReportRiskItem: Codable, Identifiable, Equatable {
         self.evidence = evidence
         self.impact = impact
         self.relatedRefs = relatedRefs
+        self.evidenceRefs = evidenceRefs
     }
 }
 
@@ -774,6 +781,7 @@ struct AIAssetAlert: Codable, Identifiable, Equatable {
     let title: String
     let reason: String
     let sourceDomains: [String]
+    let evidenceRefs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -781,7 +789,8 @@ struct AIAssetAlert: Codable, Identifiable, Equatable {
         symbol: String,
         title: String,
         reason: String,
-        sourceDomains: [String]
+        sourceDomains: [String],
+        evidenceRefs: [String]? = nil
     ) {
         self.id = id
         self.assetName = assetName
@@ -789,6 +798,7 @@ struct AIAssetAlert: Codable, Identifiable, Equatable {
         self.title = title
         self.reason = reason
         self.sourceDomains = sourceDomains
+        self.evidenceRefs = evidenceRefs
     }
 }
 
@@ -800,6 +810,7 @@ struct AIRebalanceAction: Codable, Identifiable, Equatable {
     let title: String
     let rationale: String
     let riskNote: String?
+    let evidenceRefs: [String]?
 
     init(
         id: UUID = UUID(),
@@ -808,7 +819,8 @@ struct AIRebalanceAction: Codable, Identifiable, Equatable {
         symbol: String?,
         title: String,
         rationale: String,
-        riskNote: String?
+        riskNote: String?,
+        evidenceRefs: [String]? = nil
     ) {
         self.id = id
         self.action = action
@@ -817,6 +829,7 @@ struct AIRebalanceAction: Codable, Identifiable, Equatable {
         self.title = title
         self.rationale = rationale
         self.riskNote = riskNote
+        self.evidenceRefs = evidenceRefs
     }
 }
 
