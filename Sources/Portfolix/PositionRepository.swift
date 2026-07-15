@@ -638,6 +638,20 @@ final class PositionRepository {
                     try stepDone(evidenceStatement)
                 }
 
+                if let loopStateJSON = artifacts.loopStateJSON {
+                    let loopStatement = try prepare(
+                        """
+                        INSERT INTO ai_agent_loop_states (run_id, state_json, created_at)
+                        VALUES (?, ?, ?)
+                        """
+                    )
+                    defer { sqlite3_finalize(loopStatement) }
+                    try bind(run.id.uuidString, to: 1, in: loopStatement)
+                    try bind(loopStateJSON, to: 2, in: loopStatement)
+                    try bind(Self.timestamp(), to: 3, in: loopStatement)
+                    try stepDone(loopStatement)
+                }
+
                 let guardrailStatement = try prepare(
                     """
                     INSERT INTO ai_guardrail_results (
@@ -747,6 +761,7 @@ final class PositionRepository {
             toolResultsJSON: text(at: 1, in: statement),
             toolPlanJSON: text(at: 2, in: statement),
             evidenceLedgerJSON: try fetchAIAgentEvidenceLedgerJSON(runID: runID),
+            loopStateJSON: try fetchAIAgentLoopStateJSON(runID: runID),
             rawReportJSON: text(at: 3, in: statement),
             repairedReportJSON: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : text(at: 4, in: statement),
             finalReportJSON: text(at: 5, in: statement),
@@ -780,6 +795,7 @@ final class PositionRepository {
             toolResultsJSON: text(at: 2, in: statement),
             toolPlanJSON: text(at: 3, in: statement),
             evidenceLedgerJSON: try fetchAIAgentEvidenceLedgerJSON(runID: runID),
+            loopStateJSON: try fetchAIAgentLoopStateJSON(runID: runID),
             rawReportJSON: text(at: 4, in: statement),
             repairedReportJSON: sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : text(at: 5, in: statement),
             finalReportJSON: text(at: 6, in: statement),
@@ -813,6 +829,23 @@ final class PositionRepository {
             """
             SELECT evidence_json
             FROM ai_agent_evidence_ledgers
+            WHERE run_id = ?
+            LIMIT 1
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(runID.uuidString, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return nil
+        }
+        return text(at: 0, in: statement)
+    }
+
+    private func fetchAIAgentLoopStateJSON(runID: UUID) throws -> String? {
+        let statement = try prepare(
+            """
+            SELECT state_json
+            FROM ai_agent_loop_states
             WHERE run_id = ?
             LIMIT 1
             """
@@ -1182,6 +1215,15 @@ final class PositionRepository {
             CREATE TABLE IF NOT EXISTS ai_agent_evidence_ledgers (
                 run_id TEXT PRIMARY KEY NOT NULL REFERENCES ai_analysis_runs(id) ON DELETE CASCADE,
                 evidence_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_agent_loop_states (
+                run_id TEXT PRIMARY KEY NOT NULL REFERENCES ai_analysis_runs(id) ON DELETE CASCADE,
+                state_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
             """

@@ -194,7 +194,21 @@ struct PositionRepositoryTests {
         let oldDate = try #require(Calendar.current.date(byAdding: .day, value: -10, to: now))
         let recentDate = try #require(Calendar.current.date(byAdding: .day, value: -1, to: now))
         let oldItem = AIReportChatItem.user("旧问题", createdAt: oldDate)
-        let recentItem = AIReportChatItem.assistant("近期回答", createdAt: recentDate)
+        let followUpResult = AIAnalysisFollowUpResult(
+            answer: "近期回答",
+            guardrailResultJSON: #"{"status":"passed"}"#,
+            searchMode: "connected_search_completed",
+            toolCallCount: 2,
+            toolResultCount: 2,
+            loopTurnCount: 2,
+            toolPlanJSON: #"[{"status":"continue"}]"#,
+            toolResultsJSON: #"[{"status":"ok"}]"#
+        )
+        let recentItem = AIReportChatItem.assistant(
+            "近期回答",
+            createdAt: recentDate,
+            followUpRunSnapshot: .init(result: followUpResult)
+        )
 
         try repository.upsertAIAnalysisChatItem(oldItem)
         try repository.upsertAIAnalysisChatItem(recentItem)
@@ -202,6 +216,7 @@ struct PositionRepositoryTests {
         let oneWeekCutoff = AIChatRetentionPeriod.oneWeek.cutoffDate(now: now)
         let retained = try repository.fetchAIAnalysisChatItems(since: oneWeekCutoff)
         #expect(retained.map(\.id) == [recentItem.id])
+        #expect(retained.first?.followUpRunSnapshot?.loopTurnCount == 2)
 
         try repository.deleteAIAnalysisChatItems(before: oneWeekCutoff)
         let allRemaining = try repository.fetchAIAnalysisChatItems(since: oldDate.addingTimeInterval(-1))
@@ -1532,6 +1547,64 @@ struct PositionRepositoryTests {
         #expect(await tavily.maximumConcurrentSearchCount() == 1)
     }
 
+    @MainActor
+    @Test
+    func aiToolExecutionUsesBoundedConcurrency() async throws {
+        let store = try makeStore()
+        for (name, symbol) in [("Apple", "AAPL"), ("Microsoft", "MSFT"), ("Nvidia", "NVDA")] {
+            try store.addPosition(
+                name: name,
+                symbol: symbol,
+                category: .usStock,
+                quantity: 10,
+                averageCost: 100,
+                quoteCurrency: .usd,
+                latestPrice: 120
+            )
+        }
+        let refs = Dictionary(uniqueKeysWithValues: store.positions.map {
+            ($0.symbol, "position_\($0.id.uuidString)")
+        })
+        let llm = MockLLMCompleter(responses: [
+            """
+            {"status":"continue","tool_calls":[
+              {"id":"one","query":"Apple AAPL latest company announcement","position_refs":["\(try #require(refs["AAPL"]))"]},
+              {"id":"two","query":"Microsoft MSFT latest company announcement","position_refs":["\(try #require(refs["MSFT"]))"]},
+              {"id":"three","query":"Nvidia NVDA latest company announcement","position_refs":["\(try #require(refs["NVDA"]))"]}
+            ],"limitations":[]}
+            """,
+            """
+            {
+              "summary": "组合风险保持可观察",
+              "health_score_explanation": "本地约束用于解释风险边界",
+              "risk_items": [],
+              "asset_alerts": [],
+              "rebalance_actions": [],
+              "questions_to_consider": [],
+              "data_quality_notes": [],
+              "limitations": ["外部资料仅作背景"]
+            }
+            """,
+        ])
+        let searcher = MockTavilySearcher(delayNanoseconds: 50_000_000)
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: searcher,
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+        )
+
+        _ = try await agent.generateReportResult(
+            positions: store.positions,
+            storeContext: makeAIContext(from: store),
+            llmConfiguration: .default,
+            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5),
+            trigger: .manual
+        )
+
+        #expect(await searcher.searchedQueries().count == 3)
+        #expect(await searcher.maximumConcurrentSearchCount() == 2)
+    }
+
     @Test
     func aiToolPlanRejectsSensitiveOrUnscopedQuery() throws {
         let allowedRef = "position_\(UUID().uuidString)"
@@ -1612,6 +1685,74 @@ struct PositionRepositoryTests {
 
         #expect(await llm.requestCount() == 2)
         #expect(await progressRecorder.stageIDs().contains("web_search_results_ready"))
+    }
+
+    @MainActor
+    @Test
+    func aiReportLoopReplansAfterEmptyEvidenceAndStopsWhenEvidenceIsSufficient() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            quantity: 10,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 120
+        )
+        let positionRef = "position_\(try #require(store.positions.first).id.uuidString)"
+        let llm = MockLLMCompleter(responses: [
+            #"{"status":"continue","tool_calls":[{"id":"first","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
+            #"{"status":"continue","tool_calls":[{"id":"second","query":"Apple AAPL recent regulatory filing news","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
+            """
+            {
+              "summary": "组合风险保持可观察",
+              "health_score_explanation": "本地约束用于解释风险边界",
+              "risk_items": [],
+              "asset_alerts": [],
+              "rebalance_actions": [],
+              "questions_to_consider": ["当前持仓是否仍符合风险偏好"],
+              "data_quality_notes": ["价格数据来自本地快照"],
+              "limitations": ["外部资料仅作背景"]
+            }
+            """,
+        ])
+        let searcher = SequencedTavilySearcher(responseBatches: [
+            [],
+            [
+                AssetResearchSource(
+                    title: "Apple regulatory filing",
+                    url: "https://www.reuters.com/markets/apple-filing",
+                    domain: "reuters.com",
+                    publishedDate: "2026-07-15",
+                    snippet: "Apple filed a recent regulatory update.",
+                    credibility: .mainstream
+                ),
+            ],
+        ])
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: searcher,
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+        )
+
+        let result = try await agent.generateReportResult(
+            positions: store.positions,
+            storeContext: makeAIContext(from: store),
+            llmConfiguration: .default,
+            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5),
+            trigger: .manual
+        )
+
+        let stateData = try #require(result.artifacts.loopStateJSON?.data(using: .utf8))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let state = try decoder.decode(AIAgentLoopState.self, from: stateData)
+        #expect(state.turns.count == 2)
+        #expect(state.turns.map(\.decision) == ["replan", "evidence_sufficient"])
+        #expect(state.stopReason == "evidence_sufficient")
+        #expect(await searcher.searchedQueries().count == 2)
+        #expect(await llm.requestCount() == 3)
     }
 
     @MainActor
@@ -3305,12 +3446,84 @@ struct PositionRepositoryTests {
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
+        #expect(result.loopTurnCount == 1)
         #expect(await tavily.searchedSymbols() == ["AAPL"])
         #expect(await llm.requestCount() == 2)
         #expect(await llm.systemPrompts().first == AIAnalysisPromptText.followUpToolPlanningSystem)
         #expect(await llm.userPrompts().first?.contains("上一个问题要求继续跟踪 Apple 的新闻") == true)
         #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
+    }
+
+    @MainActor
+    @Test
+    func aiFollowUpLoopReplansAfterEmptySearchResult() async throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            quantity: 10,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 120
+        )
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptText.reportVersion,
+            riskProfileVersion: 1,
+            summary: "Apple 是组合中的主要观察持仓",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [],
+            assetAlerts: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: [],
+            sources: []
+        )
+        let llm = MockLLMCompleter(responses: [
+            #"{"status":"continue","tool_calls":[{"id":"first","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
+            #"{"status":"continue","tool_calls":[{"id":"second","query":"Apple AAPL recent regulatory filing news","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
+            #"{"answer":"第二轮联网资料补充了近期公开信息，可以结合当前持仓集中度继续复核风险。","limitations":[]}"#,
+        ])
+        let searcher = SequencedTavilySearcher(responseBatches: [
+            [],
+            [
+                AssetResearchSource(
+                    title: "Apple filing update",
+                    url: "https://www.reuters.com/markets/apple-update",
+                    domain: "reuters.com",
+                    publishedDate: "2026-07-15",
+                    snippet: "Recent filing context.",
+                    credibility: .mainstream
+                ),
+            ],
+        ])
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: searcher,
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+        )
+
+        let result = try await agent.answerFollowUp(
+            question: "请搜索 Apple 最新公告后再回答",
+            report: report,
+            artifacts: nil,
+            positions: store.positions,
+            llmConfiguration: .default,
+            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5)
+        )
+
+        #expect(result.searchMode == "connected_search_completed")
+        #expect(result.loopTurnCount == 2)
+        #expect(result.toolCallCount == 2)
+        #expect(result.toolResultCount == 2)
+        #expect(result.toolPlanJSON.contains("recent regulatory filing"))
+        #expect(await llm.requestCount() == 3)
     }
 
     @MainActor
@@ -3664,6 +3877,7 @@ struct PositionRepositoryTests {
             toolResultsJSON: "[]",
             toolPlanJSON: #"{"tool_calls":[]}"#,
             evidenceLedgerJSON: #"{"schema_version":"agent-evidence-ledger.v1","items":[]}"#,
+            loopStateJSON: #"{"schema_version":"agent-loop-state.v1","turns":[],"stop_reason":"model_finished"}"#,
             rawReportJSON: #"{"summary":"组合风险保持可观察"}"#,
             repairedReportJSON: nil,
             finalReportJSON: #"{"summary":"组合风险保持可观察"}"#,
@@ -3699,6 +3913,7 @@ struct PositionRepositoryTests {
         #expect(persistedArtifacts.repairedReportJSON == nil)
         #expect(persistedArtifacts.guardrailResultJSON.contains("passed"))
         #expect(persistedArtifacts.evidenceLedgerJSON == artifacts.evidenceLedgerJSON)
+        #expect(persistedArtifacts.loopStateJSON == artifacts.loopStateJSON)
         #expect(persistedArtifacts.trace == trace)
         #expect(try repository.fetchLatestAIAnalysisArtifacts()?.trace == trace)
     }
@@ -4255,6 +4470,33 @@ private actor MockTavilySearcher: TavilySearching {
 
     func maximumConcurrentSearchCount() -> Int {
         peakSearchCount
+    }
+}
+
+private actor SequencedTavilySearcher: TavilySearching {
+    private let responseBatches: [[AssetResearchSource]]
+    private var nextResponseIndex = 0
+    private var queries: [String] = []
+
+    init(responseBatches: [[AssetResearchSource]]) {
+        self.responseBatches = responseBatches
+    }
+
+    func search(
+        query: String,
+        positions: [Position],
+        configuration: TavilyConfiguration,
+        apiKey: String
+    ) async throws -> [AssetResearchSource] {
+        queries.append(query)
+        guard !responseBatches.isEmpty else { return [] }
+        let index = min(nextResponseIndex, responseBatches.count - 1)
+        nextResponseIndex += 1
+        return responseBatches[index]
+    }
+
+    func searchedQueries() -> [String] {
+        queries
     }
 }
 

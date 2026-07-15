@@ -397,6 +397,8 @@ struct AIAnalysisAgent: Sendable {
         var searchMode = "disabled"
         var toolCallCount = 0
         var toolResults: [AIWebSearchToolResult] = []
+        var followUpPlans: [AIWebSearchToolPlan] = []
+        var loopTurnCount = 0
         let shouldSearch = Self.followUpRequiresSearch(normalizedQuestion)
         await progress?(.analyzing)
 
@@ -404,70 +406,104 @@ struct AIAnalysisAgent: Sendable {
             guard let searchKey = try credentialStore.read(kind: searchConfiguration.provider.credentialKind), !searchKey.isEmpty else {
                 throw AIAnalysisAgentError.missingSearchKey
             }
-            do {
-                var toolPlan = try await makeFollowUpToolPlan(
-                    question: normalizedQuestion,
-                    reportJSON: reportJSON,
-                    conversationHistoryJSON: conversationHistoryJSON,
-                    portfolioContextJSON: portfolioContextJSON,
-                    positions: positions,
-                    configuration: llmConfiguration,
-                    apiKey: llmKey
-                )
-                if shouldSearch, toolPlan.toolCalls.isEmpty {
-                    toolPlan = try Self.fallbackFollowUpToolPlan(
+            let loopBudget = AIAgentExecutionBudget.production
+            var seenQueries = Set<String>()
+            searchMode = "connected_no_search_needed"
+            for turn in 1...loopBudget.maxLoopTurns {
+                loopTurnCount = turn
+                if turn > 1 {
+                    await progress?(.replanning(turn: turn, total: loopBudget.maxLoopTurns))
+                }
+                let previousToolResultsJSON = String(
+                    data: (try? Self.encoder.encode(toolResults)) ?? Data("[]".utf8),
+                    encoding: .utf8
+                ) ?? "[]"
+                var proposedPlan: AIWebSearchToolPlan
+                do {
+                    proposedPlan = try await makeFollowUpToolPlan(
+                        question: normalizedQuestion,
+                        reportJSON: reportJSON,
+                        conversationHistoryJSON: conversationHistoryJSON,
+                        portfolioContextJSON: portfolioContextJSON,
+                        previousToolResultsJSON: previousToolResultsJSON,
+                        loopTurn: turn,
+                        maxLoopTurns: loopBudget.maxLoopTurns,
+                        positions: positions,
+                        configuration: llmConfiguration,
+                        apiKey: llmKey
+                    )
+                } catch {
+                    if turn == 1,
+                       shouldSearch,
+                       let fallbackPlan = try? Self.fallbackFollowUpToolPlan(
+                        question: normalizedQuestion,
+                        positions: positions,
+                        chatHistory: chatHistory
+                       ),
+                       !fallbackPlan.toolCalls.isEmpty {
+                        proposedPlan = fallbackPlan
+                        Self.toolLogger.info("Follow-up deterministic search plan used after planner failure")
+                    } else {
+                        searchMode = toolResults.isEmpty ? "connected_search_unavailable" : searchMode
+                        Self.toolLogger.error(
+                            "Follow-up tool plan rejected or unavailable: \(String(describing: type(of: error)), privacy: .public)"
+                        )
+                        break
+                    }
+                }
+                if turn == 1, shouldSearch, proposedPlan.toolCalls.isEmpty {
+                    proposedPlan = try Self.fallbackFollowUpToolPlan(
                         question: normalizedQuestion,
                         positions: positions,
                         chatHistory: chatHistory
                     )
                     Self.toolLogger.info("Follow-up deterministic search plan used after empty planner")
                 }
-                Self.toolLogger.info("Follow-up tool plan accepted with \(toolPlan.toolCalls.count, privacy: .public) call(s)")
-                toolCallCount = toolPlan.toolCalls.count
-                toolResults = await executeToolCalls(
-                    toolPlan,
+
+                let remainingToolBudget = max(0, loopBudget.maxToolCalls - toolCallCount)
+                let novelCalls = proposedPlan.toolCalls.filter { call in
+                    seenQueries.insert(call.query.lowercased()).inserted
+                }
+                let plan = AIWebSearchToolPlan(
+                    toolCalls: Array(novelCalls.prefix(remainingToolBudget)),
+                    status: proposedPlan.status,
+                    limitations: proposedPlan.limitations
+                )
+                followUpPlans.append(plan)
+                guard !plan.toolCalls.isEmpty else { break }
+
+                Self.toolLogger.info(
+                    "Follow-up loop turn \(turn, privacy: .public) accepted \(plan.toolCalls.count, privacy: .public) call(s)"
+                )
+                let turnResults = await executeToolCalls(
+                    plan,
                     positions: positions,
                     configuration: searchConfiguration,
                     apiKey: searchKey,
                     progress: nil,
                     followUpProgress: progress
                 )
-                searchMode = toolPlan.toolCalls.isEmpty
-                    ? "connected_no_search_needed"
-                    : "connected_search_completed"
-                Self.toolLogger.info(
-                    "Follow-up web search completed with \(toolResults.count, privacy: .public) result(s)"
-                )
-            } catch {
-                if shouldSearch,
-                   let fallbackPlan = try? Self.fallbackFollowUpToolPlan(
-                    question: normalizedQuestion,
-                    positions: positions,
-                    chatHistory: chatHistory
-                   ),
-                   !fallbackPlan.toolCalls.isEmpty {
-                    Self.toolLogger.info("Follow-up deterministic search plan used after planner failure")
-                    toolCallCount = fallbackPlan.toolCalls.count
-                    toolResults = await executeToolCalls(
-                        fallbackPlan,
-                        positions: positions,
-                        configuration: searchConfiguration,
-                        apiKey: searchKey,
-                        progress: nil,
-                        followUpProgress: progress
-                    )
-                    searchMode = "connected_search_completed"
-                } else {
-                    searchMode = "connected_search_unavailable"
-                    Self.toolLogger.error(
-                        "Follow-up tool plan rejected or unavailable: \(String(describing: type(of: error)), privacy: .public)"
-                    )
+                toolCallCount += plan.toolCalls.count
+                toolResults.append(contentsOf: turnResults)
+                await progress?(.evaluatingEvidence(turn: turn, total: loopBudget.maxLoopTurns))
+                let evidenceIsSufficient = turnResults.allSatisfy { $0.status == "ok" && !$0.sources.isEmpty }
+                let canReplan = plan.status == "continue"
+                    && !evidenceIsSufficient
+                    && turn < loopBudget.maxLoopTurns
+                    && toolCallCount < loopBudget.maxToolCalls
+                if evidenceIsSufficient || !canReplan {
+                    break
                 }
+            }
+            let sourceCount = toolResults.reduce(0) { $0 + $1.sources.count }
+            if toolCallCount > 0 {
+                searchMode = sourceCount > 0 ? "connected_search_completed" : "connected_search_no_results"
             }
         }
 
         await progress?(.composing)
         let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
+        let toolPlanJSON = String(data: try Self.encoder.encode(followUpPlans), encoding: .utf8) ?? "[]"
         let followUpConfiguration = llmConfiguration
             .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
             .withMaxOutputTokens(LLMOutputTokenPolicy.followUp)
@@ -534,7 +570,10 @@ struct AIAnalysisAgent: Sendable {
             guardrailResultJSON: guardrailResultJSON,
             searchMode: searchMode,
             toolCallCount: toolCallCount,
-            toolResultCount: toolResults.count
+            toolResultCount: toolResults.count,
+            loopTurnCount: loopTurnCount,
+            toolPlanJSON: toolPlanJSON,
+            toolResultsJSON: toolResultsJSON
         )
     }
 
@@ -618,6 +657,9 @@ struct AIAnalysisAgent: Sendable {
         reportJSON: String,
         conversationHistoryJSON: String,
         portfolioContextJSON: String,
+        previousToolResultsJSON: String = "[]",
+        loopTurn: Int = 1,
+        maxLoopTurns: Int = 1,
         positions: [Position],
         configuration: AIProviderConfiguration,
         apiKey: String
@@ -638,7 +680,10 @@ struct AIAnalysisAgent: Sendable {
                 positionsJSON: positionsJSON,
                 reportJSON: reportJSON,
                 conversationHistoryJSON: conversationHistoryJSON,
-                portfolioContextJSON: portfolioContextJSON
+                portfolioContextJSON: portfolioContextJSON,
+                previousToolResultsJSON: previousToolResultsJSON,
+                loopTurn: loopTurn,
+                maxLoopTurns: maxLoopTurns
             ),
             configuration: configuration,
             apiKey: apiKey
@@ -909,13 +954,25 @@ struct AIAnalysisAgent: Sendable {
 
     fileprivate func makeToolPlan(
         input: AIAnalysisInput,
+        evidenceLedger: AIEvidenceLedger,
+        previousTurns: [AIAgentLoopTurn] = [],
+        loopTurn: Int = 1,
+        maxLoopTurns: Int = 1,
         configuration: AIProviderConfiguration,
         apiKey: String
     ) async throws -> AIWebSearchToolPlan {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
+        let evidenceLedgerJSON = String(data: try Self.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
+        let previousTurnsJSON = String(data: try Self.encoder.encode(previousTurns), encoding: .utf8) ?? "[]"
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.toolPlanningSystem,
-            userPrompt: AIAnalysisPromptText.toolPlanningUser(inputJSON: inputJSON),
+            userPrompt: AIAnalysisPromptText.toolPlanningUser(
+                inputJSON: inputJSON,
+                evidenceLedgerJSON: evidenceLedgerJSON,
+                previousTurnsJSON: previousTurnsJSON,
+                loopTurn: loopTurn,
+                maxLoopTurns: maxLoopTurns
+            ),
             configuration: configuration,
             apiKey: apiKey
         )
@@ -944,47 +1001,91 @@ struct AIAnalysisAgent: Sendable {
         followUpProgress: AIFollowUpProgressHandler? = nil
     ) async -> [AIWebSearchToolResult] {
         let positionsByRef = Dictionary(uniqueKeysWithValues: positions.map { ("position_\($0.id.uuidString)", $0) })
-        var results: [AIWebSearchToolResult] = []
-        for (index, call) in plan.toolCalls.enumerated() {
-            await progress?(.callingWebSearch(query: call.query, ordinal: index + 1, total: plan.toolCalls.count))
-            await followUpProgress?(.searching(query: call.query, ordinal: index + 1, total: plan.toolCalls.count))
-            let referencedPositions = call.positionRefs.compactMap { positionsByRef[$0] }
-            do {
-                let sources = try await search.search(
-                    query: call.query,
-                    positions: referencedPositions,
-                    configuration: configuration,
-                    apiKey: apiKey
-                )
-                let emptySearchLimitation = call.positionRefs.isEmpty
-                    ? "搜索未返回可用的公开 HTTPS 来源"
-                    : "搜索未返回与指定持仓直接相关的可用 HTTPS 来源"
-                results.append(
-                    AIWebSearchToolResult(
-                        callID: call.id,
-                        query: call.query,
-                        positionRefs: call.positionRefs,
-                        searchedAt: .now,
-                        status: sources.isEmpty ? "empty" : "ok",
-                        sources: sources,
-                        limitations: sources.isEmpty ? [emptySearchLimitation] : []
+        let calls = Array(plan.toolCalls.enumerated())
+        guard !calls.isEmpty else { return [] }
+        let concurrencyLimit = min(2, calls.count)
+        return await withTaskGroup(of: (Int, AIWebSearchToolResult).self) { group in
+            var nextIndex = 0
+            var completed: [(Int, AIWebSearchToolResult)] = []
+
+            func schedule(_ entry: (offset: Int, element: AIWebSearchToolCall)) {
+                group.addTask {
+                    await progress?(
+                        .callingWebSearch(
+                            query: entry.element.query,
+                            ordinal: entry.offset + 1,
+                            total: calls.count
+                        )
                     )
-                )
-            } catch {
-                results.append(
-                    AIWebSearchToolResult(
-                        callID: call.id,
-                        query: call.query,
-                        positionRefs: call.positionRefs,
-                        searchedAt: .now,
-                        status: "failed",
-                        sources: [],
-                        limitations: [String(error.localizedDescription.prefix(180))]
+                    await followUpProgress?(
+                        .searching(
+                            query: entry.element.query,
+                            ordinal: entry.offset + 1,
+                            total: calls.count
+                        )
                     )
-                )
+                    let result = await executeToolCall(
+                        entry.element,
+                        positionsByRef: positionsByRef,
+                        configuration: configuration,
+                        apiKey: apiKey
+                    )
+                    return (entry.offset, result)
+                }
             }
+
+            while nextIndex < concurrencyLimit {
+                schedule(calls[nextIndex])
+                nextIndex += 1
+            }
+            while let result = await group.next() {
+                completed.append(result)
+                if nextIndex < calls.count {
+                    schedule(calls[nextIndex])
+                    nextIndex += 1
+                }
+            }
+            return completed.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        return results
+    }
+
+    private func executeToolCall(
+        _ call: AIWebSearchToolCall,
+        positionsByRef: [String: Position],
+        configuration: SearchConfiguration,
+        apiKey: String
+    ) async -> AIWebSearchToolResult {
+        let referencedPositions = call.positionRefs.compactMap { positionsByRef[$0] }
+        do {
+            let sources = try await search.search(
+                query: call.query,
+                positions: referencedPositions,
+                configuration: configuration,
+                apiKey: apiKey
+            )
+            let emptySearchLimitation = call.positionRefs.isEmpty
+                ? "搜索未返回可用的公开 HTTPS 来源"
+                : "搜索未返回与指定持仓直接相关的可用 HTTPS 来源"
+            return AIWebSearchToolResult(
+                callID: call.id,
+                query: call.query,
+                positionRefs: call.positionRefs,
+                searchedAt: .now,
+                status: sources.isEmpty ? "empty" : "ok",
+                sources: sources,
+                limitations: sources.isEmpty ? [emptySearchLimitation] : []
+            )
+        } catch {
+            return AIWebSearchToolResult(
+                callID: call.id,
+                query: call.query,
+                positionRefs: call.positionRefs,
+                searchedAt: .now,
+                status: "failed",
+                sources: [],
+                limitations: [String(error.localizedDescription.prefix(180))]
+            )
+        }
     }
 
     fileprivate func makeReportPayload(
@@ -1693,10 +1794,17 @@ struct AIAnalysisAgent: Sendable {
                 )
             )
         }
+        let requestedStatus = plan.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedStatus: String
+        if let requestedStatus, ["continue", "finish"].contains(requestedStatus) {
+            normalizedStatus = requestedStatus
+        } else {
+            normalizedStatus = "accepted"
+        }
         return AIWebSearchToolPlan(
             toolCalls: normalizedCalls,
-            status: "accepted",
-            limitations: []
+            status: normalizedStatus,
+            limitations: plan.limitations ?? []
         )
     }
 
@@ -2091,80 +2199,187 @@ struct AIAnalysisHarness {
             ]
         )
 
-        var toolPlan = AIWebSearchToolPlan(toolCalls: [], status: "disabled", limitations: [])
+        let loopStartedAt = Date()
+        let loopID = UUID()
+        let loopBudget = AIAgentExecutionBudget.production
+        var loopTurns: [AIAgentLoopTurn] = []
         var toolResults: [AIWebSearchToolResult] = []
+        var allToolCalls: [AIWebSearchToolCall] = []
+        var loopLimitations: [String] = []
+        var seenQueries = Set<String>()
+        var stopReason = "connected_search_disabled"
+        var evidenceLedger = AIEvidenceLedgerBuilder.build(
+            localResults: localToolResults,
+            webResults: []
+        )
         if preflight.usesConnectedSearch, let searchKey = preflight.searchKey {
-            await request.progress?(.planningToolCalls)
-            let planningStartedAt = Date()
-            do {
-                toolPlan = try await agent.makeToolPlan(
-                    input: input,
-                    configuration: request.llmConfiguration,
-                    apiKey: preflight.llmKey
+            stopReason = "max_turns_reached"
+            for turn in 1...loopBudget.maxLoopTurns {
+                let turnStartedAt = Date()
+                if turn == 1 {
+                    await request.progress?(.planningToolCalls)
+                } else {
+                    await request.progress?(.replanningToolCalls(turn: turn, total: loopBudget.maxLoopTurns))
+                }
+                let planningStartedAt = Date()
+                let proposedPlan: AIWebSearchToolPlan
+                do {
+                    proposedPlan = try await agent.makeToolPlan(
+                        input: input,
+                        evidenceLedger: evidenceLedger,
+                        previousTurns: loopTurns,
+                        loopTurn: turn,
+                        maxLoopTurns: loopBudget.maxLoopTurns,
+                        configuration: request.llmConfiguration,
+                        apiKey: preflight.llmKey
+                    )
+                } catch {
+                    let rejectedPlan = AIWebSearchToolPlan(
+                        toolCalls: [],
+                        status: "rejected",
+                        limitations: ["联网信息需求判断不可用或未通过校验"]
+                    )
+                    loopTurns.append(
+                        AIAgentLoopTurn(
+                            turn: turn,
+                            startedAt: turnStartedAt,
+                            finishedAt: Date(),
+                            plan: rejectedPlan,
+                            toolResults: [],
+                            evidenceItemCount: evidenceLedger.items.count,
+                            decision: "planner_unavailable"
+                        )
+                    )
+                    loopLimitations.append(contentsOf: rejectedPlan.limitations ?? [])
+                    stopReason = "planner_unavailable"
+                    AIAnalysisAgent.toolLogger.error(
+                        "Report tool plan rejected or unavailable: \(String(describing: type(of: error)), privacy: .public)"
+                    )
+                    await traceRecorder.record(
+                        stageID: turn == 1 ? "planning_tool_calls" : "replanning_tool_calls",
+                        kind: "model",
+                        startedAt: planningStartedAt,
+                        outcome: "degraded",
+                        metadata: [
+                            "turn": String(turn),
+                            "error_type": String(describing: type(of: error)),
+                            "tool_call_count": "0",
+                        ]
+                    )
+                    break
+                }
+
+                let remainingToolBudget = max(0, loopBudget.maxToolCalls - allToolCalls.count)
+                let novelCalls = proposedPlan.toolCalls.filter { call in
+                    seenQueries.insert(call.query.lowercased()).inserted
+                }
+                let selectedCalls = Array(novelCalls.prefix(remainingToolBudget))
+                let plan = AIWebSearchToolPlan(
+                    toolCalls: selectedCalls,
+                    status: proposedPlan.status,
+                    limitations: proposedPlan.limitations
                 )
-                AIAnalysisAgent.toolLogger.info(
-                    "Report tool plan accepted with \(toolPlan.toolCalls.count, privacy: .public) call(s)"
-                )
+                loopLimitations.append(contentsOf: plan.limitations ?? [])
                 await traceRecorder.record(
-                    stageID: "planning_tool_calls",
+                    stageID: turn == 1 ? "planning_tool_calls" : "replanning_tool_calls",
                     kind: "model",
                     startedAt: planningStartedAt,
                     outcome: "passed",
                     metadata: [
+                        "turn": String(turn),
                         "model": request.llmConfiguration.model,
-                        "tool_call_count": String(toolPlan.toolCalls.count),
+                        "tool_call_count": String(plan.toolCalls.count),
+                        "planner_status": plan.status ?? "unspecified",
                     ]
                 )
-            } catch {
-                toolPlan = AIWebSearchToolPlan(
-                    toolCalls: [],
-                    status: "rejected",
-                    limitations: ["联网信息需求判断不可用或未通过校验"]
+
+                guard !plan.toolCalls.isEmpty else {
+                    stopReason = proposedPlan.toolCalls.isEmpty
+                        ? (plan.status == "finish" ? "model_finished" : "no_search_needed")
+                        : (remainingToolBudget == 0 ? "tool_budget_reached" : "duplicate_queries_rejected")
+                    loopTurns.append(
+                        AIAgentLoopTurn(
+                            turn: turn,
+                            startedAt: turnStartedAt,
+                            finishedAt: Date(),
+                            plan: plan,
+                            toolResults: [],
+                            evidenceItemCount: evidenceLedger.items.count,
+                            decision: stopReason
+                        )
+                    )
+                    break
+                }
+
+                AIAnalysisAgent.toolLogger.info(
+                    "Report loop turn \(turn, privacy: .public) accepted \(plan.toolCalls.count, privacy: .public) tool call(s)"
                 )
-                AIAnalysisAgent.toolLogger.error(
-                    "Report tool plan rejected or unavailable: \(String(describing: type(of: error)), privacy: .public)"
+                let searchStartedAt = Date()
+                let turnResults = await agent.executeToolCalls(
+                    plan,
+                    positions: request.positions,
+                    configuration: request.searchConfiguration,
+                    apiKey: searchKey,
+                    progress: request.progress
+                )
+                allToolCalls.append(contentsOf: plan.toolCalls)
+                toolResults.append(contentsOf: turnResults)
+                evidenceLedger = AIEvidenceLedgerBuilder.build(
+                    localResults: localToolResults,
+                    webResults: toolResults
+                )
+                await request.progress?(
+                    .webSearchResultsReady(
+                        callCount: toolResults.count,
+                        sourceCount: toolResults.reduce(0) { $0 + $1.sources.count }
+                    )
+                )
+                await request.progress?(.evaluatingEvidence(turn: turn, total: loopBudget.maxLoopTurns))
+                let sourceCount = turnResults.reduce(0) { $0 + $1.sources.count }
+                let failedCount = turnResults.filter { $0.status == "failed" }.count
+                let evidenceIsSufficient = turnResults.allSatisfy { $0.status == "ok" && !$0.sources.isEmpty }
+                let canReplan = plan.status == "continue"
+                    && turn < loopBudget.maxLoopTurns
+                    && allToolCalls.count < loopBudget.maxToolCalls
+                    && !evidenceIsSufficient
+                let decision = evidenceIsSufficient
+                    ? "evidence_sufficient"
+                    : (canReplan ? "replan" : "evidence_incomplete")
+                loopTurns.append(
+                    AIAgentLoopTurn(
+                        turn: turn,
+                        startedAt: turnStartedAt,
+                        finishedAt: Date(),
+                        plan: plan,
+                        toolResults: turnResults,
+                        evidenceItemCount: evidenceLedger.items.count,
+                        decision: decision
+                    )
                 )
                 await traceRecorder.record(
-                    stageID: "planning_tool_calls",
-                    kind: "model",
-                    startedAt: planningStartedAt,
-                    outcome: "degraded",
+                    stageID: "executing_tools",
+                    kind: "tool",
+                    startedAt: searchStartedAt,
+                    outcome: evidenceIsSufficient ? "passed" : "degraded",
                     metadata: [
-                        "error_type": String(describing: type(of: error)),
-                        "tool_call_count": "0",
+                        "turn": String(turn),
+                        "tool_call_count": String(turnResults.count),
+                        "source_count": String(sourceCount),
+                        "failed_tool_count": String(failedCount),
+                        "decision": decision,
                     ]
                 )
+                if evidenceIsSufficient {
+                    stopReason = "evidence_sufficient"
+                    break
+                }
+                if !canReplan {
+                    stopReason = allToolCalls.count >= loopBudget.maxToolCalls
+                        ? "tool_budget_reached"
+                        : "evidence_incomplete"
+                    break
+                }
             }
-            let searchStartedAt = Date()
-            toolResults = await agent.executeToolCalls(
-                toolPlan,
-                positions: request.positions,
-                configuration: request.searchConfiguration,
-                apiKey: searchKey,
-                progress: request.progress
-            )
-            await request.progress?(
-                .webSearchResultsReady(
-                    callCount: toolResults.count,
-                    sourceCount: toolResults.reduce(0) { $0 + $1.sources.count }
-                )
-            )
-            AIAnalysisAgent.toolLogger.info(
-                "Report web search completed with \(toolResults.count, privacy: .public) result(s)"
-            )
-            let sourceCount = toolResults.reduce(0) { $0 + $1.sources.count }
-            let failedCount = toolResults.filter { $0.status == "failed" }.count
-            await traceRecorder.record(
-                stageID: "executing_tools",
-                kind: "tool",
-                startedAt: searchStartedAt,
-                outcome: failedCount == 0 ? "passed" : "degraded",
-                metadata: [
-                    "tool_call_count": String(toolResults.count),
-                    "source_count": String(sourceCount),
-                    "failed_tool_count": String(failedCount),
-                ]
-            )
         } else {
             let skippedAt = Date()
             await traceRecorder.record(
@@ -2175,15 +2390,31 @@ struct AIAnalysisHarness {
                 metadata: ["reason": "connected_search_disabled"]
             )
         }
+        let toolPlan = AIWebSearchToolPlan(
+            toolCalls: allToolCalls,
+            status: stopReason,
+            limitations: Array(NSOrderedSet(array: loopLimitations).compactMap { $0 as? String })
+        )
+        let loopState = AIAgentLoopState(
+            schemaVersion: "agent-loop-state.v1",
+            id: loopID,
+            goal: "generate_portfolio_analysis_report",
+            startedAt: loopStartedAt,
+            finishedAt: Date(),
+            maxTurns: loopBudget.maxLoopTurns,
+            maxToolCalls: loopBudget.maxToolCalls,
+            turns: loopTurns,
+            stopReason: stopReason
+        )
         let searchedAt = toolResults.map(\.searchedAt).max() ?? Date()
         let toolResultsJSON = String(data: try AIAnalysisAgent.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
         let toolPlanJSON = String(data: try AIAnalysisAgent.encoder.encode(toolPlan), encoding: .utf8) ?? #"{"tool_calls":[]}"#
-        let evidenceLedger = AIEvidenceLedgerBuilder.build(
-            localResults: localToolResults,
-            webResults: toolResults
-        )
         let evidenceLedgerJSON = String(
             data: try AIAnalysisAgent.encoder.encode(evidenceLedger),
+            encoding: .utf8
+        ) ?? "{}"
+        let loopStateJSON = String(
+            data: try AIAnalysisAgent.encoder.encode(loopState),
             encoding: .utf8
         ) ?? "{}"
 
@@ -2292,6 +2523,7 @@ struct AIAnalysisHarness {
                 toolResultsJSON: toolResultsJSON,
                 toolPlanJSON: toolPlanJSON,
                 evidenceLedgerJSON: evidenceLedgerJSON,
+                loopStateJSON: loopStateJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
                 guardrailResultJSON: rejectedGuardrailJSON,
@@ -2326,6 +2558,7 @@ struct AIAnalysisHarness {
                 toolResultsJSON: toolResultsJSON,
                 toolPlanJSON: toolPlanJSON,
                 evidenceLedgerJSON: evidenceLedgerJSON,
+                loopStateJSON: loopStateJSON,
                 reportPayloadResult: reportPayloadResult,
                 finalReportJSON: finalReportJSON,
                 guardrailResultJSON: guardrailResultJSON,
@@ -2649,6 +2882,7 @@ private enum AIArtifactWriterNode {
         toolResultsJSON: String,
         toolPlanJSON: String,
         evidenceLedgerJSON: String,
+        loopStateJSON: String,
         reportPayloadResult: AIReportPayloadResult,
         finalReportJSON: String,
         guardrailResultJSON: String,
@@ -2659,6 +2893,7 @@ private enum AIArtifactWriterNode {
             toolResultsJSON: toolResultsJSON,
             toolPlanJSON: toolPlanJSON,
             evidenceLedgerJSON: evidenceLedgerJSON,
+            loopStateJSON: loopStateJSON,
             rawReportJSON: reportPayloadResult.rawReport,
             repairedReportJSON: reportPayloadResult.repairedReport,
             finalReportJSON: finalReportJSON,

@@ -206,7 +206,7 @@ enum AIAnalysisPromptText {
 
     【输出契约】
     只返回合法 JSON，不得输出 Markdown、回答或其他文字：
-    {"tool_calls":[{"id":"web_search_1","query":"...","position_refs":["position_..."]}]}
+    {"status":"continue|finish","tool_calls":[{"id":"web_search_1","query":"...","position_refs":["position_..."]}],"limitations":[]}
     """
 
     static func followUpToolPlanningUser(
@@ -214,10 +214,13 @@ enum AIAnalysisPromptText {
         positionsJSON: String,
         reportJSON: String,
         conversationHistoryJSON: String = "[]",
-        portfolioContextJSON: String = "{}"
+        portfolioContextJSON: String = "{}",
+        previousToolResultsJSON: String = "[]",
+        loopTurn: Int = 1,
+        maxLoopTurns: Int = 1
     ) -> String {
         """
-        请判断回答本次追问是否需要 web_search。需要时优先搜索与允许持仓直接相关、且会影响风险解释的近期外部事实；如果用户明确要求搜索泛市场、指数或新闻信息，可使用空 position_refs 搜索公开市场信息；不需要时返回 {"tool_calls":[]}。
+        当前是工具循环第 \(loopTurn)/\(maxLoopTurns) 轮。请判断回答本次追问是否需要 web_search。需要时返回 status = continue；现有证据已足够或不需要搜索时返回 status = finish 和空 tool_calls。不得重复 previous_tool_results 中已经执行过的查询。
 
         <follow_up_question>
         \(question)
@@ -238,6 +241,10 @@ enum AIAnalysisPromptText {
         <latest_report>
         \(reportJSON)
         </latest_report>
+
+        <previous_tool_results>
+        \(previousToolResultsJSON)
+        </previous_tool_results>
         """
     }
 
@@ -318,16 +325,31 @@ enum AIAnalysisPromptText {
 
     【输出契约】
     只返回合法 JSON，不得输出 Markdown、分析结论或其他文字：
-    {"tool_calls":[{"id":"web_search_1","query":"...","position_refs":["position_..."]}]}
+    {"status":"continue|finish","tool_calls":[{"id":"web_search_1","query":"...","position_refs":["position_..."]}],"limitations":[]}
     """
 
-    static func toolPlanningUser(inputJSON: String) -> String {
+    static func toolPlanningUser(
+        inputJSON: String,
+        evidenceLedgerJSON: String = #"{"schema_version":"agent-evidence-ledger.v1","items":[]}"#,
+        previousTurnsJSON: String = "[]",
+        loopTurn: Int = 1,
+        maxLoopTurns: Int = 1
+    ) -> String {
         """
-        请判断本次报告是否确有必要使用 web_search。先检查本地数据能否支持组合结构、集中度、币种敞口、数据质量和 7/30 日表现分析；只有需要补充近期外部事件时才提出调用。
+        当前是工具循环第 \(loopTurn)/\(maxLoopTurns) 轮。请判断本次报告是否确有必要使用 web_search。先检查本地数据与 evidence_ledger 能否支持组合结构、集中度、币种敞口、数据质量和 7/30 日表现分析；只有需要补充近期外部事件时才提出调用。
+        需要调用工具时返回 status = continue；证据已经充分或无需联网时返回 status = finish 和空 tool_calls。不得重复 previous_turns 中已经执行过的查询。
 
         <analysis_input>
         \(inputJSON)
         </analysis_input>
+
+        <evidence_ledger>
+        \(evidenceLedgerJSON)
+        </evidence_ledger>
+
+        <previous_turns>
+        \(previousTurnsJSON)
+        </previous_turns>
         """
     }
 

@@ -1407,7 +1407,9 @@ final class PortfolioStore: ObservableObject {
 
         Task {
             let answer = await answerAIAnalysisFollowUp(trimmed)
-            appendAIAnalysisChatItem(.assistant(answer))
+            appendAIAnalysisChatItem(
+                .assistant(answer.text, followUpRunSnapshot: answer.runSnapshot)
+            )
             aiAnalysisFollowUpProgress = nil
             isAnsweringAIAnalysisFollowUp = false
         }
@@ -1458,19 +1460,27 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
-    private func answerAIAnalysisFollowUp(_ question: String) async -> String {
+    private func answerAIAnalysisFollowUp(
+        _ question: String
+    ) async -> (text: String, runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
             ? .english
             : .chinese
         guard let report = aiAnalysisReport else {
-            return localizedText("请先生成一份智能分析报告，再继续追问。", "Generate a smart analysis report before asking a follow-up.", language: responseAppLanguage)
+            return (
+                localizedText("请先生成一份智能分析报告，再继续追问。", "Generate a smart analysis report before asking a follow-up.", language: responseAppLanguage),
+                nil
+            )
         }
         guard aiConfiguration.isEnabled else {
-            return localizedText("请先启用 AI 资产分析并配置 LLM API Key。", "Enable AI Asset Analysis and configure an LLM API Key first.", language: responseAppLanguage)
+            return (
+                localizedText("请先启用 AI 资产分析并配置 LLM API Key。", "Enable AI Asset Analysis and configure an LLM API Key first.", language: responseAppLanguage),
+                nil
+            )
         }
         if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return configurationMessage
+            return (configurationMessage, nil)
         }
 
         do {
@@ -1491,12 +1501,15 @@ final class PortfolioStore: ObservableObject {
                     }
                 }
             )
-            return result.answer
+            return (result.answer, AIReportChatItem.FollowUpRunSnapshot(result: result))
         } catch {
-            return localizedText(
-                "这次追问未通过信息安全或模型返回结构校验，请稍后重试。",
-                "This follow-up did not pass information security or response-structure validation. Please try again.",
-                language: responseAppLanguage
+            return (
+                localizedText(
+                    "这次追问未通过信息安全或模型返回结构校验，请稍后重试。",
+                    "This follow-up did not pass information security or response-structure validation. Please try again.",
+                    language: responseAppLanguage
+                ),
+                nil
             )
         }
     }

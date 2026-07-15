@@ -11,8 +11,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
     case preflight
     case buildingInput
     case planningToolCalls
+    case replanningToolCalls(turn: Int, total: Int)
     case callingWebSearch(query: String, ordinal: Int, total: Int)
     case webSearchResultsReady(callCount: Int, sourceCount: Int)
+    case evaluatingEvidence(turn: Int, total: Int)
     case generatingReport(model: String)
     case validatingModelOutput(attempt: Int, total: Int)
     case repairingReport(attempt: Int, total: Int, reason: String)
@@ -27,8 +29,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .preflight: "preflight"
         case .buildingInput: "building_input"
         case .planningToolCalls: "planning_tool_calls"
+        case .replanningToolCalls: "replanning_tool_calls"
         case .callingWebSearch: "calling_web_search"
         case .webSearchResultsReady: "web_search_results_ready"
+        case .evaluatingEvidence: "evaluating_evidence"
         case .generatingReport: "generating_report"
         case .validatingModelOutput: "validating_model_output"
         case .repairingReport: "repairing_report"
@@ -50,10 +54,14 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("正在整理完整持仓与历史表现", "Preparing complete holdings and historical performance", language: language)
         case .planningToolCalls:
             localizedText("正在判断是否需要联网搜索", "Deciding whether connected search is needed", language: language)
+        case let .replanningToolCalls(turn, total):
+            localizedText("正在调整搜索计划 \(turn)/\(total)", "Refining the search plan \(turn)/\(total)", language: language)
         case let .callingWebSearch(query, _, _):
             localizedText("正在搜索 \(shortened(query))", "Searching \(shortened(query))", language: language)
         case .webSearchResultsReady:
             localizedText("联网搜索结果已整理", "Connected search results are ready", language: language)
+        case .evaluatingEvidence:
+            localizedText("正在评估现有证据", "Evaluating available evidence", language: language)
         case .generatingReport:
             localizedText("正在分析组合并生成报告", "Analyzing the portfolio and generating the report", language: language)
         case .validatingModelOutput:
@@ -81,10 +89,14 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("核对持仓明细、区间表现和风险约束", "Checking holdings, performance, and risk constraints", language: language)
         case .planningToolCalls:
             localizedText("检查报告是否依赖近期公开信息", "Checking whether recent public information is needed", language: language)
+        case let .replanningToolCalls(turn, total):
+            localizedText("根据上一轮结果补充缺失信息（\(turn)/\(total)）", "Filling evidence gaps from the previous turn (\(turn)/\(total))", language: language)
         case let .callingWebSearch(_, ordinal, total):
             localizedText("受控联网搜索 \(ordinal)/\(total)", "Controlled connected search \(ordinal)/\(total)", language: language)
         case let .webSearchResultsReady(callCount, sourceCount):
             localizedText("完成 \(callCount) 次搜索，保留 \(sourceCount) 个可信来源", "Completed \(callCount) searches and retained \(sourceCount) trusted sources", language: language)
+        case let .evaluatingEvidence(turn, total):
+            localizedText("检查来源覆盖、失败调用与重复查询（\(turn)/\(total)）", "Checking source coverage, failed calls, and duplicate queries (\(turn)/\(total))", language: language)
         case let .generatingReport(model):
             localizedText("模型：\(shortened(model))", "Model: \(shortened(model))", language: language)
         case let .validatingModelOutput(attempt, total):
@@ -109,8 +121,9 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .refreshingPrices, .pricesRefreshed: localizedText("更新资产价格", "price refresh", language: language)
         case .preflight: localizedText("配置检查", "configuration check", language: language)
         case .buildingInput: localizedText("整理组合数据", "portfolio data preparation", language: language)
-        case .planningToolCalls: localizedText("判断联网需求", "connected information assessment", language: language)
+        case .planningToolCalls, .replanningToolCalls: localizedText("判断联网需求", "connected information assessment", language: language)
         case .callingWebSearch, .webSearchResultsReady: localizedText("联网搜索", "connected search", language: language)
+        case .evaluatingEvidence: localizedText("评估分析证据", "evidence evaluation", language: language)
         case .generatingReport: localizedText("生成分析报告", "report generation", language: language)
         case .validatingModelOutput: localizedText("模型输出校验", "model output validation", language: language)
         case .repairingReport: localizedText("修复模型返回", "model response repair", language: language)
@@ -129,15 +142,21 @@ typealias AIAnalysisProgressHandler = @Sendable (AIAnalysisProgress) async -> Vo
 
 enum AIFollowUpProgress: Equatable, Sendable {
     case analyzing
+    case replanning(turn: Int, total: Int)
     case searching(query: String, ordinal: Int, total: Int)
+    case evaluatingEvidence(turn: Int, total: Int)
     case composing
 
     func title(language: AppLanguage) -> String {
         switch self {
         case .analyzing:
             localizedText("正在理解你的问题", "Understanding your question", language: language)
+        case let .replanning(turn, total):
+            localizedText("正在调整搜索计划 \(turn)/\(total)", "Refining the search plan \(turn)/\(total)", language: language)
         case let .searching(query, _, _):
             localizedText("正在搜索 \(shortened(query))", "Searching \(shortened(query))", language: language)
+        case .evaluatingEvidence:
+            localizedText("正在评估搜索结果", "Evaluating search results", language: language)
         case .composing:
             localizedText("正在整理回答", "Preparing the answer", language: language)
         }
@@ -147,8 +166,12 @@ enum AIFollowUpProgress: Equatable, Sendable {
         switch self {
         case .analyzing:
             localizedText("正在结合当前报告与持仓信息进行分析", "Reviewing the current report and holdings", language: language)
+        case let .replanning(turn, total):
+            localizedText("根据上一轮结果补充缺失信息（\(turn)/\(total)）", "Filling evidence gaps from the previous turn (\(turn)/\(total))", language: language)
         case let .searching(_, ordinal, total):
             localizedText("联网补充近期公开信息 \(ordinal)/\(total)", "Checking recent public information \(ordinal)/\(total)", language: language)
+        case let .evaluatingEvidence(turn, total):
+            localizedText("检查来源是否足以回答问题（\(turn)/\(total)）", "Checking whether the sources are sufficient (\(turn)/\(total))", language: language)
         case .composing:
             localizedText("正在把分析结果转化为清晰、易读的说明", "Turning the analysis into a clear response", language: language)
         }
@@ -382,12 +405,51 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         }
     }
 
+    struct FollowUpRunSnapshot: Codable, Equatable {
+        let searchMode: String
+        let toolCallCount: Int
+        let toolResultCount: Int
+        let loopTurnCount: Int
+        let toolPlanJSON: String
+        let toolResultsJSON: String
+        let guardrailResultJSON: String
+
+        init(result: AIAnalysisFollowUpResult) {
+            searchMode = result.searchMode
+            toolCallCount = result.toolCallCount
+            toolResultCount = result.toolResultCount
+            loopTurnCount = result.loopTurnCount
+            toolPlanJSON = result.toolPlanJSON
+            toolResultsJSON = result.toolResultsJSON
+            guardrailResultJSON = result.guardrailResultJSON
+        }
+    }
+
     let id: UUID
     let createdAt: Date
     let kind: Kind
     let text: String?
     let report: AIAnalysisReport?
     let runSnapshot: RunSnapshot?
+    let followUpRunSnapshot: FollowUpRunSnapshot?
+
+    init(
+        id: UUID,
+        createdAt: Date,
+        kind: Kind,
+        text: String?,
+        report: AIAnalysisReport?,
+        runSnapshot: RunSnapshot?,
+        followUpRunSnapshot: FollowUpRunSnapshot? = nil
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.kind = kind
+        self.text = text
+        self.report = report
+        self.runSnapshot = runSnapshot
+        self.followUpRunSnapshot = followUpRunSnapshot
+    }
 
     var content: AIReportChatContent {
         switch kind {
@@ -419,8 +481,20 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         )
     }
 
-    static func assistant(_ text: String, createdAt: Date = .now) -> AIReportChatItem {
-        AIReportChatItem(id: UUID(), createdAt: createdAt, kind: .assistant, text: text, report: nil, runSnapshot: nil)
+    static func assistant(
+        _ text: String,
+        createdAt: Date = .now,
+        followUpRunSnapshot: FollowUpRunSnapshot? = nil
+    ) -> AIReportChatItem {
+        AIReportChatItem(
+            id: UUID(),
+            createdAt: createdAt,
+            kind: .assistant,
+            text: text,
+            report: nil,
+            runSnapshot: nil,
+            followUpRunSnapshot: followUpRunSnapshot
+        )
     }
 
     func migratingLegacyPromptText() -> AIReportChatItem {
@@ -448,7 +522,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             kind: kind,
             text: migratedText,
             report: report,
-            runSnapshot: runSnapshot
+            runSnapshot: runSnapshot,
+            followUpRunSnapshot: followUpRunSnapshot
         )
     }
 }
@@ -463,6 +538,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
     let toolResultsJSON: String
     let toolPlanJSON: String
     let evidenceLedgerJSON: String?
+    let loopStateJSON: String?
     let rawReportJSON: String
     let repairedReportJSON: String?
     let finalReportJSON: String
@@ -474,6 +550,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
         toolResultsJSON: String,
         toolPlanJSON: String,
         evidenceLedgerJSON: String? = nil,
+        loopStateJSON: String? = nil,
         rawReportJSON: String,
         repairedReportJSON: String?,
         finalReportJSON: String,
@@ -484,6 +561,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
         self.toolResultsJSON = toolResultsJSON
         self.toolPlanJSON = toolPlanJSON
         self.evidenceLedgerJSON = evidenceLedgerJSON
+        self.loopStateJSON = loopStateJSON
         self.rawReportJSON = rawReportJSON
         self.repairedReportJSON = repairedReportJSON
         self.finalReportJSON = finalReportJSON
@@ -497,6 +575,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable {
             toolResultsJSON: toolResultsJSON,
             toolPlanJSON: toolPlanJSON,
             evidenceLedgerJSON: evidenceLedgerJSON,
+            loopStateJSON: loopStateJSON,
             rawReportJSON: rawReportJSON,
             repairedReportJSON: repairedReportJSON,
             finalReportJSON: finalReportJSON,
@@ -512,6 +591,9 @@ struct AIAnalysisFollowUpResult: Equatable {
     let searchMode: String
     let toolCallCount: Int
     let toolResultCount: Int
+    let loopTurnCount: Int
+    let toolPlanJSON: String
+    let toolResultsJSON: String
 }
 
 struct PersistedAIAnalysisRun: Codable, Equatable {
@@ -1138,6 +1220,50 @@ struct AIWebSearchToolResult: Codable, Equatable, Sendable {
         case status
         case sources
         case limitations
+    }
+}
+
+struct AIAgentLoopTurn: Codable, Equatable, Sendable {
+    let turn: Int
+    let startedAt: Date
+    let finishedAt: Date
+    let plan: AIWebSearchToolPlan
+    let toolResults: [AIWebSearchToolResult]
+    let evidenceItemCount: Int
+    let decision: String
+
+    enum CodingKeys: String, CodingKey {
+        case turn
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+        case plan
+        case toolResults = "tool_results"
+        case evidenceItemCount = "evidence_item_count"
+        case decision
+    }
+}
+
+struct AIAgentLoopState: Codable, Equatable, Sendable {
+    let schemaVersion: String
+    let id: UUID
+    let goal: String
+    let startedAt: Date
+    let finishedAt: Date
+    let maxTurns: Int
+    let maxToolCalls: Int
+    let turns: [AIAgentLoopTurn]
+    let stopReason: String
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case id
+        case goal
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+        case maxTurns = "max_turns"
+        case maxToolCalls = "max_tool_calls"
+        case turns
+        case stopReason = "stop_reason"
     }
 }
 
