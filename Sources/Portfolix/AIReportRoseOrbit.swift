@@ -1,3 +1,5 @@
+import AppKit
+import QuartzCore
 import SwiftUI
 
 struct AIReportRoseOrbit: View {
@@ -8,77 +10,243 @@ struct AIReportRoseOrbit: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Canvas(opaque: false, colorMode: .linear, rendersAsynchronously: true) { context, canvasSize in
-            RoseOrbitRenderer.render(
-                context: &context,
-                canvasSize: canvasSize,
-                time: reduceMotion ? 0 : date.timeIntervalSinceReferenceDate,
-                isDarkMode: colorScheme == .dark
-            )
-        }
+        RoseOrbitLayerRepresentable(
+            isAnimated: !reduceMotion && date.timeIntervalSinceReferenceDate != 0,
+            isDarkMode: colorScheme == .dark
+        )
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 }
 
-private enum RoseOrbitRenderer {
-    private static let visualScale = 0.9
-    private static let particleCount = 176
-    private static let pathSteps = 520
-    private static let trailSpan = 0.4
-    private static let orbitDuration = 5.0
-    private static let rotationDuration = 20.0
-    private static let pulseDuration = 10.0
-    private static let orbitRadius = 7.0
-    private static let detailAmplitude = 2.7
-    private static let petalCount = 7.0
-    private static let curveScale = 4.0
+private struct RoseOrbitLayerRepresentable: NSViewRepresentable {
+    let isAnimated: Bool
+    let isDarkMode: Bool
 
-    static func render(context: inout GraphicsContext, canvasSize: CGSize, time: TimeInterval, isDarkMode: Bool) {
-        let side = min(canvasSize.width, canvasSize.height)
-        guard side > 0 else { return }
+    func makeNSView(context: Context) -> RoseOrbitLayerView {
+        let view = RoseOrbitLayerView()
+        view.update(isAnimated: isAnimated, isDarkMode: isDarkMode)
+        return view
+    }
 
-        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-        let visualSide = side * visualScale
-        let origin = CGPoint(x: center.x - visualSide / 2, y: center.y - visualSide / 2)
-        let scale = visualSide / 100
-        let detailScale = detailScale(at: time)
-        let progress = normalized(time / orbitDuration)
+    func updateNSView(_ nsView: RoseOrbitLayerView, context: Context) {
+        nsView.update(isAnimated: isAnimated, isDarkMode: isDarkMode)
+    }
+}
 
-        var orbitContext = context
-        orbitContext.translateBy(x: center.x, y: center.y)
-        orbitContext.rotate(by: .radians(-normalized(time / rotationDuration) * 2 * .pi))
-        orbitContext.translateBy(x: -center.x, y: -center.y)
+@MainActor
+private final class RoseOrbitLayerView: NSView {
+    private var requestedAnimation = true
+    private var requestedDarkMode = true
+    private var renderedSize = CGSize.zero
+    private var renderedAnimation = false
+    private var renderedDarkMode = false
 
-        let path = rosePath(detailScale: detailScale, origin: origin, scale: scale)
-        orbitContext.stroke(
-            path,
-            with: .color(PortfolixTheme.violet.opacity(isDarkMode ? 0.16 : 0.22)),
-            style: StrokeStyle(
-                lineWidth: max(1, 5.2 * scale),
-                lineCap: .round,
-                lineJoin: .round
-            )
-        )
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer = CALayer()
+        layer?.masksToBounds = false
+    }
 
-        for index in 0..<particleCount {
-            drawParticle(
-                index: index,
-                progress: progress,
-                detailScale: detailScale,
-                origin: origin,
-                scale: scale,
-                context: &orbitContext,
-                isDarkMode: isDarkMode
-            )
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        rebuildIfNeeded()
+    }
+
+    func update(isAnimated: Bool, isDarkMode: Bool) {
+        requestedAnimation = isAnimated
+        requestedDarkMode = isDarkMode
+        rebuildIfNeeded()
+    }
+
+    private func rebuildIfNeeded() {
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        guard
+            size != renderedSize
+                || requestedAnimation != renderedAnimation
+                || requestedDarkMode != renderedDarkMode
+        else {
+            return
+        }
+
+        renderedSize = size
+        renderedAnimation = requestedAnimation
+        renderedDarkMode = requestedDarkMode
+        rebuildLayers(size: size, isAnimated: requestedAnimation, isDarkMode: requestedDarkMode)
+    }
+
+    private func rebuildLayers(size: CGSize, isAnimated: Bool, isDarkMode: Bool) {
+        guard let rootLayer = layer else { return }
+        rootLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        rootLayer.frame = CGRect(origin: .zero, size: size)
+
+        let rotationLayer = CALayer()
+        rotationLayer.frame = rootLayer.bounds
+        rotationLayer.masksToBounds = false
+        rootLayer.addSublayer(rotationLayer)
+
+        let pulseLayer = CALayer()
+        pulseLayer.frame = rotationLayer.bounds
+        pulseLayer.masksToBounds = false
+        rotationLayer.addSublayer(pulseLayer)
+
+        let path = RoseOrbitGeometry.path(in: pulseLayer.bounds)
+        addPathLayer(path: path, to: pulseLayer, size: size, isDarkMode: isDarkMode)
+
+        if isAnimated {
+            addAnimatedParticles(path: path, to: pulseLayer, size: size, isDarkMode: isDarkMode)
+            addContainerAnimations(rotationLayer: rotationLayer, pulseLayer: pulseLayer)
+        } else {
+            addStaticParticles(to: pulseLayer, size: size, isDarkMode: isDarkMode)
         }
     }
 
-    private static func rosePath(detailScale: Double, origin: CGPoint, scale: CGFloat) -> Path {
-        var path = Path()
+    private func addPathLayer(
+        path: CGPath,
+        to parent: CALayer,
+        size: CGSize,
+        isDarkMode: Bool
+    ) {
+        let pathLayer = CAShapeLayer()
+        pathLayer.frame = parent.bounds
+        pathLayer.path = path
+        pathLayer.fillColor = nil
+        pathLayer.strokeColor = RoseOrbitPalette.violet(
+            isDarkMode: isDarkMode,
+            alpha: isDarkMode ? 0.34 : 0.30
+        )
+        pathLayer.lineWidth = max(1, min(size.width, size.height) * 0.047)
+        pathLayer.lineCap = .round
+        pathLayer.lineJoin = .round
+        parent.addSublayer(pathLayer)
+    }
+
+    private func addAnimatedParticles(
+        path: CGPath,
+        to parent: CALayer,
+        size: CGSize,
+        isDarkMode: Bool
+    ) {
+        let side = min(size.width, size.height)
+        let dotDiameter = max(2.4, side * 0.068)
+        let dotsPerFamily = RoseOrbitGeometry.particleCount / RoseParticleFamily.allCases.count
+        let instanceDelay = RoseOrbitGeometry.orbitDuration
+            * RoseOrbitGeometry.trailSpan
+            / Double(dotsPerFamily)
+        let trailWarmup = instanceDelay * Double(dotsPerFamily)
+        let currentTime = CACurrentMediaTime()
+        let startPoint = RoseOrbitGeometry.point(progress: 0, in: parent.bounds)
+
+        for family in RoseParticleFamily.allCases {
+            let replicator = CAReplicatorLayer()
+            replicator.frame = parent.bounds
+            replicator.instanceCount = dotsPerFamily
+            replicator.instanceDelay = instanceDelay
+            replicator.instanceAlphaOffset = -0.022
+
+            let particle = CALayer()
+            particle.bounds = CGRect(x: 0, y: 0, width: dotDiameter, height: dotDiameter)
+            particle.cornerRadius = dotDiameter / 2
+            particle.position = startPoint
+            particle.backgroundColor = RoseOrbitPalette.color(
+                family: family,
+                isDarkMode: isDarkMode,
+                alpha: 0.98
+            )
+
+            let movement = CAKeyframeAnimation(keyPath: "position")
+            movement.path = path
+            movement.calculationMode = .paced
+            movement.duration = RoseOrbitGeometry.orbitDuration
+            movement.repeatCount = .infinity
+            movement.beginTime = currentTime
+                - trailWarmup
+                - Double(family.rawValue) * RoseOrbitGeometry.orbitDuration
+                    / Double(RoseOrbitGeometry.particleCount)
+            movement.fillMode = .both
+            movement.isRemovedOnCompletion = false
+            particle.add(movement, forKey: "rose-orbit-position")
+
+            replicator.addSublayer(particle)
+            parent.addSublayer(replicator)
+        }
+    }
+
+    private func addStaticParticles(to parent: CALayer, size: CGSize, isDarkMode: Bool) {
+        let side = min(size.width, size.height)
+        let staticParticleCount = 48
+        for index in 0..<staticParticleCount {
+            let tailOffset = Double(index) / Double(staticParticleCount - 1)
+            let progress = RoseOrbitGeometry.normalized(0.18 - tailOffset * RoseOrbitGeometry.trailSpan)
+            let fade = pow(1 - tailOffset, 0.56)
+            let diameter = max(1.6, side * CGFloat(0.025 + fade * 0.045))
+            let point = RoseOrbitGeometry.point(progress: progress, in: CGRect(origin: .zero, size: size))
+            let particle = CALayer()
+            particle.frame = CGRect(
+                x: point.x - diameter / 2,
+                y: point.y - diameter / 2,
+                width: diameter,
+                height: diameter
+            )
+            particle.cornerRadius = diameter / 2
+            particle.backgroundColor = RoseOrbitPalette.color(
+                family: RoseParticleFamily.allCases[index % RoseParticleFamily.allCases.count],
+                isDarkMode: isDarkMode,
+                alpha: max(0.08, fade)
+            )
+            parent.addSublayer(particle)
+        }
+    }
+
+    private func addContainerAnimations(rotationLayer: CALayer, pulseLayer: CALayer) {
+        let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+        rotation.fromValue = 0
+        rotation.toValue = Double.pi * 2
+        rotation.duration = RoseOrbitGeometry.rotationDuration
+        rotation.repeatCount = .infinity
+        rotation.isRemovedOnCompletion = false
+        rotationLayer.add(rotation, forKey: "rose-orbit-rotation")
+
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [0.97, 1.02, 0.97]
+        pulse.keyTimes = [0, 0.5, 1]
+        pulse.duration = RoseOrbitGeometry.pulseDuration
+        pulse.repeatCount = .infinity
+        pulse.timingFunctions = [
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+        ]
+        pulse.isRemovedOnCompletion = false
+        pulseLayer.add(pulse, forKey: "rose-orbit-pulse")
+    }
+}
+
+private enum RoseOrbitGeometry {
+    static let particleCount = 176
+    static let trailSpan = 0.4
+    static let orbitDuration = 5.0
+    static let rotationDuration = 20.0
+    static let pulseDuration = 10.0
+
+    private static let visualScale: CGFloat = 0.9
+    private static let pathSteps = 240
+    private static let orbitRadius = 7.0
+    private static let detailAmplitude = 2.7
+    private static let detailScale = 0.76
+    private static let petalCount = 7.0
+    private static let curveScale = 4.0
+
+    static func path(in bounds: CGRect) -> CGPath {
+        let path = CGMutablePath()
         for index in 0...pathSteps {
             let progress = Double(index) / Double(pathSteps)
-            let point = canvasPoint(progress: progress, detailScale: detailScale, origin: origin, scale: scale)
+            let point = point(progress: progress, in: bounds)
             if index == 0 {
                 path.move(to: point)
             } else {
@@ -88,99 +256,60 @@ private enum RoseOrbitRenderer {
         return path
     }
 
-    private static func drawParticle(
-        index: Int,
-        progress: Double,
-        detailScale: Double,
-        origin: CGPoint,
-        scale: CGFloat,
-        context: inout GraphicsContext,
-        isDarkMode: Bool
-    ) {
-        let tailOffset = Double(index) / Double(particleCount - 1)
-        let particleProgress = normalized(progress - tailOffset * trailSpan)
-        let point = canvasPoint(
-            progress: particleProgress,
-            detailScale: detailScale,
-            origin: origin,
-            scale: scale
+    static func point(progress: Double, in bounds: CGRect) -> CGPoint {
+        let side = min(bounds.width, bounds.height)
+        let visualSide = side * visualScale
+        let origin = CGPoint(
+            x: bounds.midX - visualSide / 2,
+            y: bounds.midY - visualSide / 2
         )
-        let fade = pow(1 - tailOffset, 0.56)
-        let radius = CGFloat(0.9 + fade * 2.7) * scale
-        let opacity = (isDarkMode ? 0.05 : 0.10) + fade * (isDarkMode ? 0.95 : 0.90)
-        let rect = CGRect(
-            x: point.x - radius,
-            y: point.y - radius,
-            width: radius * 2,
-            height: radius * 2
-        )
-
-        context.fill(
-            Path(ellipseIn: rect),
-            with: .color(particleColor(index: index, opacity: opacity, isDarkMode: isDarkMode))
-        )
-
-        if index < 6 {
-            let glowRadius = radius * 1.8
-            let glowRect = CGRect(
-                x: point.x - glowRadius,
-                y: point.y - glowRadius,
-                width: glowRadius * 2,
-                height: glowRadius * 2
-            )
-            context.fill(
-                Path(ellipseIn: glowRect),
-                with: .radialGradient(
-                    Gradient(colors: [
-                        PortfolixTheme.violet.opacity((isDarkMode ? 0.18 : 0.24) * opacity),
-                        .clear
-                    ]),
-                    center: point,
-                    startRadius: 0,
-                    endRadius: glowRadius
-                )
-            )
-        }
-    }
-
-    private static func particleColor(index: Int, opacity: Double, isDarkMode: Bool) -> Color {
-        let phase = index % 6
-        let adjustedOpacity = isDarkMode ? opacity : min(1, opacity * 1.08)
-        switch phase {
-        case 0, 1:
-            return PortfolixTheme.violet.opacity(adjustedOpacity)
-        case 2, 3:
-            return PortfolixTheme.lilac.opacity(adjustedOpacity * (isDarkMode ? 0.94 : 1))
-        case 4:
-            return PortfolixTheme.rose.opacity(adjustedOpacity * (isDarkMode ? 0.82 : 0.92))
-        default:
-            return PortfolixTheme.blue.opacity(adjustedOpacity * (isDarkMode ? 0.72 : 0.82))
-        }
-    }
-
-    private static func canvasPoint(
-        progress: Double,
-        detailScale: Double,
-        origin: CGPoint,
-        scale: CGFloat
-    ) -> CGPoint {
-        let theta = progress * 2 * Double.pi
+        let scale = visualSide / 100
+        let theta = normalized(progress) * 2 * Double.pi
         let radius = orbitRadius - detailAmplitude * detailScale * cos(petalCount * theta)
-        let x = 50 + cos(theta) * radius * curveScale
-        let y = 50 + sin(theta) * radius * curveScale
         return CGPoint(
-            x: origin.x + CGFloat(x) * scale,
-            y: origin.y + CGFloat(y) * scale
+            x: origin.x + CGFloat(50 + cos(theta) * radius * curveScale) * scale,
+            y: origin.y + CGFloat(50 + sin(theta) * radius * curveScale) * scale
         )
     }
 
-    private static func detailScale(at time: TimeInterval) -> Double {
-        let pulseAngle = normalized(time / pulseDuration) * 2 * Double.pi
-        return 0.52 + ((sin(pulseAngle + 0.55) + 1) / 2) * 0.48
-    }
-
-    private static func normalized(_ value: Double) -> Double {
+    static func normalized(_ value: Double) -> Double {
         let remainder = value.truncatingRemainder(dividingBy: 1)
         return remainder >= 0 ? remainder : remainder + 1
+    }
+}
+
+private enum RoseParticleFamily: Int, CaseIterable {
+    case highlight
+    case light
+    case brand
+    case deep
+}
+
+private enum RoseOrbitPalette {
+    static func color(
+        family: RoseParticleFamily,
+        isDarkMode: Bool,
+        alpha: Double
+    ) -> CGColor {
+        let hex: UInt32 = switch family {
+        case .highlight: isDarkMode ? 0xC3B1FF : 0xAF9AFF
+        case .light: isDarkMode ? 0xA995FF : 0x927BEE
+        case .brand: isDarkMode ? 0x8C75FF : 0x7253DB
+        case .deep: isDarkMode ? 0x8068EF : 0x654BC8
+        }
+        return cgColor(hex: hex, alpha: alpha)
+    }
+
+    static func violet(isDarkMode: Bool, alpha: Double) -> CGColor {
+        cgColor(hex: isDarkMode ? 0x8C75FF : 0x7253DB, alpha: alpha)
+    }
+
+    private static func cgColor(hex: UInt32, alpha: Double) -> CGColor {
+        CGColor(
+            red: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: CGFloat(alpha)
+        )
     }
 }

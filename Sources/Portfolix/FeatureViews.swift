@@ -403,7 +403,7 @@ struct PositionsView: View {
 
 struct AIReportView: View {
     @EnvironmentObject private var store: PortfolioStore
-    @State private var draftMessage = ""
+    @State private var composerResetID = UUID()
     @State private var isClearHistoryConfirmationPresented = false
     @State private var clearHistoryErrorMessage: String?
 
@@ -430,7 +430,7 @@ struct AIReportView: View {
                 selectedModel: aiModelBinding,
                 availableModels: availableModelOptions,
                 selectedAnalysisMode: aiAnalysisModeBinding,
-                draftMessage: $draftMessage,
+                composerResetID: composerResetID,
                 language: store.appLanguage,
                 canClearHistory: hasAIAnalysisHistory,
                 clearHistory: { isClearHistoryConfirmationPresented = true },
@@ -481,17 +481,16 @@ struct AIReportView: View {
         store.generateAIAnalysis()
     }
 
-    private func sendFollowUp() {
-        let question = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendFollowUp(_ text: String) {
+        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !store.isAnsweringAIAnalysisFollowUp else { return }
-        draftMessage = ""
         store.submitAIAnalysisFollowUp(question)
     }
 
     private func clearAIAnalysisHistory() {
         do {
             try store.clearAIAnalysisHistory()
-            draftMessage = ""
+            composerResetID = UUID()
         } catch {
             clearHistoryErrorMessage = error.localizedDescription
         }
@@ -589,14 +588,15 @@ private struct AIReportChatSurface: View {
     @Binding var selectedModel: String
     let availableModels: [String]
     @Binding var selectedAnalysisMode: SmartAnalysisMode
-    @Binding var draftMessage: String
+    let composerResetID: UUID
     let language: AppLanguage
     let canClearHistory: Bool
     let clearHistory: () -> Void
     let generate: () -> Void
-    let sendFollowUp: () -> Void
+    let sendFollowUp: (String) -> Void
     @State private var renderedItemLimit = AIReportChatRenderPolicy.initialItemLimit
     @State private var isExpandingHistory = false
+    @State private var pendingScrollTask: Task<Void, Never>?
 
     var body: some View {
         Panel(padding: 0) {
@@ -617,7 +617,7 @@ private struct AIReportChatSurface: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
+                        VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
                             Color.clear
                                 .frame(height: 1)
                                 .id("chat-window-top")
@@ -740,24 +740,21 @@ private struct AIReportChatSurface: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .onAppear {
                         resetRenderedItemLimit()
-                        scrollToBottom(proxy, animated: false, delay: 0.08)
-                    }
-                    .onChange(of: items.count) { _, _ in
-                        resetRenderedItemLimit()
-                        scrollToBottom(proxy)
+                        scheduleScrollToBottom(proxy, animated: false, delay: 0.08)
                     }
                     .onChange(of: items.last?.id) { _, _ in
                         resetRenderedItemLimit()
-                        scrollToBottom(proxy)
+                        scheduleScrollToBottom(proxy, animated: false)
                     }
-                    .onChange(of: run.status) { _, _ in
-                        scrollToBottom(proxy)
-                    }
-                    .onChange(of: followUpProgress) { _, _ in
-                        scrollToBottom(proxy)
+                    .onChange(of: isRunning) { _, _ in
+                        scheduleScrollToBottom(proxy, animated: false)
                     }
                     .onChange(of: isSendingFollowUp) { _, _ in
-                        scrollToBottom(proxy)
+                        scheduleScrollToBottom(proxy, animated: false)
+                    }
+                    .onDisappear {
+                        pendingScrollTask?.cancel()
+                        pendingScrollTask = nil
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -766,7 +763,6 @@ private struct AIReportChatSurface: View {
                 Divider()
 
                 AIReportChatComposer(
-                    draftMessage: $draftMessage,
                     canGenerate: hasPositions && !isRunning,
                     canSendFollowUp: report != nil && !isRunning && !isSendingFollowUp,
                     hasReport: hasReport,
@@ -774,6 +770,7 @@ private struct AIReportChatSurface: View {
                     generate: generate,
                     sendFollowUp: sendFollowUp
                 )
+                .id(composerResetID)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -828,8 +825,19 @@ private struct AIReportChatSurface: View {
         return !Calendar.current.isDate(previous.createdAt, inSameDayAs: item.createdAt)
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true, delay: TimeInterval = 0.02) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+    private func scheduleScrollToBottom(
+        _ proxy: ScrollViewProxy,
+        animated: Bool,
+        delay: TimeInterval = 0.02
+    ) {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(Int(delay * 1_000)))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             if animated {
                 withAnimation(.easeOut(duration: 0.22)) {
                     proxy.scrollTo("chat-bottom", anchor: .bottom)
@@ -858,7 +866,7 @@ private struct AIReportChatSurface: View {
     }
 
     private var orderedItems: [AIReportChatItem] {
-        items.sorted { $0.createdAt < $1.createdAt }
+        items
     }
 
     private var canLoadOlderItems: Bool {
@@ -1890,17 +1898,17 @@ private struct AIReportAssetAlertMessageRow: View {
 }
 
 private struct AIReportChatComposer: View {
-    @Binding var draftMessage: String
     let canGenerate: Bool
     let canSendFollowUp: Bool
     let hasReport: Bool
     let language: AppLanguage
     let generate: () -> Void
-    let sendFollowUp: () -> Void
+    let sendFollowUp: (String) -> Void
+    @State private var draftMessage = ""
 
     var body: some View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            TextField(placeholder, text: $draftMessage, axis: .vertical)
+            TextField(placeholder, text: $draftMessage)
                 .textFieldStyle(.plain)
                 .font(PortfolixTypography.body)
                 .foregroundStyle(PortfolixTheme.primaryText)
@@ -1914,8 +1922,7 @@ private struct AIReportChatComposer: View {
                     interactive: true
                 )
                 .onSubmit {
-                    guard canSubmitFollowUp else { return }
-                    sendFollowUp()
+                    submitFollowUp()
                 }
 
             AIReportGenerateButton(
@@ -1931,7 +1938,7 @@ private struct AIReportChatComposer: View {
                 isEnabled: canSubmitFollowUp,
                 help: localizedText("基于上一份报告追问", "Ask about the latest report", language: language)
             ) {
-                sendFollowUp()
+                submitFollowUp()
             }
         }
         .padding(.horizontal, PortfolixSpacing.lg)
@@ -1944,6 +1951,13 @@ private struct AIReportChatComposer: View {
 
     private var canSubmitFollowUp: Bool {
         canSendFollowUp && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func submitFollowUp() {
+        let question = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSendFollowUp, !question.isEmpty else { return }
+        draftMessage = ""
+        sendFollowUp(question)
     }
 }
 
@@ -2158,22 +2172,14 @@ private struct AIReportStatusCard: View {
 
 private struct AIReportAgentThinkingIcon: View {
     let size: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(size: CGFloat = 40) {
         self.size = size
     }
 
     var body: some View {
-        if reduceMotion {
-            AIReportRoseOrbit(date: Date(timeIntervalSinceReferenceDate: 0), size: size)
-                .frame(width: size, height: size, alignment: .center)
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-                AIReportRoseOrbit(date: timeline.date, size: size)
-            }
+        AIReportRoseOrbit(date: Date(), size: size)
             .frame(width: size, height: size, alignment: .center)
-        }
     }
 }
 

@@ -377,8 +377,20 @@ struct AIAnalysisAgent: Sendable {
         portfolioContext: AIFollowUpPortfolioContext? = nil,
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
+        runtimeRunID: UUID? = nil,
         progress: AIFollowUpProgressHandler? = nil
     ) async throws -> AIAnalysisFollowUpResult {
+        let runID = runtimeRunID ?? UUID()
+        let startedAt = Date()
+        AIAgentRuntimeDiagnostics.event(
+            "agent_follow_up_started",
+            runID: runID,
+            metadata: [
+                "history_count": String(chatHistory.count),
+                "position_count": String(positions.count),
+                "search_enabled": String(searchConfiguration.isEnabled),
+            ]
+        )
         guard llmConfiguration.isEnabled else { throw AIAnalysisAgentError.llmDisabled }
         guard let llmKey = try credentialStore.read(kind: .llm), !llmKey.isEmpty else {
             throw AIAnalysisAgentError.missingLLMKey
@@ -388,10 +400,22 @@ struct AIAnalysisAgent: Sendable {
         let responseLanguage = AIResponseLanguage.detecting(from: normalizedQuestion)
         let reportJSON = String(data: try Self.encoder.encode(report), encoding: .utf8) ?? "{}"
         let artifactSummary = artifacts.map(Self.followUpArtifactSummary) ?? "没有可用的持久化审计摘要。"
-        let conversationHistoryJSON = Self.followUpConversationHistoryJSON(
-            chatHistory,
-            excludingCurrentQuestion: normalizedQuestion,
-            latestReportID: report.id
+        let contextStartedAt = Date()
+        let conversationContext = AIFollowUpContextOrchestrator.make(
+            question: normalizedQuestion,
+            items: chatHistory,
+            excludingItemIDs: [report.id]
+        )
+        let conversationHistoryJSON = AIFollowUpContextOrchestrator.encodedJSON(conversationContext)
+        AIAgentRuntimeDiagnostics.event(
+            "follow_up_context_ready",
+            runID: runID,
+            metadata: [
+                "context_characters": String(conversationHistoryJSON.count),
+                "duration_ms": String(Int(Date().timeIntervalSince(contextStartedAt) * 1_000)),
+                "included_count": String(conversationContext.includedItemCount),
+                "source_count": String(conversationContext.sourceItemCount),
+            ]
         )
         let portfolioContextJSON = Self.followUpPortfolioContextJSON(portfolioContext)
         var searchMode = "disabled"
@@ -420,6 +444,12 @@ struct AIAnalysisAgent: Sendable {
                 ) ?? "[]"
                 var proposedPlan: AIWebSearchToolPlan
                 do {
+                    let plannerStartedAt = Date()
+                    AIAgentRuntimeDiagnostics.event(
+                        "follow_up_planner_started",
+                        runID: runID,
+                        metadata: ["turn": String(turn)]
+                    )
                     proposedPlan = try await makeFollowUpToolPlan(
                         question: normalizedQuestion,
                         reportJSON: reportJSON,
@@ -432,7 +462,24 @@ struct AIAnalysisAgent: Sendable {
                         configuration: llmConfiguration,
                         apiKey: llmKey
                     )
+                    AIAgentRuntimeDiagnostics.event(
+                        "follow_up_planner_finished",
+                        runID: runID,
+                        metadata: [
+                            "duration_ms": String(Int(Date().timeIntervalSince(plannerStartedAt) * 1_000)),
+                            "proposed_call_count": String(proposedPlan.toolCalls.count),
+                            "turn": String(turn),
+                        ]
+                    )
                 } catch {
+                    AIAgentRuntimeDiagnostics.event(
+                        "follow_up_planner_failed",
+                        runID: runID,
+                        metadata: [
+                            "error_type": String(describing: type(of: error)),
+                            "turn": String(turn),
+                        ]
+                    )
                     if turn == 1,
                        shouldSearch,
                        let fallbackPlan = try? Self.fallbackFollowUpToolPlan(
@@ -475,6 +522,15 @@ struct AIAnalysisAgent: Sendable {
                 Self.toolLogger.info(
                     "Follow-up loop turn \(turn, privacy: .public) accepted \(plan.toolCalls.count, privacy: .public) call(s)"
                 )
+                let toolsStartedAt = Date()
+                AIAgentRuntimeDiagnostics.event(
+                    "follow_up_tools_started",
+                    runID: runID,
+                    metadata: [
+                        "call_count": String(plan.toolCalls.count),
+                        "turn": String(turn),
+                    ]
+                )
                 let turnResults = await executeToolCalls(
                     plan,
                     positions: positions,
@@ -485,6 +541,16 @@ struct AIAnalysisAgent: Sendable {
                 )
                 toolCallCount += plan.toolCalls.count
                 toolResults.append(contentsOf: turnResults)
+                AIAgentRuntimeDiagnostics.event(
+                    "follow_up_tools_finished",
+                    runID: runID,
+                    metadata: [
+                        "duration_ms": String(Int(Date().timeIntervalSince(toolsStartedAt) * 1_000)),
+                        "result_count": String(turnResults.count),
+                        "source_count": String(turnResults.reduce(0) { $0 + $1.sources.count }),
+                        "turn": String(turn),
+                    ]
+                )
                 await progress?(.evaluatingEvidence(turn: turn, total: loopBudget.maxLoopTurns))
                 let evidenceIsSufficient = turnResults.allSatisfy { $0.status == "ok" && !$0.sources.isEmpty }
                 let canReplan = plan.status == "continue"
@@ -507,6 +573,15 @@ struct AIAnalysisAgent: Sendable {
         let followUpConfiguration = llmConfiguration
             .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
             .withMaxOutputTokens(LLMOutputTokenPolicy.followUp)
+        let completionStartedAt = Date()
+        AIAgentRuntimeDiagnostics.event(
+            "follow_up_completion_started",
+            runID: runID,
+            metadata: [
+                "search_mode": searchMode,
+                "tool_result_count": String(toolResults.count),
+            ]
+        )
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.followUpSystem,
             userPrompt: AIAnalysisPromptText.followUpUser(
@@ -522,12 +597,29 @@ struct AIAnalysisAgent: Sendable {
             configuration: followUpConfiguration,
             apiKey: llmKey
         )
+        AIAgentRuntimeDiagnostics.event(
+            "follow_up_completion_finished",
+            runID: runID,
+            metadata: [
+                "duration_ms": String(Int(Date().timeIntervalSince(completionStartedAt) * 1_000)),
+                "response_characters": String(raw.count),
+            ]
+        )
+        let validationStartedAt = Date()
         var validated = try await validatedFollowUpResponse(
             raw,
             question: normalizedQuestion,
             responseLanguage: responseLanguage,
             configuration: followUpConfiguration,
             apiKey: llmKey
+        )
+        AIAgentRuntimeDiagnostics.event(
+            "follow_up_validation_finished",
+            runID: runID,
+            metadata: [
+                "duration_ms": String(Int(Date().timeIntervalSince(validationStartedAt) * 1_000)),
+                "repair_used": String(validated.usedRepair),
+            ]
         )
         var usedExpansion = false
         if Self.shouldExpandGeneralMarketFollowUpAnswer(
@@ -565,7 +657,7 @@ struct AIAnalysisAgent: Sendable {
             ),
             encoding: .utf8
         ) ?? #"{"status":"passed"}"#
-        return AIAnalysisFollowUpResult(
+        let result = AIAnalysisFollowUpResult(
             answer: answer,
             guardrailResultJSON: guardrailResultJSON,
             searchMode: searchMode,
@@ -575,6 +667,17 @@ struct AIAnalysisAgent: Sendable {
             toolPlanJSON: toolPlanJSON,
             toolResultsJSON: toolResultsJSON
         )
+        AIAgentRuntimeDiagnostics.event(
+            "agent_follow_up_finished",
+            runID: runID,
+            metadata: [
+                "answer_characters": String(answer.count),
+                "duration_ms": String(Int(Date().timeIntervalSince(startedAt) * 1_000)),
+                "loop_turn_count": String(loopTurnCount),
+                "tool_call_count": String(toolCallCount),
+            ]
+        )
+        return result
     }
 
     private func validatedFollowUpResponse(

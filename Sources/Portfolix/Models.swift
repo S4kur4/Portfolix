@@ -1401,18 +1401,55 @@ final class PortfolioStore: ObservableObject {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp else { return }
         pruneAIAnalysisChatHistory()
+        let runtimeRunID = UUID()
+        let watchdog = AIAgentRuntimeDiagnostics.startMainThreadWatchdog(runID: runtimeRunID)
         let priorChatHistory = aiAnalysisChatItems
-        appendAIAnalysisChatItem(.user(trimmed))
+        AIAgentRuntimeDiagnostics.event(
+            "follow_up_submitted",
+            runID: runtimeRunID,
+            metadata: [
+                "history_count": String(priorChatHistory.count),
+                "position_count": String(positions.count),
+                "question_characters": String(trimmed.count),
+                "search_enabled": String(searchConfiguration.isEnabled),
+            ]
+        )
+        appendAIAnalysisChatItem(.user(trimmed), runtimeRunID: runtimeRunID)
+        AIAgentRuntimeDiagnostics.event("follow_up_ui_state_started", runID: runtimeRunID)
         isAnsweringAIAnalysisFollowUp = true
         aiAnalysisFollowUpProgress = .analyzing
+        AIAgentRuntimeDiagnostics.event("follow_up_ui_state_finished", runID: runtimeRunID)
 
         Task {
-            let answer = await answerAIAnalysisFollowUp(trimmed, chatHistory: priorChatHistory)
+            AIAgentRuntimeDiagnostics.event("follow_up_task_started", runID: runtimeRunID)
+            let startedAt = Date()
+            let answer = await answerAIAnalysisFollowUp(
+                trimmed,
+                chatHistory: priorChatHistory,
+                runtimeRunID: runtimeRunID
+            )
+            AIAgentRuntimeDiagnostics.event(
+                "follow_up_answer_ready",
+                runID: runtimeRunID,
+                metadata: [
+                    "answer_characters": String(answer.text.count),
+                    "duration_ms": String(Int(Date().timeIntervalSince(startedAt) * 1_000)),
+                    "has_run_snapshot": String(answer.runSnapshot != nil),
+                ]
+            )
             appendAIAnalysisChatItem(
-                .assistant(answer.text, followUpRunSnapshot: answer.runSnapshot)
+                .assistant(answer.text, followUpRunSnapshot: answer.runSnapshot),
+                runtimeRunID: runtimeRunID
+            )
+            AIAgentRuntimeDiagnostics.event(
+                "follow_up_message_persisted",
+                runID: runtimeRunID,
+                metadata: ["history_count": String(aiAnalysisChatItems.count)]
             )
             aiAnalysisFollowUpProgress = nil
             isAnsweringAIAnalysisFollowUp = false
+            watchdog?.cancel()
+            AIAgentRuntimeDiagnostics.event("follow_up_finished", runID: runtimeRunID)
         }
     }
 
@@ -1463,7 +1500,8 @@ final class PortfolioStore: ObservableObject {
 
     private func answerAIAnalysisFollowUp(
         _ question: String,
-        chatHistory: [AIReportChatItem]
+        chatHistory: [AIReportChatItem],
+        runtimeRunID: UUID
     ) async -> (text: String, runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
@@ -1497,14 +1535,34 @@ final class PortfolioStore: ObservableObject {
                 portfolioContext: followUpContext,
                 llmConfiguration: aiConfiguration,
                 searchConfiguration: searchConfiguration,
+                runtimeRunID: runtimeRunID,
                 progress: { [weak self] progress in
                     await MainActor.run {
+                        AIAgentRuntimeDiagnostics.event(
+                            "follow_up_progress",
+                            runID: runtimeRunID,
+                            metadata: ["stage": AIAgentRuntimeDiagnostics.stageID(for: progress)]
+                        )
                         self?.aiAnalysisFollowUpProgress = progress
                     }
                 }
             )
             return (result.answer, AIReportChatItem.FollowUpRunSnapshot(result: result))
         } catch {
+            let stage: String
+            if let pipelineError = error as? AIAnalysisPipelineError {
+                stage = String(describing: pipelineError.stage)
+            } else {
+                stage = "follow_up"
+            }
+            AIAgentRuntimeDiagnostics.event(
+                "follow_up_failed",
+                runID: runtimeRunID,
+                metadata: [
+                    "error_type": String(describing: type(of: error)),
+                    "stage": stage,
+                ]
+            )
             return (
                 localizedText(
                     "这次追问未通过信息安全或模型返回结构校验，请稍后重试。",
@@ -2045,17 +2103,51 @@ final class PortfolioStore: ObservableObject {
         appendAIAnalysisChatItem(.report(report, run))
     }
 
-    private func appendAIAnalysisChatItem(_ item: AIReportChatItem) {
+    private func appendAIAnalysisChatItem(
+        _ item: AIReportChatItem,
+        runtimeRunID: UUID? = nil
+    ) {
         guard item.createdAt >= aiChatRetentionPeriod.cutoffDate() else { return }
-        if let index = aiAnalysisChatItems.firstIndex(where: { $0.id == item.id }) {
-            aiAnalysisChatItems[index] = item
+        if let runtimeRunID {
+            AIAgentRuntimeDiagnostics.event(
+                "chat_memory_update_started",
+                runID: runtimeRunID,
+                metadata: ["history_count": String(aiAnalysisChatItems.count)]
+            )
+        }
+
+        var updatedItems = aiAnalysisChatItems
+        if let index = updatedItems.firstIndex(where: { $0.id == item.id }) {
+            updatedItems[index] = item
         } else {
-            aiAnalysisChatItems.append(item)
-            aiAnalysisChatItems.sort { $0.createdAt < $1.createdAt }
+            updatedItems.append(item)
+            updatedItems.sort { $0.createdAt < $1.createdAt }
+        }
+        aiAnalysisChatItems = updatedItems
+
+        if let runtimeRunID {
+            AIAgentRuntimeDiagnostics.event(
+                "chat_memory_update_finished",
+                runID: runtimeRunID,
+                metadata: ["history_count": String(updatedItems.count)]
+            )
         }
         do {
+            if let runtimeRunID {
+                AIAgentRuntimeDiagnostics.event("chat_persistence_started", runID: runtimeRunID)
+            }
             try positionRepository?.upsertAIAnalysisChatItem(item)
+            if let runtimeRunID {
+                AIAgentRuntimeDiagnostics.event("chat_persistence_finished", runID: runtimeRunID)
+            }
         } catch {
+            if let runtimeRunID {
+                AIAgentRuntimeDiagnostics.event(
+                    "chat_persistence_failed",
+                    runID: runtimeRunID,
+                    metadata: ["error_type": String(describing: type(of: error))]
+                )
+            }
             persistenceErrorMessage = "AI 对话记录保存失败：\(error.localizedDescription)"
         }
     }
