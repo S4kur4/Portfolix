@@ -3,35 +3,47 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.3</title>
-            <pubDate>Thu, 09 Jul 2026 22:23:30 +0800</pubDate>
+            <title>0.1.4</title>
+            <pubDate>Thu, 16 Jul 2026 22:00:33 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>11</sparkle:version>
-            <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix 0.1.3
+            <description sparkle:format="markdown"><![CDATA[# Portfolix 0.1.4
 
-### 新功能
+## Portfolix Agent
 
-- 主要持仓支持按当前市值、持仓收益率和今日收益升序或降序排列。
-- 支持按市值展示前 10%、前 30%、前 50% 或全部持仓。
-- 点击主要持仓中的资产图标即可快速打开编辑窗口；已有资产的类型、名称、代码和计价币种将保持锁定。
+- 重构 Agent Loop，引入有界研究循环、执行预算和更清晰的阶段状态，减少无效搜索与失控重试。
+- 增加确定性的持仓、收益和市场证据工具，让分析结论更紧密地基于组合数据。
+- 优化追问上下文编排，在保留相关历史对话的同时控制上下文长度和重复内容。
+- 增加报告证据归因与质量评估，改进联网搜索结果不足时的处理方式。
+- 完善追问链路诊断，能够更准确地区分上下文、规划、搜索、生成和校验阶段的问题。
 
-### 智能分析
+## 性能与稳定性
 
-- 优化 Agent 报告生成、结构修复、失败诊断和运行状态反馈。
-- 改进聊天历史加载、日期与时间显示、内容清理和保留策略。
-- 统一 LLM API 与 Search API 的未配置、待验证、验证失败和已验证状态。
-- 减少重复或容易误解的配置提示，让缺少 API 时的说明更加准确。
+- 修复智能分析运行时偶发的 SwiftUI 布局循环和界面无响应问题。
+- 优化聊天记录渲染、自动滚动和消息写入，降低长对话下的布局开销。
+- 将玫瑰曲线动画迁移至独立 Core Animation 图层，在保持流畅效果的同时显著降低 CPU 占用。
+- 隔离消息输入框状态，提升长对话场景下连续输入的响应速度。
 
-### 体验优化
+## 视觉优化
 
-- 调整主要持仓操作按钮的 Liquid Glass 布局和间距。
-- 统一 API 设置与 Agent 窗口的状态颜色及图标。
-- 优化数据源状态展示，并修复若干界面细节和稳定性问题。
+- 调整亮色与暗色模式的画布、卡片、边框和强调色，提升层次与可读性。
+- 统一玫瑰曲线动画的 Portfolix 品牌紫色，并修复动画启动时的异常粒子。
+
+---
+
+## What's New
+
+- Reworked the Agent loop with bounded research, execution budgets, deterministic portfolio evidence tools, and clearer runtime stages.
+- Improved follow-up context orchestration, evidence attribution, report quality evaluation, and failure diagnostics.
+- Fixed an intermittent SwiftUI layout loop that could make the analysis view unresponsive.
+- Reduced long-chat rendering and auto-scroll overhead, and isolated composer state for smoother typing.
+- Moved the rose-orbit animation to a dedicated Core Animation layer for substantially lower CPU usage.
+- Refined light and dark color systems and aligned the animation with the Portfolix brand purple palette.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.3/Portfolix-0.1.3.dmg" length="5189736" type="application/octet-stream" sparkle:edSignature="vTwQfE9d8rR7TF5aoZxyAmwXK2+7JOHw3SmgWB2Haf/YZE6vtsXWT6x7+TDG54Fg+11d8sI3+bEg9Y1QL3axAg=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.4/Portfolix-0.1.4.dmg" length="5396918" type="application/octet-stream" sparkle:edSignature="QcpEyby8JXm4toD0hsYm/rMZc8s1w6SqSVQAxY5DpMbTxtr9tgmjnm62ziDfZMsRt/DeYh0WlSt6OigEAqlNCA=="/>
         </item>
     </channel>
 </rss>
