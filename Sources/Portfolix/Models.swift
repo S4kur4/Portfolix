@@ -770,6 +770,7 @@ final class PortfolioStore: ObservableObject {
     }
     @Published private var aiInvestmentProfile: AIInvestmentProfile?
     @Published private var isGeneratingInvestmentProfile = false
+    var investmentProfileExposureCache: [AssetExposureProfile] = []
 
     @Published var positions: [Position]
     @Published var snapshotHistory: [PortfolioSnapshot]
@@ -980,6 +981,7 @@ final class PortfolioStore: ObservableObject {
         removePersistedAIAnalysisReportIfExpired(cutoff: savedChatRetentionPeriod.cutoffDate())
         aiAnalysisChatItems = loadedChatItems
         aiInvestmentProfile = Self.savedAIInvestmentProfile()
+        investmentProfileExposureCache = aiInvestmentProfile?.assetExposures ?? []
         seedAIAnalysisChatIfNeeded()
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
@@ -2311,14 +2313,24 @@ final class PortfolioStore: ObservableObject {
         defer { isGeneratingInvestmentProfile = false }
 
         do {
+            let profileSearchConfiguration = hasValidSearchAPIKey
+                ? searchConfiguration
+                : SearchConfiguration(
+                    isEnabled: false,
+                    provider: searchConfiguration.provider,
+                    quality: searchConfiguration.quality
+                )
             let profile = try await aiAgent.generateInvestmentProfile(
                 positions: positions,
                 localScores: localInvestmentProfileScoresForAI,
                 storeContext: makeAIStoreContext(),
                 llmConfiguration: aiConfiguration,
+                searchConfiguration: profileSearchConfiguration,
+                cachedExposures: investmentProfileExposureCache,
                 inputFingerprint: fingerprint
             )
             aiInvestmentProfile = profile
+            investmentProfileExposureCache = profile.assetExposures ?? investmentProfileExposureCache
             persistAIInvestmentProfile(profile)
         } catch {
             return
@@ -2347,6 +2359,23 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
+    var investmentProfileHelpText: String {
+        guard let profile = currentAIInvestmentProfile() else {
+            return localizedText(
+                "画像会识别资产背后的投资地区、资产类别和重复基准；联网增强可补充无法在本地确认的基金资料。",
+                "The profile looks through holdings to regions, asset classes, and overlapping benchmarks. Connected mode can enrich funds that cannot be resolved locally.",
+                language: appLanguage
+            )
+        }
+        let coverage = Int(((profile.exposureCoverage ?? 0) * 100).rounded())
+        let sourceCount = profile.evidenceSourceCount ?? 0
+        return localizedText(
+            "画像已按底层资产暴露计算，资产识别覆盖率约 \(coverage)%，其中参考 \(sourceCount) 个公开来源。",
+            "The profile uses look-through exposure analysis with about \(coverage)% asset-identification coverage, including \(sourceCount) public sources.",
+            language: appLanguage
+        )
+    }
+
     private var investmentProfileInputFingerprint: String {
         let totalValue = max(positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }, 0.001)
         let positionParts = positions
@@ -2373,8 +2402,12 @@ final class PortfolioStore: ObservableObject {
             }
             .joined(separator: "|")
         return [
-            "v2-local-primary",
+            "v4-lookthrough",
+            InvestmentProfileEngine.resolverVersion,
             aiConfiguration.model,
+            searchConfiguration.isEnabled && hasValidSearchAPIKey
+                ? searchConfiguration.provider.rawValue
+                : "search-unavailable",
             String(riskProfileVersion),
             stableFingerprintNumber(positionLimit, decimals: 0),
             stableFingerprintNumber(cryptoLimit, decimals: 0),

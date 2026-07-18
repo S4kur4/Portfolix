@@ -1422,7 +1422,10 @@ private struct InvestmentProfileCard: View {
     var body: some View {
         Panel(padding: PortfolixSpacing.xl) {
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                InvestmentProfileHeader(language: store.appLanguage)
+                InvestmentProfileHeader(
+                    language: store.appLanguage,
+                    helpText: store.investmentProfileHelpText
+                )
 
                 if store.positions.isEmpty {
                     DashboardEmptyState(title: localizedText("添加持仓后生成画像", "Add holdings to generate a profile", language: store.appLanguage))
@@ -1449,6 +1452,7 @@ struct InvestmentProfileDimension: Identifiable {
 
 private struct InvestmentProfileHeader: View {
     let language: AppLanguage
+    let helpText: String
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.sm) {
@@ -1463,11 +1467,7 @@ private struct InvestmentProfileHeader: View {
                 .lineLimit(1)
 
             HelpIcon(
-                text: localizedText(
-                    "投资画像由AI辅助分析生成",
-                    "Investment Profile is AI-assisted",
-                    language: language
-                )
+                text: helpText
             )
 
             Spacer(minLength: PortfolixSpacing.sm)
@@ -1774,192 +1774,48 @@ extension PortfolioStore {
     }
 
     var investmentProfileDimensions: [InvestmentProfileDimension] {
-        let localDimensions = localInvestmentProfileDimensions
         let aiScores = investmentProfileAIScoresForDisplay
-        return localDimensions.map { dimension in
-            guard let aiScore = aiScores[dimension.id] else { return dimension }
-            let calibratedScore = clampProfileValue(
-                min(max(aiScore, dimension.value - 10), dimension.value + 10)
-            )
+        return localInvestmentProfileScoresForAI.map { score in
             return InvestmentProfileDimension(
-                id: dimension.id,
-                title: dimension.title,
-                value: calibratedScore,
-                color: dimension.color
+                id: score.id,
+                title: investmentProfileTitle(for: score.id),
+                value: min(max(aiScores[score.id] ?? score.score, 0), 100),
+                color: PortfolixTheme.lilac
             )
         }
     }
 
     var localInvestmentProfileScoresForAI: [AIInvestmentProfileScore] {
-        localInvestmentProfileDimensions.map { dimension in
-            AIInvestmentProfileScore(
-                id: dimension.id,
-                score: dimension.value,
-                reason: "Local deterministic baseline"
-            )
-        }
-    }
-
-    private var localInvestmentProfileDimensions: [InvestmentProfileDimension] {
-        let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
-        let categoryValues = Dictionary(grouping: positions, by: \.category)
-            .mapValues { positions in positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue } }
-        let currencyValues = Dictionary(grouping: positions, by: \.quoteCurrency)
-            .mapValues { positions in positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue } }
-        let positiveValue = max(totalValue, 0)
-
-        func allocation(_ category: AssetCategory) -> Double {
-            guard totalValue > 0 else { return 0 }
-            return (categoryValues[category] ?? 0) / totalValue * 100
-        }
-
-        func currencyAllocation(_ currency: DisplayCurrency) -> Double {
-            guard totalValue > 0 else { return 0 }
-            return (currencyValues[currency] ?? 0) / totalValue * 100
-        }
-
-        func weightedScore(_ scoring: (Position) -> Double) -> Double {
-            guard totalValue > 0 else { return 0 }
-            return positions.reduce(0.0) { partial, position in
-                partial + scoring(position) * position.marketValueCNY.doubleValue / totalValue
-            }
-        }
-
-        let evaluation = riskConstraintEvaluation
-        let positionShares = positions.map { position in
-            guard positiveValue > 0 else { return 0.0 }
-            return max(position.marketValueCNY.doubleValue / positiveValue, 0.0)
-        }
-        let hhi = positionShares.reduce(0.0) { $0 + $1 * $1 }
-        let effectivePositionCount = hhi > 0 ? min(1 / hhi, 12) : 0
-        let effectivePositionScore = effectivePositionCount / 12 * 38
-        let positionCountScore = min(Double(positions.count), 10) / 10 * 14
-        let categoryCount = Set(positions.map(\.category)).count
-        let categoryCountScore = min(Double(categoryCount), 5) / 5 * 22
-        let currencyCount = Set(positions.map(\.quoteCurrency)).count
-        let currencyCountScore = min(Double(currencyCount), 4) / 4 * 14
-        let concentrationPenalty = max(evaluation.largestPositionPercent - 14, 0) * 1.15
-        let topThreePercent = positions
-            .sorted { $0.marketValueCNY > $1.marketValueCNY }
-            .prefix(3)
-            .reduce(0.0) { $0 + ($1.marketValueCNY.doubleValue / max(positiveValue, 0.001) * 100) }
-        let topThreePenalty = max(topThreePercent - 62, 0) * 0.32
-        let profitableAllocation = positions.reduce(0.0) { partial, position in
-            guard totalValue > 0, position.profitRate > 0 else { return partial }
-            return partial + position.marketValueCNY.doubleValue / totalValue * 100
-        }
-        let staleAllocation = positions.reduce(0.0) { partial, position in
-            guard totalValue > 0, position.freshness == .stale else { return partial }
-            return partial + position.marketValueCNY.doubleValue / totalValue * 100
-        }
-
-        let diversification = clampProfileValue(
-            18 + effectivePositionScore + positionCountScore + categoryCountScore + currencyCountScore
-                - concentrationPenalty - topThreePenalty
+        let context = AIAnalysisStoreContext(
+            displayCurrency: displayCurrency,
+            convertedTotalValue: totalValueCNY,
+            convertedTotalProfit: totalProfitCNY,
+            totalProfitRate: totalProfitRate,
+            riskProfileConfigured: riskProfileConfigured,
+            riskProfileVersion: riskProfileVersion,
+            riskLevel: riskLevel,
+            positionLimit: positionLimit,
+            cryptoLimit: cryptoLimit,
+            foreignCurrencyLimit: foreignCurrencyLimit,
+            liquidityMinimum: liquidityMinimum,
+            riskConstraintEvaluation: riskConstraintEvaluation
         )
-        let growth = weightedScore { position in
-            switch position.category {
-            case .crypto: 88
-            case .usStock, .hkStock: 72
-            case .cnStock, .bStock: 64
-            case .fund: 52
-            case .cash: 12
-            }
-        } + profitableAllocation * 0.08 - evaluation.cashAllocationPercent * 0.12
-        let defense = weightedScore { position in
-            switch position.category {
-            case .cash: 96
-            case .fund: 76
-            case .cnStock, .hkStock, .usStock: 52
-            case .bStock: 46
-            case .crypto: 20
-            }
-        } - concentrationPenalty * 0.42 - allocation(.crypto) * 0.22 - staleAllocation * 0.18
-        let cashFlow = clampProfileValue(
-            8
-                + evaluation.cashAllocationPercent * 1.55
-                + allocation(.fund) * 0.52
-                + profitableAllocation * 0.12
+        let exposures = InvestmentProfileEngine.merge(
+            positions: positions,
+            cached: investmentProfileExposureCache
         )
-        let activity = weightedScore { position in
-            switch position.category {
-            case .crypto: 92
-            case .cnStock, .hkStock, .usStock: 76
-            case .bStock: 58
-            case .fund: 44
-            case .cash: 24
-            }
-        } + min(Double(positions.count), 12) / 12 * 8 - evaluation.cashAllocationPercent * 0.08
-        let overseasMarketExposure = allocation(.usStock) + allocation(.hkStock) + allocation(.bStock)
-        let globalExposure = clampProfileValue(
-            evaluation.nonCNYAllocationPercent * 1.05
-                + overseasMarketExposure * 0.42
-                + currencyAllocation(.usd) * 0.22
-                + currencyAllocation(.hkd) * 0.18
-                + currencyAllocation(.usdt) * 0.12
-        )
-
-        return [
-            InvestmentProfileDimension(
-                id: "growth",
-                title: localizedText("成长", "Growth", language: appLanguage),
-                value: clampProfileValue(growth + riskTiltAdjustment(for: .growth)),
-                color: PortfolixTheme.lilac
-            ),
-            InvestmentProfileDimension(
-                id: "global",
-                title: localizedText("全球化", "Global", language: appLanguage),
-                value: clampProfileValue(globalExposure),
-                color: PortfolixTheme.lilac
-            ),
-            InvestmentProfileDimension(
-                id: "diversification",
-                title: localizedText("分散", "Diversified", language: appLanguage),
-                value: diversification,
-                color: PortfolixTheme.lilac
-            ),
-            InvestmentProfileDimension(
-                id: "defense",
-                title: localizedText("防守", "Defense", language: appLanguage),
-                value: clampProfileValue(defense + riskTiltAdjustment(for: .defense)),
-                color: PortfolixTheme.lilac
-            ),
-            InvestmentProfileDimension(
-                id: "cashflow",
-                title: localizedText("现金流", "Cash Flow", language: appLanguage),
-                value: cashFlow,
-                color: PortfolixTheme.lilac
-            ),
-            InvestmentProfileDimension(
-                id: "activity",
-                title: localizedText("活跃", "Activity", language: appLanguage),
-                value: clampProfileValue(activity + riskTiltAdjustment(for: .activity)),
-                color: PortfolixTheme.lilac
-            ),
-        ]
+        return InvestmentProfileEngine.score(positions: positions, exposures: exposures, context: context).scores
     }
 
-    private enum ProfileRiskTiltTarget {
-        case growth
-        case defense
-        case activity
-    }
-
-    private func riskTiltAdjustment(for target: ProfileRiskTiltTarget) -> Double {
-        let riskBudget = (positionLimit - 30) * 0.06
-            + (cryptoLimit - 15) * 0.08
-            + (foreignCurrencyLimit - 50) * 0.04
-            - (liquidityMinimum - 10) * 0.08
-        switch target {
-        case .growth, .activity:
-            return riskBudget
-        case .defense:
-            return -riskBudget
+    private func investmentProfileTitle(for id: String) -> String {
+        switch id {
+        case "growth": localizedText("成长", "Growth", language: appLanguage)
+        case "global": localizedText("全球化", "Global", language: appLanguage)
+        case "diversification": localizedText("分散", "Diversified", language: appLanguage)
+        case "defense": localizedText("防守", "Defense", language: appLanguage)
+        case "cashflow": localizedText("现金流", "Cash Flow", language: appLanguage)
+        default: localizedText("活跃", "Activity", language: appLanguage)
         }
-    }
-
-    private func clampProfileValue(_ value: Double) -> Double {
-        min(max(value, 0), 100)
     }
 }
 

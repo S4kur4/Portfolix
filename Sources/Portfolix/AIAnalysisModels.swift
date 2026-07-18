@@ -793,6 +793,10 @@ struct AIInvestmentProfile: Codable, Identifiable, Equatable {
     let dimensions: [AIInvestmentProfileScore]
     let summary: String
     let confidence: String
+    let exposureCoverage: Double?
+    let unknownExposurePercent: Double?
+    let evidenceSourceCount: Int?
+    let assetExposures: [AssetExposureProfile]?
 
     init(
         id: UUID = UUID(),
@@ -804,7 +808,11 @@ struct AIInvestmentProfile: Codable, Identifiable, Equatable {
         inputFingerprint: String,
         dimensions: [AIInvestmentProfileScore],
         summary: String,
-        confidence: String
+        confidence: String,
+        exposureCoverage: Double? = nil,
+        unknownExposurePercent: Double? = nil,
+        evidenceSourceCount: Int? = nil,
+        assetExposures: [AssetExposureProfile]? = nil
     ) {
         self.id = id
         self.generatedAt = generatedAt
@@ -816,6 +824,10 @@ struct AIInvestmentProfile: Codable, Identifiable, Equatable {
         self.dimensions = dimensions
         self.summary = summary
         self.confidence = confidence
+        self.exposureCoverage = exposureCoverage
+        self.unknownExposurePercent = unknownExposurePercent
+        self.evidenceSourceCount = evidenceSourceCount
+        self.assetExposures = assetExposures
     }
 }
 

@@ -1015,6 +1015,8 @@ struct AIAnalysisAgent: Sendable {
         localScores: [AIInvestmentProfileScore],
         storeContext: AIAnalysisStoreContext,
         llmConfiguration: AIProviderConfiguration,
+        searchConfiguration: SearchConfiguration = .default,
+        cachedExposures: [AssetExposureProfile] = [],
         inputFingerprint: String,
         generatedAt: Date = Date()
     ) async throws -> AIInvestmentProfile {
@@ -1024,6 +1026,28 @@ struct AIAnalysisAgent: Sendable {
             throw AIAnalysisAgentError.missingLLMKey
         }
 
+        let searchKey = searchConfiguration.isEnabled
+            ? try credentialStore.read(kind: searchConfiguration.provider.credentialKind)
+            : nil
+        let research = await InvestmentProfileHarness(llm: llm, search: search).enrich(
+            positions: positions,
+            cachedExposures: cachedExposures,
+            llmConfiguration: llmConfiguration,
+            searchConfiguration: searchConfiguration,
+            llmKey: llmKey,
+            searchKey: searchKey,
+            now: generatedAt
+        )
+        let scoreResult = InvestmentProfileEngine.score(
+            positions: positions,
+            exposures: research.exposures,
+            context: storeContext
+        )
+        let hasEnrichedEvidence = research.exposures.contains { profile in
+            profile.evidence.contains { $0.source != "portfolix_native_resolver" }
+        }
+        let calibrationScores = hasEnrichedEvidence ? scoreResult.scores : localScores
+
         let input = Self.makeInput(
             positions: positions,
             context: storeContext,
@@ -1032,27 +1056,72 @@ struct AIAnalysisAgent: Sendable {
             generatedAt: generatedAt
         )
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
-        let localScoresJSON = String(data: try Self.encoder.encode(localScores), encoding: .utf8) ?? "[]"
-        let raw = try await llm.completeJSON(
-            systemPrompt: AIAnalysisPromptText.investmentProfileSystem,
-            userPrompt: AIAnalysisPromptText.investmentProfileUser(
-                localScoresJSON: localScoresJSON,
-                inputJSON: inputJSON
-            ),
-            configuration: llmConfiguration,
-            apiKey: llmKey
+        let localScoresJSON = String(data: try Self.encoder.encode(calibrationScores), encoding: .utf8) ?? "[]"
+        let calibrationContext = InvestmentProfileCalibrationContext(
+            snapshot: scoreResult.snapshot,
+            assetExposures: research.exposures,
+            searchedAssetCount: research.searchedAssetCount,
+            limitations: research.limitations
         )
-        guard let payload = Self.decodeInvestmentProfilePayload(raw) else {
-            throw AIAnalysisAgentError.invalidReport
+        let exposureJSON = String(
+            data: try Self.inputEncoder.encode(calibrationContext),
+            encoding: .utf8
+        ) ?? "{}"
+        let evidenceSourceCount = Set(research.exposures.flatMap(\.evidence).compactMap(\.url)).count
+        do {
+            let raw = try await llm.completeJSON(
+                systemPrompt: AIAnalysisPromptText.investmentProfileSystem,
+                userPrompt: AIAnalysisPromptText.investmentProfileUser(
+                    localScoresJSON: localScoresJSON,
+                    inputJSON: inputJSON,
+                    exposureJSON: exposureJSON
+                ),
+                configuration: llmConfiguration,
+                apiKey: llmKey
+            )
+            guard let payload = Self.decodeInvestmentProfilePayload(raw) else {
+                throw AIAnalysisAgentError.invalidReport
+            }
+            return try Self.investmentProfile(
+                from: payload,
+                localScores: calibrationScores,
+                generatedAt: generatedAt,
+                model: llmConfiguration.model,
+                riskProfileVersion: storeContext.riskProfileVersion,
+                inputFingerprint: inputFingerprint,
+                exposureCoverage: scoreResult.snapshot.evidenceCoverage,
+                unknownExposurePercent: scoreResult.snapshot.unknownExposurePercent,
+                evidenceSourceCount: evidenceSourceCount,
+                assetExposures: research.exposures
+            )
+        } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            let confidence: String
+            if scoreResult.snapshot.evidenceCoverage >= 0.8 {
+                confidence = "high"
+            } else if scoreResult.snapshot.evidenceCoverage >= 0.5 {
+                confidence = "medium"
+            } else {
+                confidence = "low"
+            }
+            return AIInvestmentProfile(
+                generatedAt: generatedAt,
+                profileDate: Self.dayString(from: generatedAt),
+                model: llmConfiguration.model,
+                promptVersion: AIAnalysisPromptText.investmentProfileVersion,
+                riskProfileVersion: storeContext.riskProfileVersion,
+                inputFingerprint: inputFingerprint,
+                dimensions: calibrationScores,
+                summary: "画像已根据持仓及底层资产暴露生成，AI 解释暂时不可用。",
+                confidence: confidence,
+                exposureCoverage: scoreResult.snapshot.evidenceCoverage,
+                unknownExposurePercent: scoreResult.snapshot.unknownExposurePercent,
+                evidenceSourceCount: evidenceSourceCount,
+                assetExposures: research.exposures
+            )
         }
-        return try Self.investmentProfile(
-            from: payload,
-            localScores: localScores,
-            generatedAt: generatedAt,
-            model: llmConfiguration.model,
-            riskProfileVersion: storeContext.riskProfileVersion,
-            inputFingerprint: inputFingerprint
-        )
     }
 
     fileprivate func makeToolPlan(
@@ -1687,7 +1756,11 @@ struct AIAnalysisAgent: Sendable {
         generatedAt: Date,
         model: String,
         riskProfileVersion: Int,
-        inputFingerprint: String
+        inputFingerprint: String,
+        exposureCoverage: Double? = nil,
+        unknownExposurePercent: Double? = nil,
+        evidenceSourceCount: Int? = nil,
+        assetExposures: [AssetExposureProfile]? = nil
     ) throws -> AIInvestmentProfile {
         let requiredIDs = ["growth", "global", "diversification", "defense", "cashflow", "activity"]
         var scoresByID: [String: LLMInvestmentProfileDimensionPayload] = [:]
@@ -1731,7 +1804,11 @@ struct AIAnalysisAgent: Sendable {
             inputFingerprint: inputFingerprint,
             dimensions: dimensions,
             summary: String(payload.summary.prefix(300)),
-            confidence: ["low", "medium", "high"].contains(payload.confidence) ? payload.confidence : "low"
+            confidence: ["low", "medium", "high"].contains(payload.confidence) ? payload.confidence : "low",
+            exposureCoverage: exposureCoverage,
+            unknownExposurePercent: unknownExposurePercent,
+            evidenceSourceCount: evidenceSourceCount,
+            assetExposures: assetExposures
         )
     }
 

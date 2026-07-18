@@ -2852,7 +2852,7 @@ struct PositionRepositoryTests {
     }
 
     @Test
-    func aiInvestmentProfileClampsLLMCalibrationToTenPointsFromLocalBaseline() throws {
+    func aiInvestmentProfileClampsLLMCalibrationToTenPointsFromLookThroughBaseline() throws {
         let payload = LLMInvestmentProfilePayload(
             dimensions: [
                 LLMInvestmentProfileDimensionPayload(id: "growth", score: 95, reason: "测试"),
