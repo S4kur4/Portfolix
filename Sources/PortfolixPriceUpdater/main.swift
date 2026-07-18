@@ -9,22 +9,7 @@ struct PortfolixPriceUpdater {
         repeat {
             do {
                 try await updater.runOnce()
-            } catch {
-                try? updater.recordHealth(
-                    [
-                        DataSourceHealth.unavailable(
-                            name: "东方财富",
-                            detail: String(error.localizedDescription.prefix(64)),
-                            order: 0
-                        ),
-                        DataSourceHealth.unavailable(
-                            name: "OKX",
-                            detail: String(error.localizedDescription.prefix(64)),
-                            order: 1
-                        ),
-                    ]
-                )
-            }
+            } catch {}
 
             if runOnceOnly { return }
             guard (try? updater.automaticUpdatesEnabled()) == true else { return }
@@ -55,8 +40,6 @@ private final class BackgroundPriceUpdater {
         guard try automaticUpdatesEnabled() else { return }
         let positions = try fetchPositions()
         var updated = positions
-        var sourceErrors: [String: String] = [:]
-        var sourceSuccessCounts: [String: Int] = [:]
 
         for index in updated.indices {
             do {
@@ -67,7 +50,6 @@ private final class BackgroundPriceUpdater {
                     updated[index].source = quote.source
                     updated[index].freshness = "已更新"
                     updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
-                    sourceSuccessCounts[quote.source, default: 0] += 1
                 case "数字货币":
                     let okxQuote = try await resolveOKXQuote(symbol: updated[index].symbol)
                     let quote = (price: okxQuote.price, quoteTime: okxQuote.quoteTime, source: "OKX")
@@ -75,27 +57,16 @@ private final class BackgroundPriceUpdater {
                     updated[index].source = quote.source
                     updated[index].freshness = "已更新"
                     updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
-                    sourceSuccessCounts[quote.source, default: 0] += 1
                 default:
                     continue
                 }
                 try updateLatestQuote(updated[index])
-            } catch {
-                let source = Self.primarySource(for: updated[index].category)
-                if sourceErrors[source] == nil {
-                    sourceErrors[source] = error.localizedDescription
-                }
-            }
+            } catch {}
         }
 
         if !positions.isEmpty {
             try replaceDailySnapshots(positions: updated)
         }
-        let health = await dataSourceHealthStatuses(
-            sourceErrors: sourceErrors,
-            sourceSuccessCounts: sourceSuccessCounts
-        )
-        try recordHealth(health)
     }
 
     func automaticUpdatesEnabled() throws -> Bool {
@@ -145,35 +116,6 @@ private final class BackgroundPriceUpdater {
             nextDate = calendar.date(byAdding: .day, value: 1, to: nextDate) ?? now.addingTimeInterval(24 * 60 * 60)
         }
         return max(60, Int(nextDate.timeIntervalSince(now)))
-    }
-
-    func recordHealth(_ statuses: [DataSourceHealth]) throws {
-        try execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
-            try execute("DELETE FROM data_source_health")
-            for status in statuses {
-                let statement = try prepare(
-                    """
-                    INSERT INTO data_source_health (
-                        name, detail, symbol, state, color_key, checked_at, display_order
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """
-                )
-                defer { sqlite3_finalize(statement) }
-                try bind(status.name, to: 1, in: statement)
-                try bind(status.detail, to: 2, in: statement)
-                try bind(status.symbol, to: 3, in: statement)
-                try bind(status.state, to: 4, in: statement)
-                try bind(status.colorKey, to: 5, in: statement)
-                try bind(Self.timestamp(), to: 6, in: statement)
-                try bind(status.order, to: 7, in: statement)
-                try stepDone(statement)
-            }
-            try execute("COMMIT")
-        } catch {
-            try? execute("ROLLBACK")
-            throw error
-        }
     }
 
     private func fetchPositions() throws -> [StoredPosition] {
@@ -430,56 +372,6 @@ private final class BackgroundPriceUpdater {
         throw UpdaterError.invalidResponse
     }
 
-    private func dataSourceHealthStatuses(
-        sourceErrors: [String: String],
-        sourceSuccessCounts: [String: Int]
-    ) async -> [DataSourceHealth] {
-        var statuses: [DataSourceHealth] = []
-        for source in Self.orderedDataSources {
-            let hasSuccess = (sourceSuccessCounts[source] ?? 0) > 0
-            if hasSuccess || sourceErrors[source] != nil {
-                statuses.append(
-                    DataSourceHealth.from(
-                        error: sourceErrors[source],
-                        hasSuccess: hasSuccess,
-                        name: source,
-                        detail: Self.detail(for: source),
-                        order: Self.order(for: source)
-                    )
-                )
-            } else {
-                statuses.append(await probeDataSourceHealth(source))
-            }
-        }
-        return statuses.sorted { $0.order < $1.order }
-    }
-
-    private func probeDataSourceHealth(_ source: String) async -> DataSourceHealth {
-        do {
-            switch source {
-            case "东方财富":
-                let quote = try await resolveEastmoneyQuote(symbol: "000001", category: "A 股")
-                guard quote.price > 0 else { throw UpdaterError.invalidResponse }
-            case "OKX":
-                let quote = try await resolveOKXQuote(symbol: "BTC/USDT")
-                guard quote.price > 0 else { throw UpdaterError.invalidResponse }
-            default:
-                throw UpdaterError.invalidResponse
-            }
-            return DataSourceHealth.available(
-                name: source,
-                detail: Self.detail(for: source),
-                order: Self.order(for: source)
-            )
-        } catch {
-            return DataSourceHealth.unavailable(
-                name: source,
-                detail: String(error.localizedDescription.prefix(64)),
-                order: Self.order(for: source)
-            )
-        }
-    }
-
     private func request(url: URL, failureMessage: String, headers: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -496,41 +388,6 @@ private final class BackgroundPriceUpdater {
             throw UpdaterError.requestFailed(failureMessage)
         }
         return data
-    }
-
-    private static let orderedDataSources = ["东方财富", "OKX"]
-
-    private static func primarySource(for category: String) -> String {
-        switch category {
-        case "A 股", "B 股", "港股", "美股", "公募基金":
-            return "东方财富"
-        case "数字货币":
-            return "OKX"
-        default:
-            return "东方财富"
-        }
-    }
-
-    private static func detail(for source: String) -> String {
-        switch source {
-        case "东方财富":
-            return "A 股、B 股、港股、美股和公募基金"
-        case "OKX":
-            return "数字货币现货交易对"
-        default:
-            return "行情数据"
-        }
-    }
-
-    private static func order(for source: String) -> Int {
-        switch source {
-        case "东方财富":
-            return 0
-        case "OKX":
-            return 1
-        default:
-            return 99
-        }
     }
 
     private static func eastmoneySECID(symbol: String, category: String) -> String? {
@@ -623,19 +480,6 @@ private final class BackgroundPriceUpdater {
     }
 
     private func migrateSupportTables() throws {
-        try execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_source_health (
-                name TEXT PRIMARY KEY NOT NULL,
-                detail TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                state TEXT NOT NULL,
-                color_key TEXT NOT NULL,
-                checked_at TEXT NOT NULL,
-                display_order INTEGER NOT NULL
-            )
-            """
-        )
         try execute(
             """
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -759,58 +603,6 @@ private struct StoredPosition {
         case "USD": 0.147215543
         case "USDT": 0.147289188
         default: 1
-        }
-    }
-}
-
-private struct DataSourceHealth {
-    let name: String
-    let detail: String
-    let symbol: String
-    let state: String
-    let colorKey: String
-    let order: Int
-
-    static func from(error: String?, hasSuccess: Bool, name: String, detail: String, order: Int) -> DataSourceHealth {
-        if hasSuccess {
-            return available(name: name, detail: detail, order: order)
-        }
-        if let error {
-            return unavailable(name: name, detail: String(error.prefix(64)), order: order)
-        }
-        return available(name: name, detail: detail, order: order)
-    }
-
-    static func available(name: String, detail: String, order: Int) -> DataSourceHealth {
-        DataSourceHealth(
-            name: name,
-            detail: detail,
-            symbol: normalSymbol(for: name),
-            state: "可用",
-            colorKey: "mint",
-            order: order
-        )
-    }
-
-    static func unavailable(name: String, detail: String, order: Int) -> DataSourceHealth {
-        DataSourceHealth(
-            name: name,
-            detail: detail,
-            symbol: normalSymbol(for: name),
-            state: "不可用",
-            colorKey: "danger",
-            order: order
-        )
-    }
-
-    private static func normalSymbol(for name: String) -> String {
-        switch name {
-        case "东方财富":
-            "chart.line.uptrend.xyaxis"
-        case "OKX":
-            "okx"
-        default:
-            "checkmark.circle.fill"
         }
     }
 }

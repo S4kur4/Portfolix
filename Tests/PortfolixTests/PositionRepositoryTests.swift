@@ -501,6 +501,40 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func repositoryBuildsDailyProfitFromUnitValueChangesWithoutTreatingQuantityAsProfit() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let assetID = UUID()
+        let calendar = Calendar.current
+        let firstDay = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 1)))
+        let secondDay = try #require(calendar.date(byAdding: .day, value: 1, to: firstDay))
+        let thirdDay = try #require(calendar.date(byAdding: .day, value: 2, to: firstDay))
+        let fourthDay = try #require(calendar.date(byAdding: .day, value: 3, to: firstDay))
+
+        try repository.replaceDailySnapshots(
+            positions: [makePosition(id: assetID, quantity: 10, averageCost: 90, latestPrice: 100)],
+            snapshotDate: firstDay
+        )
+        try repository.replaceDailySnapshots(
+            positions: [makePosition(id: assetID, quantity: 20, averageCost: 90, latestPrice: 105)],
+            snapshotDate: secondDay
+        )
+        try repository.replaceDailySnapshots(
+            positions: [makePosition(id: assetID, quantity: 20, averageCost: 90, latestPrice: 105)],
+            snapshotDate: thirdDay
+        )
+        try repository.replaceDailySnapshots(
+            positions: [makePosition(id: assetID, quantity: 20, averageCost: 90, latestPrice: 103)],
+            snapshotDate: fourthDay
+        )
+
+        let points = try repository.fetchDailyProfitPoints(limitDays: 30, through: fourthDay)
+
+        #expect(points.map(\.date) == [secondDay, thirdDay, fourthDay])
+        #expect(points.map(\.amountCNY) == [100, 0, -40])
+    }
+
+    @Test
     func repositoryBuildsWeeklyTrendFromRealDailyAssetSnapshots() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)

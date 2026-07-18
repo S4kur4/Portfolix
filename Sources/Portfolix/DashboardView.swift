@@ -19,7 +19,7 @@ struct DashboardView: View {
                 GoldenRatioDashboardRow(spacing: PortfolixSpacing.md) {
                     PerformanceTrendCard()
                 } trailing: {
-                    DataSourceCard()
+                    DailyProfitCard()
                 }
                 .frame(maxWidth: .infinity)
 
@@ -341,23 +341,27 @@ private struct PerformanceTrendCard: View {
                 HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
                     SectionHeader(title: localizedText("收益趋势", "Return Trend", language: store.appLanguage), symbol: "chart.xyaxis.line")
 
-                    Picker(localizedText("趋势指标", "Metric", language: store.appLanguage), selection: $store.trendMetric) {
-                        ForEach(TrendMetric.allCases) { metric in
-                            Text(metric.title(language: store.appLanguage)).tag(metric)
+                    HStack(spacing: PortfolixSpacing.md) {
+                        Picker(localizedText("趋势指标", "Metric", language: store.appLanguage), selection: $store.trendMetric) {
+                            ForEach(TrendMetric.allCases) { metric in
+                                Text(metric.title(language: store.appLanguage)).tag(metric)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 188, alignment: .trailing)
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
 
-                    Picker(localizedText("时间范围", "Range", language: store.appLanguage), selection: $store.trendRange) {
-                        ForEach(TrendRange.allCases) { range in
-                            Text(range.title(language: store.appLanguage)).tag(range)
+                        Picker(localizedText("时间范围", "Range", language: store.appLanguage), selection: $store.trendRange) {
+                            ForEach(TrendRange.allCases) { range in
+                                Text(range.title(language: store.appLanguage)).tag(range)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 184, alignment: .trailing)
                 }
                 .padding(.trailing, PortfolixSpacing.xs)
 
@@ -1138,7 +1142,8 @@ private struct DashboardGlassCapsuleLabel: View {
         .lineLimit(1)
         .foregroundStyle(PortfolixTheme.secondaryText)
         .padding(.horizontal, PortfolixSpacing.sm)
-        .padding(.vertical, 6)
+        .padding(.vertical, PortfolixSpacing.xs)
+        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
         .portfolixGlass(
             in: Capsule(),
             fallbackTint: PortfolixTheme.panelSoft,
@@ -1819,82 +1824,488 @@ extension PortfolioStore {
     }
 }
 
-private struct DataSourceCard: View {
+private enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
+    case calendar
+    case chart
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .calendar: "calendar"
+        case .chart: "chart.bar.xaxis"
+        }
+    }
+}
+
+private struct DailyProfitCard: View {
     @EnvironmentObject private var store: PortfolioStore
+    @State private var displayMode: DailyProfitDisplayMode = .calendar
+    @State private var selectedMonth = Calendar.current.dateInterval(of: .month, for: .now)?.start ?? .now
+    @State private var highlightedDate: Date?
+
+    private let calendar = Calendar.current
+
+    private var monthInterval: DateInterval {
+        calendar.dateInterval(of: .month, for: selectedMonth)
+            ?? DateInterval(start: selectedMonth, duration: 31 * 86_400)
+    }
+
+    private var points: [DailyProfitPoint] {
+        store.dailyProfitHistory.filter { monthInterval.contains($0.date) }
+    }
+
+    private var pointsByDay: [Date: DailyProfitPoint] {
+        Dictionary(uniqueKeysWithValues: points.map { (calendar.startOfDay(for: $0.date), $0) })
+    }
+
+    private var highlightedPoint: DailyProfitPoint? {
+        guard let highlightedDate else { return nil }
+        return pointsByDay[calendar.startOfDay(for: highlightedDate)]
+    }
+
+    private var monthlyProfitCNY: Decimal {
+        points.reduce(0) { $0 + $1.amountCNY }
+    }
+
+    private var profitableDayCount: Int {
+        points.filter { $0.amountCNY > 0 }.count
+    }
+
+    private var lossDayCount: Int {
+        points.filter { $0.amountCNY < 0 }.count
+    }
+
+    private var earliestMonth: Date {
+        guard let earliestDate = store.dailyProfitHistory.first?.date else {
+            return currentMonth
+        }
+        return calendar.dateInterval(of: .month, for: earliestDate)?.start ?? currentMonth
+    }
+
+    private var currentMonth: Date {
+        calendar.dateInterval(of: .month, for: .now)?.start ?? .now
+    }
+
+    private var canMoveBackward: Bool {
+        selectedMonth > earliestMonth
+    }
+
+    private var canMoveForward: Bool {
+        selectedMonth < currentMonth
+    }
 
     var body: some View {
         Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("数据源状态", "Data Sources", language: store.appLanguage), symbol: "antenna.radiowaves.left.and.right")
+            VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
+                header
+                summary
 
-                if store.sourceStatuses.isEmpty {
-                    DashboardEmptyState(title: localizedText("尚未同步行情", "Prices not synced yet", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, minHeight: 190)
-                } else {
-                    ForEach(store.sourceStatuses) { source in
-                        HStack(spacing: PortfolixSpacing.sm) {
-                            DataSourceIcon(source: source)
-
-                            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                                Text(source.name)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(PortfolixTheme.primaryText)
-                                    .lineLimit(1)
-                                Text(source.displayDetail(language: store.appLanguage))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(PortfolixTheme.tertiaryText)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            Text(source.stateText(language: store.appLanguage))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(source.color)
-                                .lineLimit(1)
-                        }
+                Group {
+                    if points.isEmpty {
+                        DashboardEmptyState(title: localizedText("本月暂无盈亏记录", "No daily P&L for this month", language: store.appLanguage))
+                    } else if displayMode == .calendar {
+                        calendarView
+                    } else {
+                        chartView
                     }
                 }
+                .frame(maxWidth: .infinity, minHeight: 192, maxHeight: 192)
+                .offset(y: PortfolixSpacing.sm)
             }
             .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
         }
     }
-}
 
-private struct DataSourceIcon: View {
-    let source: DataSourceStatus
+    private var header: some View {
+        HStack(spacing: PortfolixSpacing.sm) {
+            HStack(spacing: PortfolixSpacing.sm) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.lilac)
+                    .frame(width: 16)
 
-    var body: some View {
-        Group {
-            if source.name == "OKX" {
-                OKXLogoMark(color: source.color)
-            } else {
-                Image(systemName: source.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(source.color)
+                Text(localizedText("每日盈亏", "Daily P&L", language: store.appLanguage))
+                    .font(PortfolixTypography.sectionTitle)
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: PortfolixSpacing.xs)
+
+            HStack(spacing: PortfolixSpacing.md) {
+                HStack(spacing: 0) {
+                    Button {
+                        moveMonth(by: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canMoveBackward ? PortfolixTheme.secondaryText : PortfolixTheme.tertiaryText)
+                    .disabled(!canMoveBackward)
+                    .accessibilityLabel(localizedText("上个月", "Previous month", language: store.appLanguage))
+
+                    Text(monthTitle)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .monospacedDigit()
+                        .frame(width: 56)
+
+                    Button {
+                        moveMonth(by: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canMoveForward ? PortfolixTheme.secondaryText : PortfolixTheme.tertiaryText)
+                    .disabled(!canMoveForward)
+                    .accessibilityLabel(localizedText("下个月", "Next month", language: store.appLanguage))
+                }
+                .padding(.horizontal, PortfolixSpacing.sm)
+                .padding(.vertical, PortfolixSpacing.xs)
+                .frame(height: PortfolixLayout.dashboardCompactControlHeight)
+                .portfolixGlass(
+                    in: Capsule(),
+                    fallbackTint: PortfolixTheme.panelSoft,
+                    fallbackOpacity: 0.48,
+                    interactive: true
+                )
+                .contentShape(Capsule())
+
+                Picker(
+                    localizedText("显示方式", "Display mode", language: store.appLanguage),
+                    selection: $displayMode
+                ) {
+                    ForEach(DailyProfitDisplayMode.allCases) { mode in
+                        Image(systemName: mode.symbol).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(height: PortfolixLayout.dashboardCompactControlHeight)
+                .onChange(of: displayMode) { _, _ in
+                    highlightedDate = nil
+                }
             }
         }
-        .frame(width: 24, height: 24)
-        .background(source.color.opacity(0.15), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
-        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, PortfolixSpacing.xs)
     }
-}
 
-private struct OKXLogoMark: View {
-    let color: Color
+    private var summary: some View {
+        HStack(alignment: .lastTextBaseline, spacing: PortfolixSpacing.sm) {
+            Text(highlightedPoint.map { dayTitle($0.date) }
+                ?? localizedText("本月累计", "Month total", language: store.appLanguage))
+                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .lineLimit(1)
 
-    var body: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 2) {
-                RoundedRectangle(cornerRadius: 1.2).fill(color).frame(width: 5, height: 5)
-                RoundedRectangle(cornerRadius: 1.2).fill(color).frame(width: 5, height: 5)
+            Text(moneyText(highlightedPoint?.amountCNY ?? monthlyProfitCNY))
+                .monospacedDigit()
+                .foregroundStyle(profitColor(highlightedPoint?.amountCNY ?? monthlyProfitCNY))
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Spacer(minLength: PortfolixSpacing.xs)
+
+            Text(
+                localizedText(
+                    "盈利 \(profitableDayCount) · 亏损 \(lossDayCount)",
+                    "\(profitableDayCount) up · \(lossDayCount) down",
+                    language: store.appLanguage
+                )
+            )
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .lineLimit(1)
+        }
+        .font(.system(size: 12, weight: .medium))
+        .frame(height: 16)
+        .padding(.trailing, PortfolixSpacing.xs)
+    }
+
+    private var calendarView: some View {
+        VStack(spacing: PortfolixSpacing.xs) {
+            LazyVGrid(columns: calendarColumns, spacing: 0) {
+                ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
+                    Text(weekday)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(PortfolixTheme.tertiaryText)
+                        .frame(maxWidth: .infinity, minHeight: 12)
+                }
             }
-            HStack(spacing: 2) {
-                RoundedRectangle(cornerRadius: 1.2).fill(color).frame(width: 5, height: 5)
-                RoundedRectangle(cornerRadius: 1.2).fill(color.opacity(0.32)).frame(width: 5, height: 5)
+
+            LazyVGrid(columns: calendarColumns, spacing: PortfolixSpacing.xs) {
+                ForEach(calendarSlots) { slot in
+                    if let date = slot.date {
+                        calendarCell(for: date)
+                    } else {
+                        Color.clear
+                            .frame(height: calendarCellHeight)
+                    }
+                }
             }
         }
     }
+
+    private var chartView: some View {
+        Chart {
+            RuleMark(y: .value("Zero", 0))
+                .foregroundStyle(PortfolixTheme.borderStrong)
+                .lineStyle(StrokeStyle(lineWidth: 1))
+
+            ForEach(points) { point in
+                BarMark(
+                    x: .value("Date", point.date),
+                    y: .value("Daily P&L", convertedAmount(point.amountCNY))
+                )
+                .foregroundStyle(profitColor(point.amountCNY))
+                .cornerRadius(2)
+            }
+
+            if let highlightedPoint {
+                RuleMark(x: .value("Selected date", highlightedPoint.date))
+                    .foregroundStyle(PortfolixTheme.lilac.opacity(0.55))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+        }
+        .chartYScale(domain: chartYDomain)
+        .chartXAxis {
+            AxisMarks(values: chartAxisDates) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
+                    .foregroundStyle(PortfolixTheme.border)
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(String(calendar.component(.day, from: date)))
+                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
+                    .foregroundStyle(PortfolixTheme.border)
+                AxisValueLabel {
+                    if let amount = value.as(Double.self) {
+                        Text(compactNumber(amount))
+                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        updateHighlightedDate(for: phase, proxy: proxy, geometry: geometry)
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func calendarCell(for date: Date) -> some View {
+        let point = pointsByDay[calendar.startOfDay(for: date)]
+        let amount = point?.amountCNY
+        let isToday = calendar.isDateInToday(date)
+        let isHighlighted = highlightedDate.map { calendar.isDate($0, inSameDayAs: date) } == true
+
+        VStack(spacing: 0) {
+            Text(String(calendar.component(.day, from: date)))
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(date > Date() ? PortfolixTheme.tertiaryText : PortfolixTheme.primaryText)
+
+            if let amount {
+                Text(compactCellAmount(amount))
+                    .font(.system(size: 7, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(profitColor(amount))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: calendarCellHeight, maxHeight: calendarCellHeight)
+        .background(cellBackground(amount), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            if isToday || isHighlighted {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(PortfolixTheme.lilac, lineWidth: isHighlighted ? 1.5 : 1)
+            }
+        }
+        .onHover { hovering in
+            highlightedDate = hovering ? date : nil
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(calendarAccessibilityLabel(date: date, amount: amount))
+    }
+
+    private var calendarColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: PortfolixSpacing.xs), count: 7)
+    }
+
+    private var weekdayTitles: [String] {
+        store.appLanguage == .english
+            ? ["M", "T", "W", "T", "F", "S", "S"]
+            : ["一", "二", "三", "四", "五", "六", "日"]
+    }
+
+    private var calendarSlots: [DailyProfitCalendarSlot] {
+        guard let dayRange = calendar.range(of: .day, in: .month, for: selectedMonth) else { return [] }
+        let weekday = calendar.component(.weekday, from: selectedMonth)
+        let leadingEmptyCount = (weekday + 5) % 7
+        var slots = (0..<leadingEmptyCount).map { DailyProfitCalendarSlot(id: "leading-\($0)", date: nil) }
+        slots += dayRange.compactMap { day in
+            let date = calendar.date(byAdding: .day, value: day - 1, to: selectedMonth)
+            return DailyProfitCalendarSlot(id: "day-\(day)", date: date)
+        }
+        let minimumSlotCount = 35
+        let requiredSlotCount = max(minimumSlotCount, Int(ceil(Double(slots.count) / 7.0)) * 7)
+        while slots.count < requiredSlotCount {
+            slots.append(DailyProfitCalendarSlot(id: "trailing-\(slots.count)", date: nil))
+        }
+        return slots
+    }
+
+    private var calendarRowCount: Int {
+        max(calendarSlots.count / 7, 5)
+    }
+
+    private var calendarCellHeight: CGFloat {
+        calendarRowCount == 6 ? 26 : 32
+    }
+
+    private var monthTitle: String {
+        let components = calendar.dateComponents([.year, .month], from: selectedMonth)
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        if store.appLanguage == .chinese {
+            return "\(year)年\(month)月"
+        }
+        return Self.englishMonthFormatter.string(from: selectedMonth)
+    }
+
+    private var chartAxisDates: [Date] {
+        let lastDay = calendar.range(of: .day, in: .month, for: selectedMonth)?.count ?? 30
+        return [1, 8, 15, 22, lastDay].compactMap { day in
+            calendar.date(byAdding: .day, value: day - 1, to: selectedMonth)
+        }
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        let magnitude = max(points.map { abs(convertedAmount($0.amountCNY)) }.max() ?? 0, 1) * 1.12
+        return -magnitude ... magnitude
+    }
+
+    private func moveMonth(by offset: Int) {
+        guard let newMonth = calendar.date(byAdding: .month, value: offset, to: selectedMonth) else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            selectedMonth = newMonth
+            highlightedDate = nil
+        }
+    }
+
+    private func updateHighlightedDate(for phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
+        guard let plotFrame = proxy.plotFrame else {
+            highlightedDate = nil
+            return
+        }
+        switch phase {
+        case let .active(location):
+            let frame = geometry[plotFrame]
+            let x = location.x - frame.origin.x
+            guard frame.contains(location), let date: Date = proxy.value(atX: x) else {
+                highlightedDate = nil
+                return
+            }
+            highlightedDate = points.min {
+                abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+            }?.date
+        case .ended:
+            highlightedDate = nil
+        }
+    }
+
+    private func convertedAmount(_ amountCNY: Decimal) -> Double {
+        (amountCNY * store.displayCurrency.rateFromCNY).doubleValue
+    }
+
+    private func moneyText(_ amountCNY: Decimal) -> String {
+        let converted = amountCNY * store.displayCurrency.rateFromCNY
+        return amountCNY == 0
+            ? formatMoney(converted, currency: store.displayCurrency)
+            : formatSignedMoney(converted, currency: store.displayCurrency)
+    }
+
+    private func compactCellAmount(_ amountCNY: Decimal) -> String {
+        compactNumber(convertedAmount(amountCNY), includesPlus: true)
+    }
+
+    private func compactNumber(_ value: Double, includesPlus: Bool = false) -> String {
+        let sign = value < 0 ? "−" : (includesPlus && value > 0 ? "+" : "")
+        let magnitude = abs(value)
+        if magnitude >= 1_000_000 {
+            return String(format: "%@%.1fM", sign, magnitude / 1_000_000)
+        }
+        if magnitude >= 1_000 {
+            return String(format: "%@%.1fK", sign, magnitude / 1_000)
+        }
+        return String(format: "%@%.0f", sign, magnitude)
+    }
+
+    private func profitColor(_ amount: Decimal) -> Color {
+        if amount > 0 { return PortfolixTheme.mint }
+        if amount < 0 { return PortfolixTheme.danger }
+        return PortfolixTheme.secondaryText
+    }
+
+    private func cellBackground(_ amount: Decimal?) -> Color {
+        guard let amount else { return .clear }
+        if amount > 0 { return PortfolixTheme.mint.opacity(0.13) }
+        if amount < 0 { return PortfolixTheme.danger.opacity(0.13) }
+        return PortfolixTheme.panelSoft.opacity(0.55)
+    }
+
+    private func dayTitle(_ date: Date) -> String {
+        if store.appLanguage == .chinese {
+            return "\(calendar.component(.month, from: date))月\(calendar.component(.day, from: date))日"
+        }
+        return Self.englishDayFormatter.string(from: date)
+    }
+
+    private func calendarAccessibilityLabel(date: Date, amount: Decimal?) -> String {
+        let dateText = dayTitle(date)
+        guard let amount else {
+            return localizedText("\(dateText)，无盈亏记录", "\(dateText), no P&L record", language: store.appLanguage)
+        }
+        return localizedText("\(dateText)，\(moneyText(amount))", "\(dateText), \(moneyText(amount))", language: store.appLanguage)
+    }
+
+    private static let englishMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM yyyy"
+        return formatter
+    }()
+
+    private static let englishDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
+}
+
+private struct DailyProfitCalendarSlot: Identifiable {
+    let id: String
+    let date: Date?
 }
 
 private struct DashboardEmptyState: View {

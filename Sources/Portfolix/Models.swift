@@ -509,15 +509,6 @@ func localizedQuoteSource(_ source: String, language: AppLanguage) -> String {
     }
 }
 
-func normalizedDataSourceName(_ name: String) -> String {
-    switch name.trimmingCharacters(in: .whitespacesAndNewlines) {
-    case "OKX 公共行情":
-        "OKX"
-    default:
-        normalizedQuoteSource(name)
-    }
-}
-
 func isPublicMarketQuoteSource(_ source: String) -> Bool {
     switch normalizedQuoteSource(source) {
     case "东方财富":
@@ -535,46 +526,6 @@ struct AllocationItem: Identifiable {
     var id: String { name }
 }
 
-struct DataSourceStatus: Identifiable {
-    let name: String
-    let detail: String
-    let symbol: String
-    let state: String
-    let color: Color
-
-    var id: String { name }
-
-    var displayDetail: String {
-        displayDetail(language: .chinese)
-    }
-
-    func displayDetail(language: AppLanguage) -> String {
-        if language == .english {
-            switch detail {
-            case "A 股、B 股、港股、美股和公募基金":
-                return "A/B-shares, HK/US stocks, and funds"
-            case "数字货币现货交易对":
-                return "Crypto spot pairs"
-            default:
-                return detail
-            }
-        }
-        return detail
-    }
-
-    func stateText(language: AppLanguage) -> String {
-        guard language == .english else { return state }
-        switch state {
-        case "可用", "连接正常":
-            return "Available"
-        case "不可用", "连接异常", "部分异常", "未使用", "待检查":
-            return "Unavailable"
-        default:
-            return state
-        }
-    }
-}
-
 struct PortfolioSnapshot: Identifiable {
     let id = UUID()
     let date: Date
@@ -585,6 +536,13 @@ struct PortfolioSnapshot: Identifiable {
         guard profitRate != -100 else { return -totalValueCNY }
         return totalValueCNY * profitRate / (100 + profitRate)
     }
+}
+
+struct DailyProfitPoint: Identifiable, Equatable, Sendable {
+    let date: Date
+    let amountCNY: Decimal
+
+    var id: Date { date }
 }
 
 struct RiskConstraintEvaluation {
@@ -774,7 +732,7 @@ final class PortfolioStore: ObservableObject {
 
     @Published var positions: [Position]
     @Published var snapshotHistory: [PortfolioSnapshot]
-    @Published var sourceStatuses: [DataSourceStatus]
+    @Published var dailyProfitHistory: [DailyProfitPoint]
     private let positionRepository: PositionRepository?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
@@ -879,57 +837,6 @@ final class PortfolioStore: ObservableObject {
         return period
     }
 
-    private static var defaultMarketDataSourceStatuses: [DataSourceStatus] {
-        [
-            dataSourceStatus(name: "东方财富", isAvailable: false),
-            dataSourceStatus(name: "OKX", isAvailable: false),
-        ]
-    }
-
-    private static func normalizedMarketDataSourceStatuses(_ statuses: [DataSourceStatus]) -> [DataSourceStatus] {
-        defaultMarketDataSourceStatuses.map { defaultStatus in
-            guard let stored = statuses.first(where: { normalizedDataSourceName($0.name) == defaultStatus.name }) else {
-                return defaultStatus
-            }
-            return dataSourceStatus(
-                name: defaultStatus.name,
-                isAvailable: ["可用", "连接正常"].contains(stored.state)
-            )
-        }
-    }
-
-    private static func dataSourceStatus(name: String, isAvailable: Bool) -> DataSourceStatus {
-        DataSourceStatus(
-            name: name,
-            detail: dataSourceDetail(name),
-            symbol: dataSourceSymbol(name),
-            state: isAvailable ? "可用" : "不可用",
-            color: isAvailable ? PortfolixTheme.mint : PortfolixTheme.danger
-        )
-    }
-
-    private static func dataSourceDetail(_ name: String) -> String {
-        switch name {
-        case "东方财富":
-            "A 股、B 股、港股、美股和公募基金"
-        case "OKX":
-            "数字货币现货交易对"
-        default:
-            ""
-        }
-    }
-
-    private static func dataSourceSymbol(_ name: String) -> String {
-        switch normalizedDataSourceName(name) {
-        case "东方财富":
-            "chart.line.uptrend.xyaxis"
-        case "OKX":
-            "okx"
-        default:
-            "network"
-        }
-    }
-
     init(
         positionRepository: PositionRepository? = nil,
         credentialStore: ProviderCredentialStoring? = nil,
@@ -946,13 +853,13 @@ final class PortfolioStore: ObservableObject {
         aiChatRetentionPeriod = savedChatRetentionPeriod
         var activeRepository: PositionRepository?
         var loadedSnapshots: [PortfolioSnapshot] = []
-        var loadedSourceStatuses: [DataSourceStatus] = []
+        var loadedDailyProfitHistory: [DailyProfitPoint] = []
         var loadedChatItems: [AIReportChatItem] = []
         do {
             let repository = try positionRepository ?? PositionRepository()
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
-            loadedSourceStatuses = Self.normalizedMarketDataSourceStatuses(try repository.fetchDataSourceStatuses())
+            loadedDailyProfitHistory = try repository.fetchDailyProfitPoints()
             let cutoff = savedChatRetentionPeriod.cutoffDate()
             try repository.deleteExpiredAIAnalysisContent(before: cutoff)
             let storedChatItems = try repository.fetchAIAnalysisChatItems(since: cutoff)
@@ -971,7 +878,7 @@ final class PortfolioStore: ObservableObject {
         self.credentialStore = resolvedCredentialStore
         self.aiAgent = aiAgent ?? AIAnalysisAgent(credentialStore: resolvedCredentialStore)
         snapshotHistory = loadedSnapshots
-        sourceStatuses = loadedSourceStatuses.isEmpty ? Self.defaultMarketDataSourceStatuses : loadedSourceStatuses
+        dailyProfitHistory = loadedDailyProfitHistory
         self.positionRepository = activeRepository
         loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
@@ -992,7 +899,6 @@ final class PortfolioStore: ObservableObject {
         } else if !Self.shouldSkipLaunchRefresh {
             Task { await refreshLatestPrices() }
         }
-        Task { await refreshDataSourceHealth() }
     }
 
     func updateRelativeTime(now: Date = .now) {
@@ -2514,7 +2420,6 @@ final class PortfolioStore: ObservableObject {
         guard !isRefreshing else { return 0 }
         guard !positions.isEmpty else {
             persistCurrentSnapshot()
-            await refreshDataSourceHealth()
             return 0
         }
 
@@ -2533,7 +2438,6 @@ final class PortfolioStore: ObservableObject {
             }
         }
         persistCurrentSnapshot()
-        await refreshDataSourceHealth()
         if refreshInvestmentProfile {
             refreshInvestmentProfileIfNeeded()
         }
@@ -2548,7 +2452,6 @@ final class PortfolioStore: ObservableObject {
         do {
             _ = try await applyLatestQuote(for: position)
             persistCurrentSnapshot()
-            await refreshDataSourceHealth()
             refreshInvestmentProfileIfNeeded(force: true)
         } catch {
             persistenceErrorMessage = "更新 \(position.name) 失败：\(error.localizedDescription)"
@@ -2777,59 +2680,6 @@ final class PortfolioStore: ObservableObject {
         return formatter
     }()
 
-    private func refreshDataSourceHealth() async {
-        async let eastmoneyStatus = dataSourceHealthStatus(name: "东方财富") {
-            let probe = AssetLookupCandidate(
-                name: "平安银行",
-                symbol: "000001",
-                category: .cnStock,
-                quoteCurrency: .cny,
-                latestPrice: nil,
-                upstreamSource: "东方财富"
-            )
-            let resolved = try await MarketDataAdapter.shared.resolveAsset(probe)
-            guard (resolved.latestPrice ?? 0) > 0 else {
-                throw MarketDataAdapterError.invalidResponse
-            }
-        }
-        async let okxStatus = dataSourceHealthStatus(name: "OKX") {
-            let probe = AssetLookupCandidate(
-                name: "BTC",
-                symbol: "BTC/USDT",
-                category: .crypto,
-                quoteCurrency: .usdt,
-                latestPrice: nil,
-                upstreamSource: "OKX"
-            )
-            let resolved = try await MarketDataAdapter.shared.resolveAsset(probe)
-            guard (resolved.latestPrice ?? 0) > 0 else {
-                throw OKXClientError.invalidResponse
-            }
-        }
-
-        let statuses = await [eastmoneyStatus, okxStatus]
-
-        sourceStatuses = statuses
-        guard let positionRepository else { return }
-        do {
-            try positionRepository.replaceDataSourceStatuses(statuses)
-        } catch {
-            persistenceErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func dataSourceHealthStatus(
-        name: String,
-        check: () async throws -> Void
-    ) async -> DataSourceStatus {
-        do {
-            try await check()
-            return Self.dataSourceStatus(name: name, isAvailable: true)
-        } catch {
-            return Self.dataSourceStatus(name: name, isAvailable: false)
-        }
-    }
-
     private func latestQuote(for position: Position) async throws -> AssetLookupCandidate? {
         guard position.category != .cash else { return nil }
         let candidate = AssetLookupCandidate(
@@ -2849,6 +2699,7 @@ final class PortfolioStore: ObservableObject {
         do {
             try positionRepository.replaceDailySnapshots(positions: positions)
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+            dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }

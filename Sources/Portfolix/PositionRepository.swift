@@ -1,6 +1,5 @@
 import CSQLite
 import Foundation
-import SwiftUI
 
 enum PositionRepositoryError: LocalizedError {
     case database(String)
@@ -470,56 +469,57 @@ final class PositionRepository {
         return snapshots
     }
 
-    func fetchDataSourceStatuses() throws -> [DataSourceStatus] {
+    func fetchDailyProfitPoints(
+        limitDays: Int = 365,
+        through date: Date = .now
+    ) throws -> [DailyProfitPoint] {
+        let boundedLimit = max(1, min(limitDays, 365))
+        let calendar = Calendar.current
+        let endDate = calendar.startOfDay(for: date)
+        let startDate = calendar.date(
+            byAdding: .day,
+            value: -(boundedLimit - 1),
+            to: endDate
+        ) ?? endDate
         let statement = try prepare(
             """
-            SELECT name, detail, symbol, state, color_key
-            FROM data_source_health
-            ORDER BY display_order ASC, name ASC
+            SELECT asset_id, snapshot_date, quantity, market_value_cny
+            FROM asset_price_snapshots
+            WHERE snapshot_date <= ?
+            ORDER BY asset_id ASC, snapshot_date ASC
             """
         )
         defer { sqlite3_finalize(statement) }
+        try bind(Self.dayString(from: endDate), to: 1, in: statement)
 
-        var statuses: [DataSourceStatus] = []
+        var previousUnitValueByAsset: [String: Decimal] = [:]
+        var totalsByDate: [Date: Decimal] = [:]
+        var contributionCountByDate: [Date: Int] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
-            statuses.append(
-                DataSourceStatus(
-                    name: normalizedDataSourceName(text(at: 0, in: statement)),
-                    detail: text(at: 1, in: statement),
-                    symbol: text(at: 2, in: statement),
-                    state: text(at: 3, in: statement),
-                    color: Self.statusColor(for: text(at: 4, in: statement))
-                )
-            )
-        }
-        return statuses
-    }
-
-    func replaceDataSourceStatuses(_ statuses: [DataSourceStatus]) throws {
-        try transaction {
-            let deleteStatement = try prepare("DELETE FROM data_source_health")
-            defer { sqlite3_finalize(deleteStatement) }
-            try stepDone(deleteStatement)
-
-            for (index, status) in statuses.enumerated() {
-                let statement = try prepare(
-                    """
-                    INSERT INTO data_source_health (
-                        name, detail, symbol, state, color_key, checked_at, display_order
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """
-                )
-                defer { sqlite3_finalize(statement) }
-                try bind(status.name, to: 1, in: statement)
-                try bind(status.detail, to: 2, in: statement)
-                try bind(status.symbol, to: 3, in: statement)
-                try bind(status.state, to: 4, in: statement)
-                try bind(Self.colorKey(for: status), to: 5, in: statement)
-                try bind(Self.timestamp(), to: 6, in: statement)
-                try bind(index, to: 7, in: statement)
-                try stepDone(statement)
+            let assetID = text(at: 0, in: statement)
+            guard
+                let snapshotDate = Self.date(fromDayString: text(at: 1, in: statement)),
+                let quantity = Decimal(string: text(at: 2, in: statement)),
+                let marketValueCNY = Decimal(string: text(at: 3, in: statement)),
+                quantity > 0
+            else {
+                throw PositionRepositoryError.invalidStoredData("无法解析每日盈亏历史快照")
             }
+            let unitValueCNY = marketValueCNY / quantity
+            defer { previousUnitValueByAsset[assetID] = unitValueCNY }
+            guard
+                snapshotDate >= startDate,
+                let previousUnitValueCNY = previousUnitValueByAsset[assetID]
+            else { continue }
+
+            totalsByDate[snapshotDate, default: 0] += (unitValueCNY - previousUnitValueCNY) * quantity
+            contributionCountByDate[snapshotDate, default: 0] += 1
         }
+
+        return totalsByDate.keys
+            .filter { contributionCountByDate[$0, default: 0] > 0 }
+            .sorted()
+            .map { DailyProfitPoint(date: $0, amountCNY: totalsByDate[$0, default: 0]) }
     }
 
     func setAppSetting(key: String, value: String) throws {
@@ -1135,19 +1135,6 @@ final class PositionRepository {
         )
         try execute(
             """
-            CREATE TABLE IF NOT EXISTS data_source_health (
-                name TEXT PRIMARY KEY NOT NULL,
-                detail TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                state TEXT NOT NULL,
-                color_key TEXT NOT NULL,
-                checked_at TEXT NOT NULL,
-                display_order INTEGER NOT NULL
-            )
-            """
-        )
-        try execute(
-            """
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL,
@@ -1702,32 +1689,6 @@ final class PositionRepository {
 
     private static func timestamp(from date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
-    }
-
-    private static func colorKey(for status: DataSourceStatus) -> String {
-        switch status.state {
-        case "可用", "连接正常":
-            "mint"
-        case "不可用", "未使用", "连接异常", "部分异常", "待检查":
-            "danger"
-        default:
-            "danger"
-        }
-    }
-
-    private static func statusColor(for key: String) -> Color {
-        switch key {
-        case "mint":
-            PortfolixTheme.mint
-        case "lilac":
-            PortfolixTheme.lilac
-        case "tertiary":
-            PortfolixTheme.tertiaryText
-        case "danger":
-            PortfolixTheme.danger
-        default:
-            PortfolixTheme.amber
-        }
     }
 
     private static func dayString(from date: Date) -> String {

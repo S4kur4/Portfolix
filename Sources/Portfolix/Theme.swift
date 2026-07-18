@@ -54,6 +54,7 @@ enum PortfolixRadius {
 enum PortfolixLayout {
     static let dashboardHeroContentHeight: CGFloat = 268
     static let dashboardTrendContentHeight: CGFloat = 252
+    static let dashboardCompactControlHeight: CGFloat = 24
     static let distributionContentHeight: CGFloat = 180
     static let reportSummaryContentHeight: CGFloat = 144
     static let riskProfileSummaryContentHeight: CGFloat = 104
