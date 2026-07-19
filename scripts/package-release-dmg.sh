@@ -226,5 +226,8 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
 fi
 
 mv "$TEMP_DMG_PATH" "$DMG_PATH"
-shasum -a 256 "$DMG_PATH" > "$DMG_PATH.sha256"
+(
+  cd "$ARTIFACT_DIR"
+  shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$DMG_PATH").sha256"
+)
 echo "$DMG_PATH"
