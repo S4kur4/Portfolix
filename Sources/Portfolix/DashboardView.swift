@@ -130,54 +130,70 @@ private struct PortfolioHeroCard: View {
     @EnvironmentObject private var store: PortfolioStore
 
     var body: some View {
-        Panel(padding: PortfolixSpacing.xl) {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-                    SectionHeader(title: localizedText("组合价值", "Portfolio Value", language: store.appLanguage), symbol: "briefcase.fill")
+        Panel(padding: 0) {
+            ZStack {
+                PortfolioValueYearCurveBackground(snapshots: yearToDateSnapshots)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
 
-                    Picker(localizedText("展示币种", "Display Currency", language: store.appLanguage), selection: $store.displayCurrency) {
-                        ForEach(DisplayCurrency.allCases) { currency in
-                            Text(currency.rawValue).tag(currency)
+                VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
+                    HStack(alignment: .center, spacing: PortfolixSpacing.md) {
+                        SectionHeader(title: localizedText("组合价值", "Portfolio Value", language: store.appLanguage), symbol: "briefcase.fill")
+
+                        Picker(localizedText("展示币种", "Display Currency", language: store.appLanguage), selection: $store.displayCurrency) {
+                            ForEach(DisplayCurrency.allCases) { currency in
+                                Text(currency.rawValue).tag(currency)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 270, alignment: .trailing)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 270, alignment: .trailing)
-                }
 
-                Spacer(minLength: 0)
-
-                VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                    Text(formatHeroMoney(store.converted(store.totalValueCNY), currency: store.displayCurrency))
-                        .font(PortfolixTypography.portfolioHeroValue)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .foregroundStyle(PortfolixTheme.primaryText)
-
-                    HStack(spacing: PortfolixSpacing.md) {
-                        Text("\(localizedText("今日收益", "Today Return", language: store.appLanguage)) \(todayProfitText)")
-                            .foregroundStyle(todayProfitColor)
-                            .lineLimit(1)
-                        Text("\(localizedText("今日收益率", "Today Return Rate", language: store.appLanguage)) \(todayProfitRateText)")
-                            .foregroundStyle(todayProfitRateColor)
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                }
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: PortfolixSpacing.sm) {
-                    Text(store.isRefreshing ? localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage) : updateSummary)
-                        .lineLimit(1)
-                    PriceRefreshButton()
                     Spacer(minLength: 0)
+
+                    VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
+                        Text(formatHeroMoney(store.converted(store.totalValueCNY), currency: store.displayCurrency))
+                            .font(PortfolixTypography.portfolioHeroValue)
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                            .foregroundStyle(PortfolixTheme.primaryText)
+
+                        HStack(spacing: PortfolixSpacing.md) {
+                            Text("\(localizedText("今日收益", "Today Return", language: store.appLanguage)) \(todayProfitText)")
+                                .foregroundStyle(todayProfitColor)
+                                .lineLimit(1)
+                            Text("\(localizedText("今日收益率", "Today Return Rate", language: store.appLanguage)) \(todayProfitRateText)")
+                                .foregroundStyle(todayProfitRateColor)
+                                .lineLimit(1)
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                    }
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: PortfolixSpacing.sm) {
+                        Spacer(minLength: 0)
+                        Text(store.isRefreshing ? localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage) : updateSummary)
+                            .lineLimit(1)
+                        PriceRefreshButton()
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(store.isRefreshing ? PortfolixTheme.lilac : PortfolixTheme.tertiaryText)
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(store.isRefreshing ? PortfolixTheme.lilac : PortfolixTheme.tertiaryText)
+                .frame(height: PortfolixLayout.dashboardHeroContentHeight, alignment: .topLeading)
+                .padding(PortfolixSpacing.xl)
             }
-            .frame(height: PortfolixLayout.dashboardHeroContentHeight, alignment: .topLeading)
+            .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
         }
+    }
+
+    private var yearToDateSnapshots: [PortfolioSnapshot] {
+        let calendar = Calendar.current
+        guard let startOfYear = calendar.dateInterval(of: .year, for: .now)?.start else {
+            return store.snapshotHistory
+        }
+        return store.snapshotHistory.filter { $0.date >= startOfYear }
     }
 
     private var updateSummary: String {
@@ -217,6 +233,167 @@ private struct PortfolioHeroCard: View {
     }
 
     private static let isoFormatter = ISO8601DateFormatter()
+}
+
+private struct PortfolioValueYearCurveBackground: View {
+    let snapshots: [PortfolioSnapshot]
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        if !snapshots.isEmpty {
+            Canvas { context, size in
+                let points = curvePoints(in: size)
+                guard points.count >= 2 else { return }
+
+                let curve = curvePath(points: points)
+                var area = curve
+                area.addLine(to: CGPoint(x: points.last?.x ?? size.width, y: size.height))
+                area.addLine(to: CGPoint(x: points.first?.x ?? 0, y: size.height))
+                area.closeSubpath()
+
+                context.fill(
+                    area,
+                    with: .linearGradient(
+                        Gradient(colors: [
+                            PortfolixTheme.lilac.opacity(reduceTransparency ? 0.035 : 0.075),
+                            PortfolixTheme.violet.opacity(0.004),
+                        ]),
+                        startPoint: CGPoint(x: 0, y: size.height * 0.22),
+                        endPoint: CGPoint(x: 0, y: size.height)
+                    )
+                )
+
+                if !reduceTransparency {
+                    var glowContext = context
+                    glowContext.addFilter(.blur(radius: 7))
+                    glowContext.stroke(
+                        curve,
+                        with: .color(PortfolixTheme.lilac.opacity(0.10)),
+                        style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round)
+                    )
+                }
+
+                context.stroke(
+                    curve,
+                    with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.12 : 0.20)),
+                    style: StrokeStyle(
+                        lineWidth: DashboardChartStyle.dataLineWidth,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+
+                if let endpoint = points.last {
+                    if !reduceTransparency {
+                        var endpointGlowContext = context
+                        endpointGlowContext.addFilter(.blur(radius: 5))
+                        endpointGlowContext.fill(
+                            Path(ellipseIn: CGRect(x: endpoint.x - 7, y: endpoint.y - 7, width: 14, height: 14)),
+                            with: .color(PortfolixTheme.lilac.opacity(0.18))
+                        )
+                    }
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: endpoint.x - 2.5, y: endpoint.y - 2.5, width: 5, height: 5)),
+                        with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.24 : 0.42))
+                    )
+                }
+            }
+        }
+    }
+
+    private func curvePoints(in size: CGSize) -> [CGPoint] {
+        let calendar = Calendar.current
+        guard let yearInterval = calendar.dateInterval(of: .year, for: .now) else { return [] }
+
+        let orderedSnapshots = snapshots
+            .filter { yearInterval.contains($0.date) }
+            .sorted { $0.date < $1.date }
+        guard
+            let firstSnapshot = orderedSnapshots.first
+        else {
+            return []
+        }
+
+        var samples: [CurveSample] = []
+        if firstSnapshot.date > yearInterval.start {
+            samples.append(CurveSample(date: yearInterval.start, value: 0))
+            let transitionStart = calendar.date(
+                byAdding: .day,
+                value: -DashboardChartStyle.initialValueTransitionDays,
+                to: firstSnapshot.date
+            )
+                ?? yearInterval.start
+            if transitionStart > yearInterval.start {
+                samples.append(CurveSample(date: transitionStart, value: 0))
+            }
+        }
+        samples.append(contentsOf: orderedSnapshots.map {
+            CurveSample(date: $0.date, value: $0.totalValueCNY)
+        })
+
+        let values = samples.map(\.value)
+        guard let minimum = values.min(), let maximum = values.max() else { return [] }
+
+        let valueRange = maximum - minimum
+        let verticalPadding = max(valueRange * 0.12, max(abs(maximum) * 0.005, 1))
+        let lowerBound = minimum - verticalPadding
+        let upperBound = maximum + verticalPadding
+        let boundedRange = max(upperBound - lowerBound, 1)
+        let timeRange = max(yearInterval.end.timeIntervalSince(yearInterval.start), 1)
+        let top = size.height * 0.16
+        let bottom = size.height * 0.90
+
+        return samples.map { sample in
+            let yearProgress = sample.date.timeIntervalSince(yearInterval.start) / timeRange
+            let x = min(max(yearProgress, 0), 1) * size.width
+            let normalizedValue = (sample.value - lowerBound) / boundedRange
+            let y = bottom - normalizedValue * (bottom - top)
+            return CGPoint(x: x, y: y)
+        }
+    }
+
+    private func curvePath(points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let firstPoint = points.first else { return path }
+        path.move(to: firstPoint)
+
+        for index in 0..<(points.count - 1) {
+            let current = points[index]
+            let next = points[index + 1]
+            let deltaX = next.x - current.x
+
+            guard deltaX > 0 else {
+                path.addLine(to: next)
+                continue
+            }
+
+            // Keep both control points inside this date interval. This preserves
+            // chronological direction even when the first real snapshot follows
+            // a long zero-value period at the start of the year.
+            let control1 = CGPoint(
+                x: current.x + deltaX / 3,
+                y: current.y
+            )
+            let control2 = CGPoint(
+                x: next.x - deltaX / 3,
+                y: next.y
+            )
+            path.addCurve(to: next, control1: control1, control2: control2)
+        }
+
+        return path
+    }
+
+    private struct CurveSample {
+        let date: Date
+        let value: Double
+    }
+}
+
+private enum DashboardChartStyle {
+    static let dataLineWidth: CGFloat = 2
+    static let initialValueTransitionDays = 6
 }
 
 private struct PriceRefreshButton: View {
@@ -402,7 +579,11 @@ private struct PerformanceTrendCard: View {
                             y: .value("数值", chartValue(snapshot))
                         )
                         .interpolationMethod(.catmullRom)
-                        .lineStyle(StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+                        .lineStyle(StrokeStyle(
+                            lineWidth: DashboardChartStyle.dataLineWidth,
+                            lineCap: .round,
+                            lineJoin: .round
+                        ))
                         .foregroundStyle(PortfolixTheme.lilac)
 
                         if snapshot.id == highlightedSnapshot?.id {
@@ -1543,7 +1724,11 @@ private struct InvestmentRadarChart: View {
                         value: \.value
                     )
                     context.fill(valuePath, with: .color(PortfolixTheme.lilac.opacity(0.24)))
-                    context.stroke(valuePath, with: .color(PortfolixTheme.lilac), lineWidth: 2)
+                    context.stroke(
+                        valuePath,
+                        with: .color(PortfolixTheme.lilac),
+                        lineWidth: DashboardChartStyle.dataLineWidth
+                    )
 
                     for (index, dimension) in dimensions.enumerated() {
                         let scale = max(0, min(dimension.value / 100, 1))
