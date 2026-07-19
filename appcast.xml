@@ -3,47 +3,46 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.4</title>
-            <pubDate>Thu, 16 Jul 2026 22:00:33 +0800</pubDate>
+            <title>0.1.5</title>
+            <pubDate>Sun, 19 Jul 2026 12:38:33 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>12</sparkle:version>
-            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix 0.1.4
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.5
 
-## Portfolix Agent
+Portfolix v0.1.5 进一步提升了资产总览的信息密度与投资画像的分析能力。
 
-- 重构 Agent Loop，引入有界研究循环、执行预算和更清晰的阶段状态，减少无效搜索与失控重试。
-- 增加确定性的持仓、收益和市场证据工具，让分析结论更紧密地基于组合数据。
-- 优化追问上下文编排，在保留相关历史对话的同时控制上下文长度和重复内容。
-- 增加报告证据归因与质量评估，改进联网搜索结果不足时的处理方式。
-- 完善追问链路诊断，能够更准确地区分上下文、规划、搜索、生成和校验阶段的问题。
+## 新功能
 
-## 性能与稳定性
+- **更智能的投资画像**：分析资产背后的实际投资地区、资产类别与重复基准，能够更准确地识别 QDII 等跨市场资产的真实敞口；联网增强模式可按需补充公开资料。
+- **每日盈亏**：新增日历和柱状图两种视图，支持按月切换，直观查看每日收益、本月累计以及盈利和亏损天数。
+- **年度组合价值曲线**：组合价值卡片新增低干扰的年度资产价值背景曲线，按照真实日期展示资产变化，并将最新数据点定位到实际日期。
 
-- 修复智能分析运行时偶发的 SwiftUI 布局循环和界面无响应问题。
-- 优化聊天记录渲染、自动滚动和消息写入，降低长对话下的布局开销。
-- 将玫瑰曲线动画迁移至独立 Core Animation 图层，在保持流畅效果的同时显著降低 CPU 占用。
-- 隔离消息输入框状态，提升长对话场景下连续输入的响应速度。
+## 体验优化
 
-## 视觉优化
-
-- 调整亮色与暗色模式的画布、卡片、边框和强调色，提升层次与可读性。
-- 统一玫瑰曲线动画的 Portfolix 品牌紫色，并修复动画启动时的异常粒子。
+- 统一投资画像、收益趋势和年度资产曲线的视觉样式。
+- 优化组合价值卡片的信息布局、曲线平滑度和更新操作位置。
+- 完善亮色与暗色模式下的数据可读性和图表层级。
 
 ---
 
+Portfolix v0.1.5 improves portfolio visibility and makes the investment profile more context-aware.
+
 ## What's New
 
-- Reworked the Agent loop with bounded research, execution budgets, deterministic portfolio evidence tools, and clearer runtime stages.
-- Improved follow-up context orchestration, evidence attribution, report quality evaluation, and failure diagnostics.
-- Fixed an intermittent SwiftUI layout loop that could make the analysis view unresponsive.
-- Reduced long-chat rendering and auto-scroll overhead, and isolated composer state for smoother typing.
-- Moved the rose-orbit animation to a dedicated Core Animation layer for substantially lower CPU usage.
-- Refined light and dark color systems and aligned the animation with the Portfolix brand purple palette.
+- **Smarter investment profile**: Looks through holdings to identify their underlying geographic, asset-class, and benchmark exposure, including cross-market products such as QDII funds. Connected mode can retrieve additional public information when needed.
+- **Daily Profit & Loss**: Adds calendar and bar-chart views with monthly navigation, daily results, monthly totals, and profitable/loss-making day counts.
+- **Year-to-date portfolio value curve**: Adds a subtle annual value curve to the portfolio card, mapped to real snapshot dates with the latest point positioned at its actual date.
+
+## Improvements
+
+- Unified chart styling across the investment profile, performance trend, and annual value curve.
+- Refined the portfolio card layout, curve rendering, and refresh control placement.
+- Improved chart hierarchy and readability in both light and dark appearances.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.4/Portfolix-0.1.4.dmg" length="5396918" type="application/octet-stream" sparkle:edSignature="QcpEyby8JXm4toD0hsYm/rMZc8s1w6SqSVQAxY5DpMbTxtr9tgmjnm62ziDfZMsRt/DeYh0WlSt6OigEAqlNCA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.5/Portfolix-0.1.5.dmg" length="5563151" type="application/octet-stream" sparkle:edSignature="VDKoeIErn9lVtRmjswpKZHh6cnRksChcT1XkqdiJBK++z86UEqvGZBFCo51HUxqt0ZqyLtTtb5HnXQNy7KEDAA=="/>
         </item>
     </channel>
 </rss>
