@@ -3,8 +3,9 @@ import SwiftUI
 
 enum PortfolixTheme {
     static let canvas = adaptive(light: 0xF6F6F8, dark: 0x07080A)
-    static let sidebar = adaptive(light: 0xEFF0F3, dark: 0x0A0B0E)
-    static let panel = adaptive(light: 0xFFFFFF, dark: 0x0F1014)
+    private static let primarySurface = adaptive(light: 0xFFFFFF, dark: 0x0A0B0E)
+    static let sidebar = primarySurface
+    static let panel = primarySurface
     static let panelElevated = adaptive(light: 0xF3F4F6, dark: 0x14161B)
     static let panelSoft = adaptive(light: 0xE9EAEE, dark: 0x1A1C22)
     static let selectionFill = adaptive(light: 0xE8E3FA, dark: 0x211D30)
