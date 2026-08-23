@@ -461,6 +461,12 @@ struct Position: Identifiable {
     }()
 }
 
+struct PositionBalanceUpdate: Equatable, Sendable {
+    let positionID: Position.ID
+    let quantity: Decimal
+    let totalCost: Decimal
+}
+
 func normalizedQuoteSource(_ source: String, category: AssetCategory? = nil) -> String {
     let normalized = source.trimmingCharacters(in: .whitespacesAndNewlines)
     if normalized.caseInsensitiveCompare("OKX") == .orderedSame {
@@ -905,12 +911,7 @@ final class PortfolioStore: ObservableObject {
 
     var totalCostCNY: Decimal {
         positions.reduce(0) {
-            $0 + calculateTotalCostCNY(
-                category: $1.category,
-                quantity: $1.quantity,
-                averageCost: $1.averageCost,
-                quoteCurrency: $1.quoteCurrency
-            )
+            $0 + $1.totalCost / $1.quoteCurrency.rateFromCNY
         }
     }
 
@@ -1159,6 +1160,69 @@ final class PortfolioStore: ObservableObject {
             positions = try positionRepository.fetchPositions()
         } else {
             positions[index] = updatedPosition
+        }
+        persistCurrentSnapshot()
+        if let positionRepository {
+            positions = try positionRepository.fetchPositions()
+        }
+    }
+
+    func updatePositionBalances(_ updates: [PositionBalanceUpdate]) throws {
+        guard !updates.isEmpty else { return }
+
+        var updatedPositions: [Position] = []
+        for update in updates {
+            guard let current = positions.first(where: { $0.id == update.positionID }) else {
+                throw PositionRepositoryError.invalidStoredData("持仓已发生变化，请重新打开更新窗口")
+            }
+
+            let quantity = update.quantity
+            guard !quantity.isNaN, quantity > 0 else {
+                throw PositionValidationError.invalidQuantity
+            }
+            let totalCost = current.category == .cash ? quantity : update.totalCost
+            guard !totalCost.isNaN, totalCost >= 0 else {
+                throw PositionValidationError.invalidTotalCost
+            }
+            let averageCost = current.category == .cash ? Decimal(1) : totalCost / quantity
+            let marketValueCNY = calculateMarketValueCNY(
+                category: current.category,
+                quantity: quantity,
+                latestPrice: current.latestPrice,
+                quoteCurrency: current.quoteCurrency
+            )
+            let updated = Position(
+                id: current.id,
+                name: current.name,
+                symbol: current.symbol,
+                category: current.category,
+                quoteCurrency: current.quoteCurrency,
+                quantity: quantity,
+                totalCost: totalCost,
+                averageCost: averageCost,
+                latestPrice: current.latestPrice,
+                marketValueCNY: marketValueCNY,
+                profitRate: averageCost == 0 ? 0 : (current.latestPrice - averageCost) / averageCost * 100,
+                weeklyTrend: current.weeklyTrend,
+                source: current.source,
+                quoteTime: current.quoteTime,
+                fetchedAt: current.fetchedAt,
+                freshness: current.freshness
+            )
+            try PositionInputValidator.validate(updated)
+
+            if updated.quantity != current.quantity || updated.totalCost != current.totalCost {
+                updatedPositions.append(updated)
+            }
+        }
+
+        guard !updatedPositions.isEmpty else { return }
+        if let positionRepository {
+            try positionRepository.updateBalances(updatedPositions)
+            positions = try positionRepository.fetchPositions()
+        } else {
+            let replacements = Dictionary(uniqueKeysWithValues: updatedPositions.map { ($0.id, $0) })
+            positions = positions.map { replacements[$0.id] ?? $0 }
         }
         persistCurrentSnapshot()
         if let positionRepository {
@@ -2829,6 +2893,7 @@ enum PositionValidationError: LocalizedError {
     case symbolTooLong
     case invalidQuantity
     case invalidAverageCost
+    case invalidTotalCost
     case invalidLatestPrice
     case numericOverflow
     case providerIdentityMismatch
@@ -2849,6 +2914,8 @@ enum PositionValidationError: LocalizedError {
             "持仓份额必须大于 0"
         case .invalidAverageCost:
             "持仓成本价不能小于 0"
+        case .invalidTotalCost:
+            "持仓总成本不能小于 0"
         case .invalidLatestPrice:
             "当前价格必须大于 0"
         case .numericOverflow:

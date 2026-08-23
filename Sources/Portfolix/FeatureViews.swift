@@ -3,18 +3,17 @@ import SwiftUI
 
 struct PositionsView: View {
     @EnvironmentObject private var store: PortfolioStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingDeletionID: Position.ID?
-    @State private var isBatchSelecting = false
     @State private var selectedBatchPositionIDs: Set<Position.ID> = []
     @State private var isBatchDeletionConfirmationPresented = false
+    @State private var isPositionUpdatePresented = false
     @State private var operationErrorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             PageHeader(title: localizedText("持仓明细", "Holdings", language: store.appLanguage)) {
                 HStack(spacing: PortfolixSpacing.sm) {
-                    if isBatchSelecting {
+                    if hasBatchSelection {
                         Text(
                             store.appLanguage == .english
                                 ? "\(selectedBatchPositionIDs.count) selected"
@@ -24,17 +23,14 @@ struct PositionsView: View {
                             .foregroundStyle(PortfolixTheme.secondaryText)
                             .monospacedDigit()
 
-                        Button(allVisiblePositionsSelected
-                            ? localizedText("取消全选", "Deselect All", language: store.appLanguage)
-                            : localizedText("全选", "Select All", language: store.appLanguage)
-                        ) {
-                            toggleAllVisiblePositions()
+                        Button(localizedText("全选", "Select All", language: store.appLanguage)) {
+                            selectAllVisiblePositions()
                         }
                         .buttonStyle(QuietButtonStyle())
-                        .disabled(store.filteredPositions.isEmpty)
+                        .disabled(store.filteredPositions.isEmpty || allVisiblePositionsSelected)
 
                         Button(localizedText("取消", "Cancel", language: store.appLanguage)) {
-                            exitBatchSelection()
+                            clearBatchSelection()
                         }
                         .buttonStyle(QuietButtonStyle())
 
@@ -47,9 +43,9 @@ struct PositionsView: View {
                         .disabled(selectedBatchPositionIDs.isEmpty)
                     } else {
                         Button {
-                            enterBatchSelection()
+                            isPositionUpdatePresented = true
                         } label: {
-                            Label(localizedText("批量管理", "Batch Manage", language: store.appLanguage), systemImage: "checklist")
+                            Label(localizedText("更新持仓", "Update Holdings", language: store.appLanguage), systemImage: "square.and.pencil")
                         }
                         .buttonStyle(QuietButtonStyle())
                         .disabled(store.positions.isEmpty)
@@ -138,11 +134,12 @@ struct PositionsView: View {
         } message: {
             Text(operationErrorMessage ?? localizedText("请稍后重试", "Please try again later", language: store.appLanguage))
         }
+        .sheet(isPresented: $isPositionUpdatePresented) {
+            BatchPositionUpdateSheet(positions: store.positions)
+                .environmentObject(store)
+        }
         .onChange(of: store.positions.map(\.id)) { _, positionIDs in
             selectedBatchPositionIDs.formIntersection(positionIDs)
-            if isBatchSelecting, positionIDs.isEmpty {
-                exitBatchSelection()
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -205,10 +202,6 @@ struct PositionsView: View {
                             ? "Select \(position.name)"
                             : "选择 \(position.name)"
                     )
-                    .accessibilityHidden(!isBatchSelecting)
-                    .allowsHitTesting(isBatchSelecting)
-                    .opacity(isBatchSelecting ? 1 : 0)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: isBatchSelecting)
             }
             .width(20)
 
@@ -338,7 +331,7 @@ struct PositionsView: View {
                 }
             }
         } primaryAction: { selection in
-            if !isBatchSelecting, let positionID = selection.first {
+            if !hasBatchSelection, let positionID = selection.first {
                 store.presentPositionEditor(for: positionID)
             }
         }
@@ -358,24 +351,17 @@ struct PositionsView: View {
         return !visibleIDs.isEmpty && visibleIDs.isSubset(of: selectedBatchPositionIDs)
     }
 
-    private func enterBatchSelection() {
-        store.selectedPositionID = nil
-        selectedBatchPositionIDs = []
-        isBatchSelecting = true
+    private var hasBatchSelection: Bool {
+        !selectedBatchPositionIDs.isEmpty
     }
 
-    private func exitBatchSelection() {
+    private func clearBatchSelection() {
         selectedBatchPositionIDs = []
-        isBatchSelecting = false
     }
 
-    private func toggleAllVisiblePositions() {
+    private func selectAllVisiblePositions() {
         let visibleIDs = Set(store.filteredPositions.map(\.id))
-        if visibleIDs.isSubset(of: selectedBatchPositionIDs) {
-            selectedBatchPositionIDs.subtract(visibleIDs)
-        } else {
-            selectedBatchPositionIDs.formUnion(visibleIDs)
-        }
+        selectedBatchPositionIDs.formUnion(visibleIDs)
     }
 
     private func batchSelectionBinding(for positionID: Position.ID) -> Binding<Bool> {
@@ -394,7 +380,7 @@ struct PositionsView: View {
     private func deleteSelectedPositions() {
         do {
             try store.deletePositions(for: selectedBatchPositionIDs)
-            exitBatchSelection()
+            clearBatchSelection()
         } catch {
             operationErrorMessage = error.localizedDescription
         }

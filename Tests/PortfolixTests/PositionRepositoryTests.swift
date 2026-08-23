@@ -554,6 +554,85 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func repositoryBatchBalanceUpdateIsAtomicAndPreservesQuoteMetadata() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let fetchedAt = "2026-08-20T09:30:00Z"
+        let first = makePosition(
+            symbol: "BATCH-A",
+            quantity: 10,
+            averageCost: 100,
+            latestPrice: 120,
+            quoteTime: "2026-08-20",
+            fetchedAt: fetchedAt
+        )
+        let second = makePosition(
+            symbol: "BATCH-B",
+            quantity: 20,
+            averageCost: 50,
+            latestPrice: 60
+        )
+        try repository.insert(first)
+        try repository.insert(second)
+        let persistedFetchedAt = try #require(repository.fetchPositions().first { $0.id == first.id }).fetchedAt
+
+        let exactTotalCost = decimal("1234.56")
+        let updatedFirst = makePosition(
+            id: first.id,
+            symbol: first.symbol,
+            quantity: decimal("12.5"),
+            totalCost: exactTotalCost,
+            averageCost: exactTotalCost / decimal("12.5"),
+            latestPrice: first.latestPrice,
+            quoteTime: first.quoteTime,
+            fetchedAt: persistedFetchedAt
+        )
+        let updatedSecond = makePosition(
+            id: second.id,
+            symbol: second.symbol,
+            quantity: 22,
+            totalCost: 1_210,
+            averageCost: 55,
+            latestPrice: second.latestPrice
+        )
+        try repository.updateBalances([updatedFirst, updatedSecond])
+
+        let persisted = try repository.fetchPositions()
+        let persistedFirst = try #require(persisted.first { $0.id == first.id })
+        let persistedSecond = try #require(persisted.first { $0.id == second.id })
+        #expect(persistedFirst.quantity == decimal("12.5"))
+        #expect(persistedFirst.totalCost == exactTotalCost)
+        #expect(persistedFirst.fetchedAt == persistedFetchedAt)
+        #expect(persistedFirst.quoteTime == first.quoteTime)
+        #expect(persistedFirst.latestPrice == first.latestPrice)
+        #expect(persistedSecond.quantity == 22)
+        #expect(persistedSecond.totalCost == 1_210)
+
+        let missingPosition = makePosition(
+            symbol: "MISSING",
+            quantity: 1,
+            averageCost: 1,
+            latestPrice: 1
+        )
+        let rollbackCandidate = makePosition(
+            id: first.id,
+            symbol: first.symbol,
+            quantity: 99,
+            totalCost: 9_900,
+            averageCost: 100,
+            latestPrice: first.latestPrice,
+            quoteTime: first.quoteTime,
+            fetchedAt: persistedFetchedAt
+        )
+        #expect(throws: PositionRepositoryError.self) {
+            try repository.updateBalances([rollbackCandidate, missingPosition])
+        }
+        let afterRollback = try #require(repository.fetchPositions().first { $0.id == first.id })
+        #expect(afterRollback.quantity == decimal("12.5"))
+        #expect(afterRollback.totalCost == exactTotalCost)
+    }
+
+    @Test
     func repositoryRoundTripsEveryAssetCategoryAndNumericScale() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)
@@ -960,6 +1039,49 @@ struct PositionRepositoryTests {
         try store.deletePositions(for: deletionIDs)
 
         #expect(store.positions.map(\.symbol) == ["KEEP"])
+    }
+
+    @MainActor
+    @Test
+    func portfolioStoreBatchBalanceUpdateRecalculatesCostsAndKeepsCashAtOne() throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "批量基金",
+            symbol: "BATCH-FUND",
+            category: .fund,
+            quantity: 100,
+            averageCost: 2,
+            quoteCurrency: .cny,
+            latestPrice: 3
+        )
+        try store.addPosition(
+            name: "现金人民币",
+            symbol: "CNY",
+            category: .cash,
+            quantity: 500,
+            averageCost: 1,
+            quoteCurrency: .cny,
+            latestPrice: 1
+        )
+
+        let fund = try #require(store.positions.first { $0.symbol == "BATCH-FUND" })
+        let cash = try #require(store.positions.first { $0.symbol == "CNY" })
+        let fundFetchedAt = fund.fetchedAt
+        try store.updatePositionBalances([
+            PositionBalanceUpdate(positionID: fund.id, quantity: 120, totalCost: 300),
+            PositionBalanceUpdate(positionID: cash.id, quantity: 800, totalCost: 12),
+        ])
+
+        let updatedFund = try #require(store.positions.first { $0.id == fund.id })
+        let updatedCash = try #require(store.positions.first { $0.id == cash.id })
+        #expect(updatedFund.quantity == 120)
+        #expect(updatedFund.totalCost == 300)
+        #expect(updatedFund.averageCost == decimal("2.5"))
+        #expect(updatedFund.fetchedAt == fundFetchedAt)
+        #expect(updatedCash.quantity == 800)
+        #expect(updatedCash.totalCost == 800)
+        #expect(updatedCash.averageCost == 1)
+        #expect(store.totalCostCNY == 1_100)
     }
 
     @MainActor
@@ -4611,6 +4733,7 @@ struct PositionRepositoryTests {
         category: AssetCategory = .cnStock,
         currency: DisplayCurrency = .cny,
         quantity: Decimal,
+        totalCost: Decimal? = nil,
         averageCost: Decimal,
         latestPrice: Decimal,
         source: String = "手工价格",
@@ -4626,6 +4749,7 @@ struct PositionRepositoryTests {
             category: category,
             quoteCurrency: currency,
             quantity: quantity,
+            totalCost: totalCost,
             averageCost: averageCost,
             latestPrice: latestPrice,
             marketValueCNY: calculateMarketValueCNY(

@@ -380,6 +380,41 @@ final class PositionRepository {
         }
     }
 
+    func updateBalances(_ positions: [Position]) throws {
+        guard !positions.isEmpty else { return }
+        for position in positions {
+            try PositionInputValidator.validate(position)
+            guard !position.totalCost.isNaN, position.totalCost >= 0 else {
+                throw PositionValidationError.invalidTotalCost
+            }
+        }
+
+        try transaction {
+            for position in positions {
+                do {
+                    let statement = try prepare(
+                        """
+                        UPDATE positions
+                        SET quantity = ?, total_cost = ?, average_cost = ?, updated_at = ?
+                        WHERE id = ?
+                        """
+                    )
+                    defer { sqlite3_finalize(statement) }
+                    try bind(Self.decimalString(position.quantity), to: 1, in: statement)
+                    try bind(Self.decimalString(position.totalCost), to: 2, in: statement)
+                    try bind(Self.decimalString(position.averageCost), to: 3, in: statement)
+                    try bind(Self.timestamp(), to: 4, in: statement)
+                    try bind(position.id.uuidString, to: 5, in: statement)
+                    try stepDone(statement)
+                    guard sqlite3_changes(database) == 1 else {
+                        throw PositionRepositoryError.invalidStoredData("持仓已发生变化，请重新打开更新窗口")
+                    }
+                }
+                try insertRevision(position: position, operation: "balance_update")
+            }
+        }
+    }
+
     func delete(positionID: Position.ID) throws {
         try delete(positionIDs: [positionID])
     }
@@ -940,12 +975,7 @@ final class PositionRepository {
         let now = Self.timestamp()
         let totalValue = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
         let totalCost = positions.reduce(Decimal.zero) {
-            $0 + calculateTotalCostCNY(
-                category: $1.category,
-                quantity: $1.quantity,
-                averageCost: $1.averageCost,
-                quoteCurrency: $1.quoteCurrency
-            )
+            $0 + $1.totalCost / $1.quoteCurrency.rateFromCNY
         }
         let totalProfit = totalValue - totalCost
         let profitRate = totalCost == 0 ? Decimal.zero : totalProfit / totalCost * 100
