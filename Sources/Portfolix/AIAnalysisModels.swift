@@ -16,6 +16,8 @@ enum AIAnalysisProgress: Equatable, Sendable {
     case webSearchResultsReady(callCount: Int, sourceCount: Int)
     case evaluatingEvidence(turn: Int, total: Int)
     case generatingReport(model: String)
+    case modelReasoning(model: String, elapsedSeconds: Int?)
+    case modelOutputStarted
     case validatingModelOutput(attempt: Int, total: Int)
     case repairingReport(attempt: Int, total: Int, reason: String)
     case validatingReport
@@ -34,6 +36,8 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .webSearchResultsReady: "web_search_results_ready"
         case .evaluatingEvidence: "evaluating_evidence"
         case .generatingReport: "generating_report"
+        case .modelReasoning: "model_reasoning"
+        case .modelOutputStarted: "model_output_started"
         case .validatingModelOutput: "validating_model_output"
         case .repairingReport: "repairing_report"
         case .validatingReport: "validating_report"
@@ -64,6 +68,18 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("正在评估现有证据", "Evaluating available evidence", language: language)
         case .generatingReport:
             localizedText("正在分析组合并生成报告", "Analyzing the portfolio and generating the report", language: language)
+        case let .modelReasoning(_, elapsedSeconds):
+            if let elapsedSeconds {
+                localizedText(
+                    "DeepSeek 推理仍在进行 · \(elapsedSeconds) 秒",
+                    "DeepSeek is still reasoning · \(elapsedSeconds)s",
+                    language: language
+                )
+            } else {
+                localizedText("DeepSeek 已开始推理", "DeepSeek started reasoning", language: language)
+            }
+        case .modelOutputStarted:
+            localizedText("正在生成分析内容", "Generating the analysis", language: language)
         case .validatingModelOutput:
             localizedText("正在校验模型输出", "Validating model output", language: language)
         case let .repairingReport(attempt, total, _):
@@ -99,6 +115,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
             localizedText("检查来源覆盖、失败调用与重复查询（\(turn)/\(total)）", "Checking source coverage, failed calls, and duplicate queries (\(turn)/\(total))", language: language)
         case let .generatingReport(model):
             localizedText("模型：\(shortened(model))", "Model: \(shortened(model))", language: language)
+        case let .modelReasoning(model, _):
+            localizedText("模型：\(shortened(model))；推理内容不会被保存", "Model: \(shortened(model)); reasoning content is not stored", language: language)
+        case .modelOutputStarted:
+            localizedText("已收到最终内容流，正在等待完整结果", "Receiving the final output stream", language: language)
         case let .validatingModelOutput(attempt, total):
             localizedText(
                 "检查 JSON、字段、语言和信息安全边界（\(attempt)/\(total)）",
@@ -124,7 +144,7 @@ enum AIAnalysisProgress: Equatable, Sendable {
         case .planningToolCalls, .replanningToolCalls: localizedText("判断联网需求", "connected information assessment", language: language)
         case .callingWebSearch, .webSearchResultsReady: localizedText("联网搜索", "connected search", language: language)
         case .evaluatingEvidence: localizedText("评估分析证据", "evidence evaluation", language: language)
-        case .generatingReport: localizedText("生成分析报告", "report generation", language: language)
+        case .generatingReport, .modelReasoning, .modelOutputStarted: localizedText("生成分析报告", "report generation", language: language)
         case .validatingModelOutput: localizedText("模型输出校验", "model output validation", language: language)
         case .repairingReport: localizedText("修复模型返回", "model response repair", language: language)
         case .validatingReport: localizedText("报告安全校验", "report safety validation", language: language)
@@ -146,6 +166,9 @@ enum AIFollowUpProgress: Equatable, Sendable {
     case searching(query: String, ordinal: Int, total: Int)
     case evaluatingEvidence(turn: Int, total: Int)
     case composing
+    case reasoning(elapsedSeconds: Int?)
+    case outputStarted
+    case repairingResponse
 
     func title(language: AppLanguage) -> String {
         switch self {
@@ -159,6 +182,20 @@ enum AIFollowUpProgress: Equatable, Sendable {
             localizedText("正在评估搜索结果", "Evaluating search results", language: language)
         case .composing:
             localizedText("正在整理回答", "Preparing the answer", language: language)
+        case let .reasoning(elapsedSeconds):
+            if let elapsedSeconds {
+                localizedText(
+                    "DeepSeek 推理仍在进行 · \(elapsedSeconds) 秒",
+                    "DeepSeek is still reasoning · \(elapsedSeconds)s",
+                    language: language
+                )
+            } else {
+                localizedText("DeepSeek 已开始推理", "DeepSeek started reasoning", language: language)
+            }
+        case .outputStarted:
+            localizedText("正在生成回答", "Generating the answer", language: language)
+        case .repairingResponse:
+            localizedText("正在修复模型返回", "Repairing the model response", language: language)
         }
     }
 
@@ -174,6 +211,12 @@ enum AIFollowUpProgress: Equatable, Sendable {
             localizedText("检查来源是否足以回答问题（\(turn)/\(total)）", "Checking whether the sources are sufficient (\(turn)/\(total))", language: language)
         case .composing:
             localizedText("正在把分析结果转化为清晰、易读的说明", "Turning the analysis into a clear response", language: language)
+        case .reasoning:
+            localizedText("推理内容仅用于本次请求，不会展示或保存", "Reasoning content is not displayed or stored", language: language)
+        case .outputStarted:
+            localizedText("已收到最终内容流，正在等待完整回答", "Receiving the final output stream", language: language)
+        case .repairingResponse:
+            localizedText("返回结构需要调整，正在自动重试", "The response structure needs adjustment; retrying automatically", language: language)
         }
     }
 
@@ -183,6 +226,26 @@ enum AIFollowUpProgress: Equatable, Sendable {
 }
 
 typealias AIFollowUpProgressHandler = @Sendable (AIFollowUpProgress) async -> Void
+
+struct AIAgentActivityLine: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let text: String
+
+    init(id: UUID = UUID(), text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
+enum AIAgentActivityPolicy {
+    static let maximumVisibleLineCount = 3
+
+    static func appending(_ text: String, to lines: [AIAgentActivityLine]) -> [AIAgentActivityLine] {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, lines.last?.text != normalized else { return lines }
+        return Array((lines + [AIAgentActivityLine(text: normalized)]).suffix(maximumVisibleLineCount))
+    }
+}
 
 enum AIAnalysisRunStatus: Equatable {
     case idle

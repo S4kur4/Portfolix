@@ -696,20 +696,16 @@ final class PortfolioStore: ObservableObject {
         }
     }
     @Published var hasLLMAPIKey = false
-    @Published var hasSearchAPIKey = false
     @Published var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
-    @Published var searchAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var hasValidLLMAPIKey: Bool {
         hasLLMAPIKey && llmAPIKeyValidationState == .valid
-    }
-    var hasValidSearchAPIKey: Bool {
-        hasSearchAPIKey && searchAPIKeyValidationState == .valid
     }
     @Published var aiAnalysisRun = AIAnalysisRun()
     @Published var aiAnalysisReport: AIAnalysisReport?
     @Published private(set) var aiAnalysisChatItems: [AIReportChatItem] = []
     @Published private(set) var isAnsweringAIAnalysisFollowUp = false
     @Published private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
+    @Published private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
     private var isAIAnalysisGenerationInFlight = false
     private var lastAIAnalysisRetentionPruneDay: Date?
     @Published var aiChatRetentionPeriod: AIChatRetentionPeriod = .oneWeek {
@@ -1287,15 +1283,9 @@ final class PortfolioStore: ObservableObject {
 
     func refreshProviderCredentialState() {
         let hasLLMKey = ((try? credentialStore.read(kind: .llm)) ?? nil)?.isEmpty == false
-        let searchCredentialKind = searchConfiguration.provider.credentialKind
-        let hasSearchKey = ((try? credentialStore.read(kind: searchCredentialKind)) ?? nil)?.isEmpty == false
 
         hasLLMAPIKey = hasLLMKey
-        hasSearchAPIKey = hasSearchKey
         llmAPIKeyValidationState = hasLLMKey ? ((try? credentialStore.readValidationState(kind: .llm)) ?? .unknown) : .unknown
-        searchAPIKeyValidationState = hasSearchKey
-            ? ((try? credentialStore.readValidationState(kind: searchCredentialKind)) ?? .unknown)
-            : .unknown
     }
 
     func saveProviderAPIKey(_ apiKey: String, kind: ProviderCredentialKind) throws {
@@ -1351,6 +1341,7 @@ final class PortfolioStore: ObservableObject {
         aiAnalysisReport = nil
         aiAnalysisRun = AIAnalysisRun()
         aiAnalysisFollowUpProgress = nil
+        aiAnalysisActivityLines = []
         UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey)
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
     }
@@ -1376,6 +1367,8 @@ final class PortfolioStore: ObservableObject {
         AIAgentRuntimeDiagnostics.event("follow_up_ui_state_started", runID: runtimeRunID)
         isAnsweringAIAnalysisFollowUp = true
         aiAnalysisFollowUpProgress = .analyzing
+        aiAnalysisActivityLines = []
+        recordAIAnalysisActivity(.analyzing)
         AIAgentRuntimeDiagnostics.event("follow_up_ui_state_finished", runID: runtimeRunID)
 
         Task {
@@ -1428,32 +1421,12 @@ final class PortfolioStore: ObservableObject {
 #endif
 
     private func aiAPIConfigurationMessage(language: AppLanguage) -> String? {
-        let needsSearchAPI = searchConfiguration.isEnabled
-        let missingLLM = !hasValidLLMAPIKey
-        let missingSearch = needsSearchAPI && !hasValidSearchAPIKey
-
-        switch (missingLLM, missingSearch) {
-        case (true, true):
-            return localizedText(
-                "LLM API 和 Search API 均未完成有效配置。请先在系统设置中配置并验证这两个 API Key 后，再使用联网增强分析。",
-                "Both the LLM API and Search API are not validly configured. Configure and validate both API keys in Settings before using connected analysis.",
-                language: language
-            )
-        case (true, false):
-            return localizedText(
-                "LLM API 未完成有效配置。请先在系统设置中配置并验证 LLM API Key 后再使用智能分析。",
-                "The LLM API is not validly configured. Configure and validate the LLM API key in Settings before using smart analysis.",
-                language: language
-            )
-        case (false, true):
-            return localizedText(
-                "当前开启了联网增强，Search API 未完成有效配置。请先在系统设置中配置并验证 Search API Key，或切换到基础模式。",
-                "Connected search is enabled, but the Search API is not validly configured. Configure and validate the Search API key in Settings, or switch to Basic mode.",
-                language: language
-            )
-        case (false, false):
-            return nil
-        }
+        guard !hasValidLLMAPIKey else { return nil }
+        return localizedText(
+            "DeepSeek API 未完成有效配置。请先在系统设置中配置并验证 API Key 后再使用智能分析。",
+            "The DeepSeek API is not validly configured. Configure and validate the API key in Settings before using smart analysis.",
+            language: language
+        )
     }
 
     private func answerAIAnalysisFollowUp(
@@ -1473,7 +1446,7 @@ final class PortfolioStore: ObservableObject {
         }
         guard aiConfiguration.isEnabled else {
             return (
-                localizedText("请先启用 AI 资产分析并配置 LLM API Key。", "Enable AI Asset Analysis and configure an LLM API Key first.", language: responseAppLanguage),
+                localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: responseAppLanguage),
                 nil
             )
         }
@@ -1502,6 +1475,7 @@ final class PortfolioStore: ObservableObject {
                             metadata: ["stage": AIAgentRuntimeDiagnostics.stageID(for: progress)]
                         )
                         self?.aiAnalysisFollowUpProgress = progress
+                        self?.recordAIAnalysisActivity(progress)
                     }
                 }
             )
@@ -1630,6 +1604,8 @@ final class PortfolioStore: ObservableObject {
             startedAt: startedAt,
             model: aiConfiguration.model
         )
+        aiAnalysisActivityLines = []
+        recordAIAnalysisActivity(.preflight)
         Self.aiAnalysisLogger.info("Agent run started")
 
         var analysisContext = makeAIStoreContext()
@@ -1735,7 +1711,20 @@ final class PortfolioStore: ObservableObject {
         guard aiAnalysisRun.startedAt == startedAt else { return }
         guard case .running = aiAnalysisRun.status else { return }
         aiAnalysisRun.status = .running(progress)
+        recordAIAnalysisActivity(progress)
         Self.aiAnalysisLogger.info("Agent stage: \(progress.telemetryID, privacy: .public)")
+    }
+
+    private func recordAIAnalysisActivity(_ progress: AIAnalysisProgress) {
+        appendAIAnalysisActivity(progress.title(language: appLanguage))
+    }
+
+    private func recordAIAnalysisActivity(_ progress: AIFollowUpProgress) {
+        appendAIAnalysisActivity(progress.title(language: appLanguage))
+    }
+
+    private func appendAIAnalysisActivity(_ text: String) {
+        aiAnalysisActivityLines = AIAgentActivityPolicy.appending(text, to: aiAnalysisActivityLines)
     }
 
     private func completeAIAnalysisWithFallback(
@@ -2269,19 +2258,12 @@ final class PortfolioStore: ObservableObject {
         defer { isGeneratingInvestmentProfile = false }
 
         do {
-            let profileSearchConfiguration = hasValidSearchAPIKey
-                ? searchConfiguration
-                : SearchConfiguration(
-                    isEnabled: false,
-                    provider: searchConfiguration.provider,
-                    quality: searchConfiguration.quality
-                )
             let profile = try await aiAgent.generateInvestmentProfile(
                 positions: positions,
                 localScores: localInvestmentProfileScoresForAI,
                 storeContext: makeAIStoreContext(),
                 llmConfiguration: aiConfiguration,
-                searchConfiguration: profileSearchConfiguration,
+                searchConfiguration: searchConfiguration,
                 cachedExposures: investmentProfileExposureCache,
                 inputFingerprint: fingerprint
             )
@@ -2349,12 +2331,10 @@ final class PortfolioStore: ObservableObject {
             }
             .joined(separator: "|")
         return [
-            "v4-lookthrough",
+            "v5-deepseek-search",
             InvestmentProfileEngine.resolverVersion,
             aiConfiguration.model,
-            searchConfiguration.isEnabled && hasValidSearchAPIKey
-                ? searchConfiguration.provider.rawValue
-                : "search-unavailable",
+            searchConfiguration.isEnabled ? "deepseek-built-in-search" : "basic-mode",
             String(riskProfileVersion),
             stableFingerprintNumber(positionLimit, decimals: 0),
             stableFingerprintNumber(cryptoLimit, decimals: 0),
@@ -2483,10 +2463,47 @@ final class PortfolioStore: ObservableObject {
         defer { isRefreshing = false }
 
         let currentPositions = positions
+        let quoteRequests = currentPositions.enumerated().compactMap { index, position -> (Int, Position.ID, AssetLookupCandidate)? in
+            guard let candidate = quoteCandidate(for: position) else { return nil }
+            return (index, position.id, candidate)
+        }
+        let resolutions = await withTaskGroup(
+            of: (Int, Position.ID, AssetLookupCandidate?).self,
+            returning: [(Int, Position.ID, AssetLookupCandidate?)].self
+        ) { group in
+            let maximumConcurrentRequests = 4
+            var nextRequestIndex = 0
+            var results: [(Int, Position.ID, AssetLookupCandidate?)] = []
+
+            for _ in 0 ..< min(maximumConcurrentRequests, quoteRequests.count) {
+                let request = quoteRequests[nextRequestIndex]
+                nextRequestIndex += 1
+                group.addTask {
+                    let resolved = try? await MarketDataAdapter.shared.resolveAsset(request.2)
+                    return (request.0, request.1, resolved)
+                }
+            }
+
+            for await result in group {
+                results.append(result)
+                if nextRequestIndex < quoteRequests.count {
+                    let request = quoteRequests[nextRequestIndex]
+                    nextRequestIndex += 1
+                    group.addTask {
+                        let resolved = try? await MarketDataAdapter.shared.resolveAsset(request.2)
+                        return (request.0, request.1, resolved)
+                    }
+                }
+            }
+            return results
+        }
+
         var refreshedCount = 0
-        for position in currentPositions {
+        for (_, positionID, resolved) in resolutions.sorted(by: { $0.0 < $1.0 }) {
+            guard let resolved,
+                  let currentPosition = positions.first(where: { $0.id == positionID }) else { continue }
             do {
-                if try await applyLatestQuote(for: position) {
+                if try applyResolvedQuote(resolved, to: currentPosition) {
                     refreshedCount += 1
                 }
             } catch {
@@ -2516,9 +2533,15 @@ final class PortfolioStore: ObservableObject {
 
     @discardableResult
     private func applyLatestQuote(for position: Position) async throws -> Bool {
-        guard let resolved = try await latestQuote(for: position), let latestPrice = resolved.latestPrice else {
+        guard let resolved = try await latestQuote(for: position), resolved.latestPrice != nil else {
             return false
         }
+        return try applyResolvedQuote(resolved, to: position)
+    }
+
+    @discardableResult
+    private func applyResolvedQuote(_ resolved: AssetLookupCandidate, to position: Position) throws -> Bool {
+        guard let latestPrice = resolved.latestPrice else { return false }
         try updatePosition(
             id: position.id,
             name: resolved.name,
@@ -2737,8 +2760,13 @@ final class PortfolioStore: ObservableObject {
     }()
 
     private func latestQuote(for position: Position) async throws -> AssetLookupCandidate? {
+        guard let candidate = quoteCandidate(for: position) else { return nil }
+        return try await MarketDataAdapter.shared.resolveAsset(candidate)
+    }
+
+    private func quoteCandidate(for position: Position) -> AssetLookupCandidate? {
         guard position.category != .cash else { return nil }
-        let candidate = AssetLookupCandidate(
+        return AssetLookupCandidate(
             name: position.name,
             symbol: position.symbol,
             category: position.category,
@@ -2746,8 +2774,6 @@ final class PortfolioStore: ObservableObject {
             latestPrice: position.latestPrice,
             upstreamSource: position.source
         )
-
-        return try await MarketDataAdapter.shared.resolveAsset(candidate)
     }
 
     private func persistCurrentSnapshot() {

@@ -356,4 +356,32 @@ enum AIEvidenceLedgerBuilder {
             items: localItems + webItems
         )
     }
+
+    static func adding(
+        webResults: [AIWebSearchToolResult],
+        to ledger: AIEvidenceLedger
+    ) -> AIEvidenceLedger {
+        let webItems = webResults.flatMap { result in
+            result.sources.enumerated().map { index, source in
+                AIEvidenceItem(
+                    id: "web.\(result.callID).\(index + 1)",
+                    kind: "web_source",
+                    metric: "public_information_source",
+                    valueText: source.title,
+                    numericValue: nil,
+                    unit: nil,
+                    positionRefs: result.positionRefs,
+                    asOf: ISO8601DateFormatter().string(from: result.searchedAt),
+                    source: source.domain,
+                    confidence: source.credibility.rawValue,
+                    sourceURL: source.url
+                )
+            }
+        }
+        return AIEvidenceLedger(
+            schemaVersion: ledger.schemaVersion,
+            generatedAt: ledger.generatedAt,
+            items: ledger.items + webItems
+        )
+    }
 }

@@ -29,7 +29,7 @@ Portfolix 不连接券商账户，不要求输入任何第三方金融账户密�
 - 维护每日组合快照和资产成本价格
 - 查看组合价值、持仓收益趋势、持仓占比、币种敞口和数据源状态
 - 管理个人风险偏好，并评估组合与个人风险约束的匹配情况
-- 使用自行配置的 LLM API 和 Search API 生成智能分析报告并与 Agent 交互分析
+- 使用自行配置的 DeepSeek API 生成智能分析报告，并可按需启用模型内建联网搜索
 - 还可以将持仓明细、每日收益和资产每日价格导出为结构化数据包，供你自行通过其他 AI 工具分析
 
 ## 行情数据
@@ -62,7 +62,7 @@ Portfolix does not connect to brokerage accounts and does not require you to ent
 - Snapshot Management: Maintains daily portfolio snapshots and asset cost bases.
 - Visual Analytics: View portfolio value, holding return trends, holding allocations, currency exposure, and data source statuses.
 - Risk Assessment: Manage your personal risk appetite and evaluate how well your portfolio aligns with your individual risk constraints.
-- AI-Powered Analysis: Generate intelligent analysis reports and interact with analytical agents using your own configured LLM APIs and Search APIs.
+- AI-Powered Analysis: Generate intelligent reports with your own DeepSeek API key and optionally use the model's built-in web search.
 - Data Export: Export holding details, daily returns, and daily asset prices as structured data packages for further analysis with other AI tools.
 
 ## Market Data

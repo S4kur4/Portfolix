@@ -17,13 +17,13 @@ enum LLMClientError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "尚未配置 LLM API Key"
+            return "尚未配置 DeepSeek API Key"
         case .invalidBaseURL:
-            return "LLM API Base URL 无效"
+            return "DeepSeek API 地址无效"
         case .invalidResponse:
             return "LLM 返回数据无法解析"
         case .unauthorized:
-            return "LLM API Key 无效或已失效"
+            return "DeepSeek API Key 无效或已失效"
         case .rateLimited:
             return "LLM 请求已达到频率或额度限制"
         case .endpointOrModelNotFound:
@@ -54,6 +54,34 @@ enum LLMClientError: LocalizedError, Equatable {
 
 protocol LLMCompleting: Sendable {
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult
+}
+
+extension LLMCompleting {
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled _: Bool,
+        webSearchProgress _: LLMWebSearchProgressHandler? = nil
+    ) async throws -> LLMCompletionResult {
+        LLMCompletionResult(
+            content: try await completeJSON(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                configuration: configuration,
+                apiKey: apiKey
+            )
+        )
+    }
 }
 
 protocol LLMConnectionValidating: Sendable {
@@ -68,24 +96,7 @@ final class LLMProviderClient: LLMCompleting, LLMConnectionValidating, LLMModelL
     static let shared = LLMProviderClient()
 
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String {
-        let provider = configuration.providerOption
-        if provider.usesClaudeMessagesAPI {
-            return try await ClaudeCompatibleClient.shared.completeJSON(
-                systemPrompt: systemPrompt,
-                userPrompt: userPrompt,
-                configuration: configuration,
-                apiKey: apiKey
-            )
-        }
-        if provider.usesGeminiAPI {
-            return try await GeminiClient.shared.completeJSON(
-                systemPrompt: systemPrompt,
-                userPrompt: userPrompt,
-                configuration: configuration,
-                apiKey: apiKey
-            )
-        }
-        return try await OpenAICompatibleClient.shared.completeJSON(
+        try await DeepSeekResponsesClient.shared.completeJSON(
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             configuration: configuration,
@@ -93,28 +104,30 @@ final class LLMProviderClient: LLMCompleting, LLMConnectionValidating, LLMModelL
         )
     }
 
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        try await DeepSeekResponsesClient.shared.completeJSONResult(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            configuration: configuration,
+            apiKey: apiKey,
+            webSearchEnabled: webSearchEnabled,
+            webSearchProgress: webSearchProgress
+        )
+    }
+
     func validateConnection(configuration: AIProviderConfiguration, apiKey: String) async throws {
-        let provider = configuration.providerOption
-        if provider.usesClaudeMessagesAPI {
-            try await ClaudeCompatibleClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
-            return
-        }
-        if provider.usesGeminiAPI {
-            try await GeminiClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
-            return
-        }
-        try await OpenAICompatibleClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
+        try await DeepSeekResponsesClient.shared.validateConnection(configuration: configuration, apiKey: apiKey)
     }
 
     func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String] {
-        let provider = configuration.providerOption
-        if provider.usesClaudeMessagesAPI {
-            return try await ClaudeCompatibleClient.shared.listModels(configuration: configuration, apiKey: apiKey)
-        }
-        if provider.usesGeminiAPI {
-            return try await GeminiClient.shared.listModels(configuration: configuration, apiKey: apiKey)
-        }
-        return try await OpenAICompatibleClient.shared.listModels(configuration: configuration, apiKey: apiKey)
+        try await DeepSeekResponsesClient.shared.listModels(configuration: configuration, apiKey: apiKey)
     }
 }
 

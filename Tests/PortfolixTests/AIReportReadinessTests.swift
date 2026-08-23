@@ -1,6 +1,22 @@
 import Testing
 @testable import Portfolix
 
+@Suite("Agent activity policy")
+struct AIAgentActivityPolicyTests {
+    @Test
+    func keepsOnlyThreeLatestDistinctNonemptyLines() {
+        var lines: [AIAgentActivityLine] = []
+        lines = AIAgentActivityPolicy.appending("  Preparing input  ", to: lines)
+        lines = AIAgentActivityPolicy.appending("Preparing input", to: lines)
+        lines = AIAgentActivityPolicy.appending("Reasoning", to: lines)
+        lines = AIAgentActivityPolicy.appending("Searching", to: lines)
+        lines = AIAgentActivityPolicy.appending("Generating output", to: lines)
+        lines = AIAgentActivityPolicy.appending("   ", to: lines)
+
+        #expect(lines.map(\.text) == ["Reasoning", "Searching", "Generating output"])
+    }
+}
+
 struct AIReportReadinessTests {
     @Test
     func missingCredentialTakesPrecedenceOverPersistedValidationState() {
@@ -38,21 +54,21 @@ struct AIReportReadinessTests {
     func readinessMessagesDescribeTheActualCredentialState() {
         #expect(
             AIReportReadiness.missing.apiStatusText(
-                name: "LLM API",
+                name: "DeepSeek API",
                 language: .chinese
-            ) == "LLM API 未配置"
+            ) == "DeepSeek API 未配置"
         )
         #expect(
             AIReportReadiness.needsValidation.apiStatusText(
-                name: "Search API",
+                name: "DeepSeek API",
                 language: .english
-            ) == "Search API needs validation"
+            ) == "DeepSeek API needs validation"
         )
         #expect(
             AIReportReadiness.invalid.configurationGuidance(
-                name: "LLM API",
+                name: "DeepSeek API",
                 language: .chinese
-            ) == "LLM API 验证失败，请检查配置后重试"
+            ) == "DeepSeek API 验证失败，请检查配置后重试"
         )
         #expect(AIReportReadiness.missing.shortStatusText(language: .chinese) == "未配置")
         #expect(AIReportReadiness.missing.symbol == "minus.circle.fill")

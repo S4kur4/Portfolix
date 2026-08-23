@@ -145,7 +145,7 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         case .openAI:
             "https://api.openai.com/v1"
         case .deepSeek:
-            "https://api.deepseek.com/v1"
+            "https://api.deepseek.com"
         case .anthropic:
             "https://api.anthropic.com/v1"
         case .googleGemini:
@@ -162,7 +162,7 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         case .openAI:
             "gpt-4.1-mini"
         case .deepSeek:
-            "deepseek-chat"
+            "deepseek-v4-flash"
         case .anthropic, .claudeCompatible:
             "claude-3-5-sonnet-latest"
         case .googleGemini:
@@ -196,6 +196,8 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         }
         return LLMProviderOption(rawValue: value) ?? .openAICompatible
     }
+
+    static let deepSeekModels = ["deepseek-v4-flash", "deepseek-v4-pro"]
 }
 
 struct AIProviderConfiguration: Equatable {
@@ -223,9 +225,9 @@ struct AIProviderConfiguration: Equatable {
     }
 
     static let `default` = AIProviderConfiguration(
-        provider: LLMProviderOption.openAI.rawValue,
-        baseURL: LLMProviderOption.openAI.defaultBaseURL,
-        model: LLMProviderOption.openAI.defaultModel,
+        provider: LLMProviderOption.deepSeek.rawValue,
+        baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+        model: LLMProviderOption.deepSeek.defaultModel,
         isEnabled: true
     )
 }
@@ -239,11 +241,13 @@ enum LLMRequestTimeoutPolicy {
 }
 
 enum LLMOutputTokenPolicy {
-    static let connectionValidation = 16
+    // DeepSeek V4 Pro emits reasoning tokens before the final probe text, even
+    // for a minimal request. Keep enough room for both so a valid key is not rejected.
+    static let connectionValidation = 512
     static let validationProbe = 64
-    static let standard = 2_400
-    static let followUp = 6_400
-    static let reportGeneration = 10_000
+    static let standard = 4_000
+    static let followUp = 10_000
+    static let reportGeneration = 16_000
 }
 
 enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
@@ -346,21 +350,26 @@ enum AIProviderConfigurationStore {
     static func loadLLM() -> AIProviderConfiguration {
         let defaults = UserDefaults.standard
         let fallback = AIProviderConfiguration.default
-        let rawProvider = defaults.string(forKey: llmProviderKey) ?? fallback.provider
-        let provider = LLMProviderOption.from(rawProvider)
+        let savedModel = defaults.string(forKey: llmModelKey)
+        let model = LLMProviderOption.deepSeekModels.contains(savedModel ?? "")
+            ? (savedModel ?? fallback.model)
+            : fallback.model
         return AIProviderConfiguration(
-            provider: provider.rawValue,
-            baseURL: defaults.string(forKey: llmBaseURLKey) ?? fallback.baseURL,
-            model: defaults.string(forKey: llmModelKey) ?? fallback.model,
+            provider: LLMProviderOption.deepSeek.rawValue,
+            baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+            model: model,
             isEnabled: defaults.object(forKey: llmEnabledKey) == nil ? fallback.isEnabled : defaults.bool(forKey: llmEnabledKey)
         )
     }
 
     static func saveLLM(_ configuration: AIProviderConfiguration) {
         let defaults = UserDefaults.standard
-        defaults.set(configuration.providerOption.rawValue, forKey: llmProviderKey)
-        defaults.set(configuration.baseURL, forKey: llmBaseURLKey)
-        defaults.set(configuration.model, forKey: llmModelKey)
+        let model = LLMProviderOption.deepSeekModels.contains(configuration.model)
+            ? configuration.model
+            : LLMProviderOption.deepSeek.defaultModel
+        defaults.set(LLMProviderOption.deepSeek.rawValue, forKey: llmProviderKey)
+        defaults.set(LLMProviderOption.deepSeek.defaultBaseURL, forKey: llmBaseURLKey)
+        defaults.set(model, forKey: llmModelKey)
         defaults.set(configuration.isEnabled, forKey: llmEnabledKey)
     }
 

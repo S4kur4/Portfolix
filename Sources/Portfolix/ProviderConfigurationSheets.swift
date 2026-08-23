@@ -10,7 +10,6 @@ private enum ProviderConfigurationField: Hashable {
     case llmBaseURL
     case llmModel
     case llmAPIKey
-    case searchAPIKey
 }
 
 enum LLMAPIKeyValidationProbe {
@@ -32,11 +31,11 @@ enum LLMAPIKeyValidationProbe {
 struct LLMConfigurationSheet: View {
     @EnvironmentObject private var store: PortfolioStore
     @Environment(\.dismiss) private var dismiss
-    @State private var provider: LLMProviderOption = .openAI
+    @State private var provider: LLMProviderOption = .deepSeek
     @State private var model = ""
-    @State private var baseURL = ""
+    @State private var baseURL = LLMProviderOption.deepSeek.defaultBaseURL
     @State private var apiKey = ""
-    @State private var availableModels: [String] = []
+    @State private var availableModels = LLMProviderOption.deepSeekModels
     @State private var connectionStatus: ProviderConnectionStatus?
     @State private var isFetchingModels = false
     @State private var isValidatingAPIKey = false
@@ -49,9 +48,9 @@ struct LLMConfigurationSheet: View {
 
     var body: some View {
         ProviderSheetScaffold(
-            title: "LLM API",
+            title: "DeepSeek API",
             symbol: "sparkles.rectangle.stack",
-            height: 500,
+            height: 420,
             cancelTitle: text("取消", "Cancel"),
             primaryTitle: text("保存", "Save"),
             isPrimaryDisabled: isValidatingAPIKey,
@@ -61,30 +60,10 @@ struct LLMConfigurationSheet: View {
             Form {
                 Section {
                     ProviderFormRow(label: text("供应商", "Provider")) {
-                        Picker("", selection: $provider) {
-                            ForEach(LLMProviderOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
+                        Text("DeepSeek")
+                            .font(PortfolixTypography.body)
+                            .foregroundStyle(PortfolixTheme.primaryText)
                         .frame(width: valueFieldWidth, alignment: .trailing)
-                    }
-                    .onChange(of: provider) { _, newProvider in
-                        applyProviderDefaults(newProvider)
-                    }
-
-                    ProviderFormRow(label: "API Base URL", isRequired: true, isInvalid: shouldHighlight(.llmBaseURL)) {
-                        ProviderInputField(
-                            text: $baseURL,
-                            placeholder: text("填写 HTTPS API Base URL", "Enter HTTPS API Base URL"),
-                            field: .llmBaseURL,
-                            focusedField: $focusedField,
-                            isInvalid: shouldHighlight(.llmBaseURL)
-                        )
-                            .onChange(of: baseURL) { _, _ in
-                                scheduleAPIKeyValidation()
-                            }
                     }
 
                     if !availableModels.isEmpty {
@@ -146,24 +125,15 @@ struct LLMConfigurationSheet: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 36)
-        } secondary: {
-            Button {
-                Task { await fetchModelsAndValidate() }
-            } label: {
-                ProviderActionLabel(title: text("获取模型", "Fetch Models"), isLoading: isFetchingModels)
-            }
-            .buttonStyle(QuietButtonStyle())
-            .disabled(isFetchingModels || !hasValidBaseURL || activeAPIKey.isEmpty)
-        }
+        } secondary: { EmptyView() }
         .onAppear {
             let configuration = store.aiConfiguration
-            provider = configuration.providerOption
-            baseURL = configuration.baseURL.isEmpty ? provider.defaultBaseURL : configuration.baseURL
-            model = configuration.model.isEmpty ? provider.defaultModel : configuration.model
-            availableModels = AIProviderConfigurationStore.loadCachedModels(provider: provider)
-            if !availableModels.isEmpty, !availableModels.contains(model) {
-                model = availableModels.first ?? model
-            }
+            provider = .deepSeek
+            baseURL = LLMProviderOption.deepSeek.defaultBaseURL
+            model = LLMProviderOption.deepSeekModels.contains(configuration.model)
+                ? configuration.model
+                : LLMProviderOption.deepSeek.defaultModel
+            availableModels = LLMProviderOption.deepSeekModels
             store.refreshProviderCredentialState()
             apiKey = (try? store.readProviderAPIKey(kind: .llm)) ?? ""
             isAPIKeyVisible = false
@@ -266,9 +236,9 @@ struct LLMConfigurationSheet: View {
                let validationState = validationStateForSave(isValidationContextChanged: isValidationContextChanged) {
                 try store.saveProviderAPIKeyValidationState(validationState, kind: .llm)
             }
-            store.aiConfiguration.provider = provider.rawValue
+            store.aiConfiguration.provider = LLMProviderOption.deepSeek.rawValue
             store.aiConfiguration.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            store.aiConfiguration.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.aiConfiguration.baseURL = LLMProviderOption.deepSeek.defaultBaseURL
             didAttemptSave = false
             dismiss()
         } catch {
@@ -463,279 +433,6 @@ struct LLMConfigurationSheet: View {
 
     private func text(_ chinese: String, _ english: String) -> String {
         localizedText(chinese, english, language: store.appLanguage)
-    }
-}
-
-struct SearchConfigurationSheet: View {
-    @EnvironmentObject private var store: PortfolioStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var apiKey = ""
-    @State private var provider: SearchProviderOption = .tavily
-    @State private var quality: SearchQuality = .basic
-    @State private var connectionStatus: ProviderConnectionStatus?
-    @State private var isValidatingAPIKey = false
-    @State private var isAPIKeyVisible = false
-    @State private var apiKeyValidationTask: Task<Void, Never>?
-    @State private var didAttemptSave = false
-    @FocusState private var focusedField: ProviderConfigurationField?
-    private let valueFieldWidth = ProviderConfigurationLayout.valueFieldWidth
-
-    var body: some View {
-        ProviderSheetScaffold(
-            title: "Search API",
-            symbol: "network",
-            height: 500,
-            cancelTitle: text("取消", "Cancel"),
-            primaryTitle: text("保存", "Save"),
-            isPrimaryDisabled: isValidatingAPIKey,
-            cancel: { dismiss() },
-            primary: save
-        ) {
-            Form {
-                Section {
-                    ProviderFormRow(label: text("供应商", "Provider")) {
-                        Picker("", selection: $provider) {
-                            ForEach(SearchProviderOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .frame(width: valueFieldWidth, alignment: .trailing)
-                        .onChange(of: provider) { _, _ in
-                            loadSelectedProviderCredential()
-                        }
-                    }
-
-                    ProviderFormRow(label: "API Key", isRequired: true, isInvalid: shouldHighlight(.searchAPIKey)) {
-                        ProviderAPIKeyInputField(
-                            text: $apiKey,
-                            isVisible: $isAPIKeyVisible,
-                            placeholder: text("填写 API Key", "Enter API Key"),
-                            field: .searchAPIKey,
-                            focusedField: $focusedField,
-                            isInvalid: shouldHighlight(.searchAPIKey),
-                            visibleHelp: text("隐藏 API Key", "Hide API Key"),
-                            hiddenHelp: text("显示 API Key", "Show API Key")
-                        )
-                        .onChange(of: apiKey) { _, _ in
-                            scheduleAPIKeyValidation()
-                        }
-                    }
-
-                    if provider == .tavily {
-                        ProviderFormRow(label: text("搜索质量", "Search Quality")) {
-                            Picker("", selection: $quality) {
-                                ForEach(SearchQuality.allCases) { option in
-                                    Text(option.title(language: store.appLanguage)).tag(option)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .frame(width: valueFieldWidth, alignment: .trailing)
-                        }
-                    }
-                }
-
-                if shouldShowNotice {
-                    ProviderNoticeSection(
-                        symbol: noticeSymbol,
-                        title: noticeTitle,
-                        message: noticeMessage,
-                        tint: noticeTint,
-                        titleColor: noticeTitleColor
-                    )
-                }
-            }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 36)
-        } secondary: {
-            EmptyView()
-        }
-        .onAppear {
-            let configuration = store.searchConfiguration
-            provider = configuration.provider
-            quality = configuration.quality
-            store.refreshProviderCredentialState()
-            loadSelectedProviderCredential()
-            isAPIKeyVisible = false
-        }
-        .onDisappear {
-            apiKeyValidationTask?.cancel()
-        }
-    }
-
-    private func save() {
-        didAttemptSave = true
-        guard hasAPIKey else {
-            return
-        }
-        do {
-            let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isKeyChanged = !trimmedAPIKey.isEmpty && trimmedAPIKey != savedAPIKey
-            if !trimmedAPIKey.isEmpty {
-                try store.saveProviderAPIKey(trimmedAPIKey, kind: provider.credentialKind)
-                if let validationState = validationStateForSave(isKeyChanged: isKeyChanged) {
-                    try store.saveProviderAPIKeyValidationState(validationState, kind: provider.credentialKind)
-                }
-            }
-            store.searchConfiguration.provider = provider
-            store.searchConfiguration.quality = quality
-            didAttemptSave = false
-            dismiss()
-        } catch {
-            connectionStatus = .failure(error.localizedDescription)
-        }
-    }
-
-    private func text(_ chinese: String, _ english: String) -> String {
-        localizedText(chinese, english, language: store.appLanguage)
-    }
-
-    private func validationStateForSave(isKeyChanged: Bool) -> ProviderCredentialValidationState? {
-        if case .success = connectionStatus {
-            return .valid
-        }
-        if case .failure = connectionStatus {
-            return .invalid
-        }
-        return isKeyChanged ? .unknown : nil
-    }
-
-    private var hasAPIKey: Bool {
-        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var invalidFields: Set<ProviderConfigurationField> {
-        var fields: Set<ProviderConfigurationField> = []
-        if !hasAPIKey {
-            fields.insert(.searchAPIKey)
-        }
-        return fields
-    }
-
-    private func shouldHighlight(_ field: ProviderConfigurationField) -> Bool {
-        didAttemptSave && invalidFields.contains(field)
-    }
-
-    private func scheduleAPIKeyValidation() {
-        apiKeyValidationTask?.cancel()
-        connectionStatus = nil
-        isValidatingAPIKey = false
-
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-
-        isValidatingAPIKey = true
-        apiKeyValidationTask = Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard !Task.isCancelled else { return }
-            do {
-                _ = try await SearchProviderClient.shared.search(
-                    query: TavilyClient.query(for: validationProbePosition),
-                    positions: [validationProbePosition],
-                    configuration: SearchConfiguration(isEnabled: true, provider: provider, quality: quality),
-                    apiKey: key
-                )
-                await MainActor.run {
-                    guard !Task.isCancelled else { return }
-                    isValidatingAPIKey = false
-                    connectionStatus = .success(text("API 已验证", "API validated"))
-                }
-            } catch {
-                await MainActor.run {
-                    guard !Task.isCancelled else { return }
-                    isValidatingAPIKey = false
-                    connectionStatus = .failure(error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    private var shouldShowNotice: Bool {
-        if connectionStatus != nil || isValidatingAPIKey {
-            return true
-        }
-        if didAttemptSave && !hasAPIKey {
-            return true
-        }
-        return false
-    }
-
-    private var noticeSymbol: String {
-        if case .failure = connectionStatus {
-            return "xmark.circle.fill"
-        }
-        if case .success = connectionStatus {
-            return "checkmark.circle.fill"
-        }
-        return isValidatingAPIKey ? "clock.arrow.circlepath" : "exclamationmark.circle.fill"
-    }
-
-    private var noticeTitle: String {
-        if let connectionStatus {
-            return connectionStatus.message
-        }
-        if isValidatingAPIKey {
-            return text("正在验证 API Key", "Validating API Key")
-        }
-        return text("请填写 API Key", "Enter API Key")
-    }
-
-    private var noticeMessage: String? {
-        return nil
-    }
-
-    private var noticeTint: Color {
-        if let connectionStatus {
-            return connectionStatus.color
-        }
-        if isValidatingAPIKey {
-            return PortfolixTheme.lilac
-        }
-        return PortfolixTheme.amber
-    }
-
-    private var noticeTitleColor: Color {
-        if let connectionStatus {
-            return connectionStatus.color
-        }
-        if isValidatingAPIKey {
-            return PortfolixTheme.lilac
-        }
-        return PortfolixTheme.amber
-    }
-
-    private var savedAPIKey: String {
-        ((try? store.readProviderAPIKey(kind: provider.credentialKind)) ?? "")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    private func loadSelectedProviderCredential() {
-        apiKeyValidationTask?.cancel()
-        connectionStatus = nil
-        isValidatingAPIKey = false
-        apiKey = (try? store.readProviderAPIKey(kind: provider.credentialKind)) ?? ""
-        scheduleAPIKeyValidation()
-    }
-
-    private var validationProbePosition: Position {
-        Position(
-            name: "Apple",
-            symbol: "AAPL",
-            category: .usStock,
-            quoteCurrency: .usd,
-            quantity: 1,
-            averageCost: 1,
-            latestPrice: 1,
-            marketValueCNY: 1,
-            profitRate: 0,
-            weeklyTrend: [1],
-            source: "东方财富",
-            quoteTime: "刚刚",
-            freshness: .updated
-        )
     }
 }
 
@@ -948,7 +645,7 @@ private struct ProviderAPIKeyInputField: View {
                         .allowsHitTesting(false)
                 }
 
-            inputContent
+                inputContent
             }
             .frame(
                 maxWidth: .infinity,
@@ -958,7 +655,9 @@ private struct ProviderAPIKeyInputField: View {
             .clipped()
 
             Button {
-                isVisible.toggle()
+                let willShow = !isVisible
+                isVisible = willShow
+                focusedField.wrappedValue = willShow ? field : nil
             } label: {
                 Image(systemName: isVisible ? "eye.slash" : "eye")
                     .font(.system(size: 12, weight: .medium))
@@ -1056,11 +755,11 @@ private struct ProviderAPIKeyTextInput: NSViewRepresentable {
     }
 }
 
-private final class ProviderAPIKeyTextInputView: NSView {
+final class ProviderAPIKeyTextInputView: NSView {
     private static let maskedValue = "xxxxxxxxxxxx"
 
     let plainField = NSTextField()
-    let maskedField = NSSecureTextField()
+    private let maskedDisplayField = NSSecureTextField()
     private var isVisible = false
 
     override init(frame frameRect: NSRect) {
@@ -1068,18 +767,18 @@ private final class ProviderAPIKeyTextInputView: NSView {
         wantsLayer = true
         layer?.masksToBounds = true
         setup(field: plainField)
-        setupMaskedField()
+        setupMaskedDisplayField()
+        addSubview(maskedDisplayField)
         addSubview(plainField)
-        addSubview(maskedField)
         NSLayoutConstraint.activate([
             plainField.leadingAnchor.constraint(equalTo: leadingAnchor),
             plainField.trailingAnchor.constraint(equalTo: trailingAnchor),
             plainField.centerYAnchor.constraint(equalTo: centerYAnchor),
             plainField.heightAnchor.constraint(equalToConstant: 24),
-            maskedField.leadingAnchor.constraint(equalTo: leadingAnchor),
-            maskedField.trailingAnchor.constraint(equalTo: trailingAnchor),
-            maskedField.centerYAnchor.constraint(equalTo: centerYAnchor),
-            maskedField.heightAnchor.constraint(equalToConstant: 24),
+            maskedDisplayField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            maskedDisplayField.trailingAnchor.constraint(equalTo: trailingAnchor),
+            maskedDisplayField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            maskedDisplayField.heightAnchor.constraint(equalToConstant: 24),
         ])
         plainField.isHidden = true
     }
@@ -1093,26 +792,22 @@ private final class ProviderAPIKeyTextInputView: NSView {
         let wasEditing = plainField.currentEditor() != nil
         self.isVisible = isVisible
         plainField.isHidden = !isVisible
-        maskedField.isHidden = isVisible
+        maskedDisplayField.isHidden = isVisible
         if plainField.stringValue != text {
             plainField.stringValue = text
         }
-        maskedField.stringValue = text.isEmpty ? "" : Self.maskedValue
+        maskedDisplayField.stringValue = text.isEmpty ? "" : Self.maskedValue
         plainField.textColor = textColor
-        maskedField.textColor = textColor
+        maskedDisplayField.textColor = textColor
         if wasEditing {
-            if isVisible {
-                focusActiveField()
-            } else {
-                window?.makeFirstResponder(nil)
-            }
+            focusActiveField()
         }
     }
 
     func focusActiveField() {
         DispatchQueue.main.async { [weak self] in
-            guard let self, let window else { return }
-            if self.isVisible, self.plainField.currentEditor() == nil {
+            guard let self, self.isVisible, let window else { return }
+            if self.plainField.currentEditor() == nil {
                 window.makeFirstResponder(self.plainField)
             }
         }
@@ -1134,11 +829,11 @@ private final class ProviderAPIKeyTextInputView: NSView {
         field.cell?.lineBreakMode = .byTruncatingMiddle
     }
 
-    private func setupMaskedField() {
-        setup(field: maskedField)
-        maskedField.isEditable = false
-        maskedField.isSelectable = false
-        maskedField.cell?.lineBreakMode = .byClipping
+    private func setupMaskedDisplayField() {
+        setup(field: maskedDisplayField)
+        maskedDisplayField.isEditable = false
+        maskedDisplayField.isSelectable = false
+        maskedDisplayField.cell?.lineBreakMode = .byClipping
     }
 }
 

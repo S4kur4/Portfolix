@@ -404,14 +404,11 @@ struct AIReportView: View {
                 isRunning: isRunning,
                 isSendingFollowUp: store.isAnsweringAIAnalysisFollowUp,
                 followUpProgress: store.aiAnalysisFollowUpProgress,
+                activityLines: store.aiAnalysisActivityLines,
                 hasPositions: !store.positions.isEmpty,
                 llmReadiness: AIReportReadiness.credential(
                     isConfigured: store.hasLLMAPIKey,
                     validationState: store.llmAPIKeyValidationState
-                ),
-                searchReadiness: AIReportReadiness.credential(
-                    isConfigured: store.hasSearchAPIKey,
-                    validationState: store.searchAPIKeyValidationState
                 ),
                 selectedModel: aiModelBinding,
                 availableModels: availableModelOptions,
@@ -516,21 +513,7 @@ struct AIReportView: View {
     }
 
     private var availableModelOptions: [String] {
-        var options: [String] = []
-        let currentModel = store.aiConfiguration.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !currentModel.isEmpty {
-            options.append(currentModel)
-        }
-        for model in AIProviderConfigurationStore.loadCachedModels(provider: store.aiConfiguration.providerOption) {
-            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !options.contains(trimmed) else { continue }
-            options.append(trimmed)
-        }
-        let defaultModel = store.aiConfiguration.providerOption.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !defaultModel.isEmpty, !options.contains(defaultModel) {
-            options.append(defaultModel)
-        }
-        return options
+        LLMProviderOption.deepSeekModels
     }
 }
 
@@ -568,9 +551,9 @@ private struct AIReportChatSurface: View {
     let isRunning: Bool
     let isSendingFollowUp: Bool
     let followUpProgress: AIFollowUpProgress?
+    let activityLines: [AIAgentActivityLine]
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
-    let searchReadiness: AIReportReadiness
     @Binding var selectedModel: String
     let availableModels: [String]
     @Binding var selectedAnalysisMode: SmartAnalysisMode
@@ -614,7 +597,6 @@ private struct AIReportChatSurface: View {
                                         AIReportWelcomeMessage(
                                             hasPositions: hasPositions,
                                             llmReadiness: llmReadiness,
-                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -674,6 +656,7 @@ private struct AIReportChatSurface: View {
                                     AIReportUntimestampedAgentRow {
                                         AIReportAgentProgressMessage(
                                             status: run.status,
+                                            activityLines: activityLines,
                                             language: language
                                         )
                                     }
@@ -684,6 +667,7 @@ private struct AIReportChatSurface: View {
                                     AIReportUntimestampedAgentRow {
                                         AIReportFollowUpProgressMessage(
                                             progress: followUpProgress ?? .analyzing,
+                                            activityLines: activityLines,
                                             language: language
                                         )
                                     }
@@ -696,7 +680,6 @@ private struct AIReportChatSurface: View {
                                             status: run.status,
                                             hasPositions: hasPositions,
                                             llmReadiness: llmReadiness,
-                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -895,9 +878,6 @@ private struct AIReportChatSurface: View {
         llmReadiness == .ready
     }
 
-    private var hasSearchKey: Bool {
-        searchReadiness == .ready
-    }
 }
 
 private enum AIReportChatWindowDirection {
@@ -1332,7 +1312,6 @@ enum AIReportReadiness: Equatable {
 private struct AIReportWelcomeMessage: View {
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
-    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1351,12 +1330,12 @@ private struct AIReportWelcomeMessage: View {
                 )
                 AIReportReadinessRow(
                     readiness: llmReadiness,
-                    text: llmReadiness.apiStatusText(name: "LLM API", language: language)
+                    text: llmReadiness.apiStatusText(name: "DeepSeek API", language: language)
                 )
                 if usesConnectedMode {
                     AIReportReadinessRow(
-                        readiness: searchReadiness,
-                        text: searchReadiness.apiStatusText(name: "Search API", language: language)
+                        readiness: llmReadiness,
+                        text: localizedText("DeepSeek 内建搜索", "DeepSeek built-in search", language: language)
                     )
                 }
             }
@@ -1386,12 +1365,14 @@ private struct AIReportReadinessRow: View {
 
 private struct AIReportAgentProgressMessage: View {
     let status: AIAnalysisRunStatus
+    let activityLines: [AIAgentActivityLine]
     let language: AppLanguage
 
     var body: some View {
         AIReportProgressCard(
             title: status.title(language: language),
-            detail: progressDetail
+            detail: progressDetail,
+            activityLines: activityLines
         )
     }
 
@@ -1405,12 +1386,14 @@ private struct AIReportAgentProgressMessage: View {
 
 private struct AIReportFollowUpProgressMessage: View {
     let progress: AIFollowUpProgress
+    let activityLines: [AIAgentActivityLine]
     let language: AppLanguage
 
     var body: some View {
         AIReportProgressCard(
             title: progress.title(language: language),
-            detail: progress.detail(language: language)
+            detail: progress.detail(language: language),
+            activityLines: activityLines
         )
     }
 }
@@ -1418,25 +1401,60 @@ private struct AIReportFollowUpProgressMessage: View {
 private struct AIReportProgressCard: View {
     let title: String
     let detail: String
+    let activityLines: [AIAgentActivityLine]
+
+    private var displayLines: [AIAgentActivityLine] {
+        if activityLines.isEmpty {
+            return [
+                AIAgentActivityLine(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, text: title),
+                AIAgentActivityLine(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, text: detail),
+            ]
+        }
+        return Array(activityLines.suffix(3))
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
             AIReportAgentThinkingIcon()
 
-            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.primaryText)
-                Text(detail)
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
-                    .lineLimit(2)
+            ZStack(alignment: .bottomLeading) {
+                activityStack
+                    .id(displayLines.map(\.id))
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .move(edge: .top).combined(with: .opacity)
+                        )
+                    )
             }
+            .frame(height: 52, alignment: .bottomLeading)
+            .clipped()
+            .animation(.easeInOut(duration: 0.24), value: displayLines.map(\.id))
+
             Spacer()
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+    }
+
+    private var activityStack: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(0 ..< 3, id: \.self) { index in
+                if index < displayLines.count {
+                    let line = displayLines[index]
+                    Text(line.text)
+                        .font(.system(size: 12, weight: index == displayLines.count - 1 ? .semibold : .regular))
+                        .foregroundStyle(index == displayLines.count - 1 ? PortfolixTheme.primaryText : PortfolixTheme.tertiaryText)
+                        .lineLimit(1)
+                        .frame(height: 15, alignment: .leading)
+                } else {
+                    Color.clear
+                        .frame(height: 15)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1444,7 +1462,6 @@ private struct AIReportStaticStatusMessage: View {
     let status: AIAnalysisRunStatus
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
-    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1472,7 +1489,7 @@ private struct AIReportStaticStatusMessage: View {
         if hasInvalidRequiredCredential {
             return localizedText("API 验证失败", "API validation failed", language: language)
         }
-        if llmReadiness != .ready || (usesConnectedMode && searchReadiness != .ready) {
+        if llmReadiness != .ready {
             return localizedText("需要完成 API 配置", "API configuration required", language: language)
         }
         return status.title(language: language)
@@ -1482,17 +1499,8 @@ private struct AIReportStaticStatusMessage: View {
         if !hasPositions {
             return localizedText("添加持仓后即可生成分析", "Add holdings to generate an analysis", language: language)
         }
-        if llmReadiness != .ready, usesConnectedMode, searchReadiness != .ready {
-            return [
-                llmReadiness.configurationGuidance(name: "LLM API", language: language),
-                searchReadiness.configurationGuidance(name: "Search API", language: language),
-            ].joined(separator: localizedText("；", "; ", language: language))
-        }
         if llmReadiness != .ready {
-            return llmReadiness.configurationGuidance(name: "LLM API", language: language)
-        }
-        if usesConnectedMode && searchReadiness != .ready {
-            return searchReadiness.configurationGuidance(name: "Search API", language: language)
+            return llmReadiness.configurationGuidance(name: "DeepSeek API", language: language)
         }
         return localizedText("请检查配置或稍后重试", "Check settings or try again later", language: language)
     }
@@ -1522,7 +1530,7 @@ private struct AIReportStaticStatusMessage: View {
     }
 
     private var hasInvalidRequiredCredential: Bool {
-        llmReadiness == .invalid || (usesConnectedMode && searchReadiness == .invalid)
+        llmReadiness == .invalid
     }
 }
 
@@ -2016,7 +2024,6 @@ private struct AIReportStatusCard: View {
     let status: AIAnalysisRunStatus
     let hasPositions: Bool
     let hasLLMKey: Bool
-    let hasSearchKey: Bool
     let usesConnectedMode: Bool
     let report: AIAnalysisReport?
     let run: AIAnalysisRun
@@ -2090,7 +2097,7 @@ private struct AIReportStatusCard: View {
         if !hasPositions {
             return localizedText("等待持仓数据", "Waiting for holdings", language: language)
         }
-        if !hasLLMKey || (usesConnectedMode && !hasSearchKey) {
+        if !hasLLMKey {
             return localizedText("需要完成 API 配置", "API configuration required", language: language)
         }
         if case .running = status {
@@ -2110,10 +2117,7 @@ private struct AIReportStatusCard: View {
             return localizedText("添加持仓后即可生成标准分析", "Add holdings to generate a standard analysis", language: language)
         }
         if !hasLLMKey {
-            return localizedText("请在系统设置中配置并验证 LLM API Key", "Configure and validate an LLM API key in Settings", language: language)
-        }
-        if usesConnectedMode && !hasSearchKey {
-            return localizedText("联网增强模式需要验证 Search API Key", "Connected mode requires a validated Search API key", language: language)
+            return localizedText("请在系统设置中配置并验证 DeepSeek API Key", "Configure and validate a DeepSeek API key in Settings", language: language)
         }
         if case .running = status {
             return status.title(language: language)
@@ -2133,7 +2137,7 @@ private struct AIReportStatusCard: View {
     }
 
     private var symbol: String {
-        if !hasPositions || !hasLLMKey || (usesConnectedMode && !hasSearchKey) {
+        if !hasPositions || !hasLLMKey {
             return "exclamationmark.circle.fill"
         }
         if case .running = status {
@@ -2146,7 +2150,7 @@ private struct AIReportStatusCard: View {
     }
 
     private var color: Color {
-        if !hasPositions || !hasLLMKey || (usesConnectedMode && !hasSearchKey) {
+        if !hasPositions || !hasLLMKey {
             return PortfolixTheme.amber
         }
         if case .failed = status {
@@ -3371,14 +3375,21 @@ struct SettingsView: View {
                     SettingsToggleRow(
                         title: settingsText("AI 资产分析", "AI Asset Analysis"),
                         helpText: settingsText(
-                            "开启后，Portfolix 将通过 LLM 分析您的资产组合、收益及风险偏好",
-                            "When enabled, Portfolix uses an LLM to analyze your portfolio, returns, and risk preferences"
+                            "开启后，Portfolix 将通过 DeepSeek 分析您的资产组合、收益及风险偏好",
+                            "When enabled, Portfolix uses DeepSeek to analyze your portfolio, returns, and risk preferences"
                         ),
                         helpPlacement: .trailing,
                         isOn: $store.aiConfiguration.isEnabled
                     )
                     SettingsDivider()
-                    SettingsRow(title: settingsText("分析模式", "Analysis Mode")) {
+                    SettingsRow(
+                        title: settingsText("分析模式", "Analysis Mode"),
+                        helpText: settingsText(
+                            "基础模式使用模型已有知识；联网增强会按需使用 DeepSeek 内建搜索。",
+                            "Basic uses the model's existing knowledge; Connected uses DeepSeek's built-in search when needed."
+                        ),
+                        helpPlacement: .trailing
+                    ) {
                         Picker(settingsText("分析模式", "Analysis Mode"), selection: smartAnalysisModeBinding) {
                             ForEach(SmartAnalysisMode.allCases) { mode in
                                 Text(mode.title(language: store.appLanguage)).tag(mode)
@@ -3398,7 +3409,7 @@ struct SettingsView: View {
                         }
                     }
                     SettingsDivider()
-                    SettingsRow(title: "LLM API") {
+                    SettingsRow(title: "DeepSeek API") {
                         let state = apiCredentialDisplayState(
                             hasKey: store.hasLLMAPIKey,
                             validationState: store.llmAPIKeyValidationState
@@ -3410,21 +3421,6 @@ struct SettingsView: View {
                             buttonTitle: settingsText("配置", "Configure")
                         ) {
                             configurationSheet = .llm
-                        }
-                    }
-                    SettingsDivider()
-                    SettingsRow(title: "Search API") {
-                        let state = apiCredentialDisplayState(
-                            hasKey: store.hasSearchAPIKey,
-                            validationState: store.searchAPIKeyValidationState
-                        )
-                        ProviderConfigurationActions(
-                            state: state.title,
-                            color: state.color,
-                            symbol: state.symbol,
-                            buttonTitle: settingsText("配置", "Configure")
-                        ) {
-                            configurationSheet = .search
                         }
                     }
                 }
@@ -3476,9 +3472,6 @@ struct SettingsView: View {
             switch sheet {
             case .llm:
                 LLMConfigurationSheet()
-                    .environmentObject(store)
-            case .search:
-                SearchConfigurationSheet()
                     .environmentObject(store)
             }
         }
@@ -4058,7 +4051,6 @@ private struct PositionRefreshButton: View {
 
 private enum SettingsConfigurationSheet: String, Identifiable {
     case llm
-    case search
 
     var id: String { rawValue }
 }

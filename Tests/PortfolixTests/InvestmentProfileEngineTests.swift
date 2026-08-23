@@ -101,36 +101,20 @@ struct InvestmentProfileEngineTests {
             marketValue: 100_000
         )
         let sourceURL = "https://fund.example.com/reports/123456"
-        let llm = InvestmentProfileMockLLM(responses: [
-            """
-            {
-              "tool_calls":[{
-                "id":"web_search_1",
-                "query":"某某精选混合 123456 基金季报 投资范围 地区配置",
-                "position_refs":["position_\(position.id.uuidString)"]
-              }],
-              "status":"continue",
-              "limitations":[]
-            }
-            """,
-            """
-            {
-              "profiles":[{
-                "position_ref":"position_\(position.id.uuidString)",
-                "asset_class_weights":{"equity":0.92,"cash":0.08},
-                "region_weights":{"US":0.8,"GLOBAL_OTHER":0.15,"UNKNOWN":0.05},
-                "sector_weights":{"technology":0.55,"other":0.45},
-                "growth_style_score":0.82,
-                "income_score":0.18,
-                "volatility_score":0.72,
-                "benchmark_key":"index:global_technology",
-                "confidence":0.9,
-                "rationale":"基金公开资料显示其主要投资海外科技权益资产",
-                "source_urls":["\(sourceURL)"]
-              }]
-            }
-            """,
-        ])
+        let llm = InvestmentProfileMockLLM(
+            responses: [],
+            completionResults: [
+                LLMCompletionResult(
+                    content: exposureJSON(
+                        positionRef: InvestmentProfileEngine.positionRef(for: position),
+                        sourceURL: sourceURL
+                    ),
+                    webSearchCallCount: 1,
+                    webSearchQueries: ["123456 基金季报 投资范围 地区配置"],
+                    citations: [LLMWebCitation(title: "Fund quarterly report", url: sourceURL)]
+                ),
+            ]
+        )
         let search = InvestmentProfileMockSearch(sourceURL: sourceURL)
         let result = await InvestmentProfileHarness(llm: llm, search: search).enrich(
             positions: [position],
@@ -145,12 +129,13 @@ struct InvestmentProfileEngineTests {
         #expect(result.searchedAssetCount == 1)
         #expect((exposure.regionWeights[InvestmentProfileRegion.unitedStates.rawValue] ?? 0) == 0.8)
         #expect(exposure.evidence.first?.url == sourceURL)
-        let query = try #require(await search.queries().first)
-        #expect(query.contains("123456"))
-        #expect(!query.contains("某某精选混合"))
-        #expect(!query.localizedCaseInsensitiveContains("持仓"))
-        #expect(!query.localizedCaseInsensitiveContains("成本"))
-        #expect(!query.localizedCaseInsensitiveContains("市值"))
+        #expect(await search.queries().isEmpty)
+        #expect(await llm.webSearchEnabledValues() == [true])
+        let prompt = try #require(await llm.userPrompts().first)
+        #expect(prompt.contains("123456"))
+        #expect(prompt.contains("某某精选混合"))
+        #expect(!prompt.localizedCaseInsensitiveContains("持仓成本"))
+        #expect(!prompt.localizedCaseInsensitiveContains("市值"))
     }
 
     @Test
@@ -244,13 +229,9 @@ struct InvestmentProfileEngineTests {
             exposures: InvestmentProfileEngine.localExposureProfiles(positions: [position]),
             context: context
         ).scores
-        let llm = InvestmentProfileMockLLM(responses: [
-            toolPlanJSON(
-                positionRef: positionRef,
-                query: "某某精选混合 123456 基金季报 投资范围 地区配置"
-            ),
-            exposureJSON(positionRef: positionRef, sourceURL: sourceURL),
-            """
+        let llm = InvestmentProfileMockLLM(
+            responses: [
+                """
             {
               "dimensions":[
                 {"id":"growth","score":78,"reason":"底层权益与科技暴露提升成长属性"},
@@ -264,14 +245,22 @@ struct InvestmentProfileEngineTests {
               "confidence":"high"
             }
             """,
-        ])
+            ],
+            completionResults: [
+                LLMCompletionResult(
+                    content: exposureJSON(positionRef: positionRef, sourceURL: sourceURL),
+                    webSearchCallCount: 1,
+                    webSearchQueries: ["123456 基金季报 投资范围 地区配置"],
+                    citations: [LLMWebCitation(title: "Fund quarterly report", url: sourceURL)]
+                ),
+            ]
+        )
         let search = InvestmentProfileMockSearch(sourceURL: sourceURL)
         let agent = AIAnalysisAgent(
             llm: llm,
             search: search,
             credentialStore: InvestmentProfileMockCredentialStore(keys: [
                 .llm: "llm-key",
-                .tavily: "search-key",
             ])
         )
 
@@ -288,9 +277,10 @@ struct InvestmentProfileEngineTests {
         #expect(profile.dimensions.count == 6)
         #expect(profile.assetExposures?.first?.evidence.first?.url == sourceURL)
         #expect(profile.evidenceSourceCount == 1)
-        #expect((profile.exposureCoverage ?? 0) > 0.8)
-        #expect(await llm.requestCount() == 3)
-        #expect(await search.queries().count == 1)
+        #expect((profile.exposureCoverage ?? 0) >= 0.7)
+        #expect(await llm.requestCount() == 2)
+        #expect(await llm.webSearchEnabledValues() == [true])
+        #expect(await search.queries().isEmpty)
     }
 
     @Test
@@ -374,7 +364,7 @@ struct InvestmentProfileEngineTests {
     }
 
     @Test
-    func emptySearchResultsDegradeToLocalExposureWithoutFailure() async {
+    func builtInSearchWithoutCitationsUsesSafeAttributedSourcesAtLowerConfidence() async throws {
         let position = makePosition(
             name: "某某精选混合",
             symbol: "123456",
@@ -383,10 +373,19 @@ struct InvestmentProfileEngineTests {
             marketValue: 100_000
         )
         let ref = InvestmentProfileEngine.positionRef(for: position)
-        let llm = InvestmentProfileMockLLM(responses: [
-            toolPlanJSON(positionRef: ref, query: "某某精选混合 123456 基金季报 地区配置"),
-            toolPlanJSON(positionRef: ref, query: "某某精选混合 123456 业绩比较基准 行业配置"),
-        ])
+        let llm = InvestmentProfileMockLLM(
+            responses: [],
+            completionResults: [
+                LLMCompletionResult(
+                    content: exposureJSON(
+                        positionRef: ref,
+                        sourceURL: "https://fund.example.com/unused"
+                    ),
+                    webSearchCallCount: 1,
+                    webSearchQueries: ["123456 基金季报 地区配置"]
+                ),
+            ]
+        )
         let search = InvestmentProfileMockSearch(
             sourceURL: "https://fund.example.com/unused",
             returnsResults: false
@@ -400,15 +399,20 @@ struct InvestmentProfileEngineTests {
             searchKey: "search-key"
         )
 
-        #expect(result.searchedAssetCount == 0)
-        #expect(result.exposures.first?.evidence.first?.source == "portfolix_native_resolver")
-        #expect(!result.limitations.isEmpty)
-        #expect(await llm.requestCount() == 2)
-        #expect(await search.queries().count == 2)
+        let exposure = try #require(result.exposures.first)
+        #expect(result.searchedAssetCount == 1)
+        #expect(exposure.evidence.first?.url == "https://fund.example.com/unused")
+        #expect(exposure.confidence <= 0.7)
+        #expect(result.limitations.contains {
+            $0.contains("未返回可独立校验的引用元数据")
+        })
+        #expect(await llm.requestCount() == 1)
+        #expect(await llm.webSearchEnabledValues() == [true])
+        #expect(await search.queries().isEmpty)
     }
 
     @Test
-    func malformedExtractionTriggersASecondResearchRound() async throws {
+    func builtInSearchRejectsPrivateAttributedSourceURLs() async {
         let position = makePosition(
             name: "某某精选混合",
             symbol: "123456",
@@ -417,13 +421,57 @@ struct InvestmentProfileEngineTests {
             marketValue: 100_000
         )
         let ref = InvestmentProfileEngine.positionRef(for: position)
+        let llm = InvestmentProfileMockLLM(
+            responses: [],
+            completionResults: [
+                LLMCompletionResult(
+                    content: exposureJSON(
+                        positionRef: ref,
+                        sourceURL: "https://127.0.0.1/private"
+                    ),
+                    webSearchCallCount: 1,
+                    webSearchQueries: ["123456 基金季报 地区配置"]
+                ),
+            ]
+        )
+        let result = await InvestmentProfileHarness(
+            llm: llm,
+            search: InvestmentProfileMockSearch(sourceURL: "https://fund.example.com/unused")
+        ).enrich(
+            positions: [position],
+            cachedExposures: [],
+            llmConfiguration: .default,
+            searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
+            llmKey: "llm-key",
+            searchKey: nil
+        )
+
+        #expect(result.searchedAssetCount == 0)
+        #expect(result.exposures.first?.evidence.first?.source == "portfolix_native_resolver")
+        #expect(!result.limitations.isEmpty)
+    }
+
+    @Test
+    func malformedBuiltInSearchResponseFallsBackWithoutExternalSearch() async throws {
+        let position = makePosition(
+            name: "某某精选混合",
+            symbol: "123456",
+            category: .fund,
+            quoteCurrency: .cny,
+            marketValue: 100_000
+        )
         let sourceURL = "https://fund.example.com/reports/123456"
-        let llm = InvestmentProfileMockLLM(responses: [
-            toolPlanJSON(positionRef: ref, query: "某某精选混合 123456 基金季报 地区配置"),
-            "not-json",
-            toolPlanJSON(positionRef: ref, query: "某某精选混合 123456 业绩比较基准 行业配置"),
-            exposureJSON(positionRef: ref, sourceURL: sourceURL),
-        ])
+        let llm = InvestmentProfileMockLLM(
+            responses: [],
+            completionResults: [
+                LLMCompletionResult(
+                    content: "not-json",
+                    webSearchCallCount: 1,
+                    webSearchQueries: ["123456 基金季报 地区配置"],
+                    citations: [LLMWebCitation(title: "Fund quarterly report", url: sourceURL)]
+                ),
+            ]
+        )
         let search = InvestmentProfileMockSearch(sourceURL: sourceURL)
         let result = await InvestmentProfileHarness(llm: llm, search: search).enrich(
             positions: [position],
@@ -434,11 +482,51 @@ struct InvestmentProfileEngineTests {
             searchKey: "search-key"
         )
 
-        #expect(result.searchedAssetCount == 1)
-        #expect(result.exposures.first?.evidence.first?.url == sourceURL)
+        #expect(result.searchedAssetCount == 0)
+        #expect(result.exposures.first?.evidence.first?.source == "portfolix_native_resolver")
         #expect(result.limitations.contains("公开资料未能转换为可信的结构化底层暴露"))
-        #expect(await llm.requestCount() == 4)
-        #expect(await search.queries().count == 2)
+        #expect(await llm.requestCount() == 1)
+        #expect(await llm.webSearchEnabledValues() == [true])
+        #expect(await search.queries().isEmpty)
+    }
+
+    @Test
+    func liveDeepSeekBuiltInSearchEnrichesQDIIExposureUsingEnvironmentCredential() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PORTFOLIX_RUN_LIVE_DEEPSEEK_PROFILE_TEST"] == "1" else { return }
+        let apiKey = try #require(environment["PORTFOLIX_DEEPSEEK_API_KEY"])
+        let model = environment["PORTFOLIX_DEEPSEEK_MODEL"] ?? LLMProviderOption.deepSeek.defaultModel
+        let position = makePosition(
+            name: "广发纳斯达克100ETF联接(QDII)A",
+            symbol: "270042",
+            category: .fund,
+            quoteCurrency: .cny,
+            marketValue: 100_000
+        )
+        let configuration = AIProviderConfiguration(
+            provider: LLMProviderOption.deepSeek.rawValue,
+            baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+            model: model,
+            isEnabled: true,
+            requestTimeout: 180,
+            maxOutputTokens: LLMOutputTokenPolicy.standard
+        )
+        let result = await InvestmentProfileHarness(
+            llm: DeepSeekResponsesClient.shared,
+            search: InvestmentProfileMockSearch(sourceURL: "https://example.com/unused")
+        ).enrich(
+            positions: [position],
+            cachedExposures: [],
+            llmConfiguration: configuration,
+            searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
+            llmKey: apiKey,
+            searchKey: nil
+        )
+
+        let exposure = try #require(result.exposures.first)
+        #expect(result.searchedAssetCount == 1)
+        #expect(exposure.evidence.contains { $0.source != "portfolix_native_resolver" })
+        #expect((exposure.regionWeights[InvestmentProfileRegion.unitedStates.rawValue] ?? 0) > 0.5)
     }
 
     private func toolPlanJSON(positionRef: String, query: String) -> String {
@@ -544,24 +632,46 @@ struct InvestmentProfileEngineTests {
 
 private actor InvestmentProfileMockLLM: LLMCompleting {
     private var responses: [String]
+    private var completionResults: [LLMCompletionResult]
     private var capturedRequestCount = 0
+    private var capturedUserPrompts: [String] = []
+    private var capturedWebSearchEnabled: [Bool] = []
 
-    init(responses: [String]) {
+    init(responses: [String], completionResults: [LLMCompletionResult] = []) {
         self.responses = responses
+        self.completionResults = completionResults
     }
 
     func completeJSON(
         systemPrompt _: String,
-        userPrompt _: String,
+        userPrompt: String,
         configuration _: AIProviderConfiguration,
         apiKey _: String
     ) async throws -> String {
         capturedRequestCount += 1
+        capturedUserPrompts.append(userPrompt)
         guard !responses.isEmpty else { throw LLMClientError.invalidResponse }
         return responses.removeFirst()
     }
 
+    func completeJSONResult(
+        systemPrompt _: String,
+        userPrompt: String,
+        configuration _: AIProviderConfiguration,
+        apiKey _: String,
+        webSearchEnabled: Bool,
+        webSearchProgress _: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        capturedRequestCount += 1
+        capturedUserPrompts.append(userPrompt)
+        capturedWebSearchEnabled.append(webSearchEnabled)
+        guard !completionResults.isEmpty else { throw LLMClientError.invalidResponse }
+        return completionResults.removeFirst()
+    }
+
     func requestCount() -> Int { capturedRequestCount }
+    func userPrompts() -> [String] { capturedUserPrompts }
+    func webSearchEnabledValues() -> [Bool] { capturedWebSearchEnabled }
 }
 
 private actor InvestmentProfileMockSearch: WebSearching {

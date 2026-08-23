@@ -93,6 +93,9 @@ enum AIAgentRuntimeDiagnostics {
         case let .searching(_, ordinal, total): "searching_\(ordinal)_of_\(total)"
         case let .evaluatingEvidence(turn, total): "evaluating_evidence_\(turn)_of_\(total)"
         case .composing: "composing"
+        case .reasoning: "reasoning"
+        case .outputStarted: "output_started"
+        case .repairingResponse: "repairing_response"
         }
     }
 }

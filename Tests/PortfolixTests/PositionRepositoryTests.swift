@@ -1718,12 +1718,8 @@ struct PositionRepositoryTests {
         )
 
         let tavily = MockTavilySearcher()
-        let appleRef = "position_\(try #require(store.positions.first(where: { $0.symbol == "AAPL" })).id.uuidString)"
-        let llm = MockLLMCompleter(responses: [
-            """
-            {"tool_calls":[{"id":"request_1","query":"Apple AAPL 最新公司公告 监管事件","position_refs":["\(appleRef)"]}]}
-            """,
-            """
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: """
             {
               "summary": "组合保持可观察，Apple 需要关注公开信息变化",
               "health_score_explanation": "本地约束匹配度用于解释风险边界",
@@ -1733,7 +1729,9 @@ struct PositionRepositoryTests {
               "data_quality_notes": ["价格数据来自本地快照"],
               "limitations": ["内容不构成投资建议"]
             }
-            """,
+            """, webSearchCallCount: 1, webSearchQueries: ["Apple AAPL latest company news"], citations: [
+                LLMWebCitation(title: "Apple market update", url: "https://www.reuters.com/markets/apple-update"),
+            ])
         ])
         let agent = AIAnalysisAgent(
             llm: llm,
@@ -1751,16 +1749,11 @@ struct PositionRepositoryTests {
 
         #expect(report.assetAlerts.count == 1)
         #expect(report.sources.count == 1)
-        #expect(await tavily.searchedSymbols() == ["AAPL"])
-        #expect(await llm.requestCount() == 2)
-        #expect(await llm.requestTimeouts() == [
-            LLMRequestTimeoutPolicy.standard,
-            LLMRequestTimeoutPolicy.reportGeneration,
-        ])
-        #expect(await llm.outputTokenLimits() == [
-            LLMOutputTokenPolicy.standard,
-            LLMOutputTokenPolicy.reportGeneration,
-        ])
+        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(await llm.requestCount() == 1)
+        #expect(await llm.requestTimeouts() == [LLMRequestTimeoutPolicy.reportGeneration])
+        #expect(await llm.outputTokenLimits() == [LLMOutputTokenPolicy.reportGeneration])
+        #expect(await llm.webSearchEnabledValues() == [true])
     }
 
     @MainActor
@@ -1780,12 +1773,8 @@ struct PositionRepositoryTests {
         }
 
         let tavily = MockTavilySearcher(delayNanoseconds: 50_000_000)
-        let requestedRef = "position_\(try #require(store.positions.first(where: { $0.symbol == "AAA" })).id.uuidString)"
-        let llm = MockLLMCompleter(responses: [
-            """
-            {"tool_calls":[{"id":"request_1","query":"Asset 1 AAA 最新公司公告 监管事件","position_refs":["\(requestedRef)"]}]}
-            """,
-            """
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: """
             {
               "summary": "组合风险保持可观察",
               "health_score_explanation": "本地约束用于解释风险边界",
@@ -1796,7 +1785,7 @@ struct PositionRepositoryTests {
               "data_quality_notes": ["价格数据来自本地快照"],
               "limitations": ["内容不构成投资建议"]
             }
-            """,
+            """, webSearchCallCount: 1, webSearchQueries: ["Asset 1 AAA latest company announcement"])
         ])
         let agent = AIAnalysisAgent(
             llm: llm,
@@ -1812,8 +1801,9 @@ struct PositionRepositoryTests {
             trigger: .manual
         )
 
-        #expect(await tavily.searchedSymbols() == ["AAA"])
-        #expect(await tavily.maximumConcurrentSearchCount() == 1)
+        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(await tavily.maximumConcurrentSearchCount() == 0)
+        #expect(await llm.webSearchEnabledValues() == [true])
     }
 
     @MainActor
@@ -1831,18 +1821,8 @@ struct PositionRepositoryTests {
                 latestPrice: 120
             )
         }
-        let refs = Dictionary(uniqueKeysWithValues: store.positions.map {
-            ($0.symbol, "position_\($0.id.uuidString)")
-        })
-        let llm = MockLLMCompleter(responses: [
-            """
-            {"status":"continue","tool_calls":[
-              {"id":"one","query":"Apple AAPL latest company announcement","position_refs":["\(try #require(refs["AAPL"]))"]},
-              {"id":"two","query":"Microsoft MSFT latest company announcement","position_refs":["\(try #require(refs["MSFT"]))"]},
-              {"id":"three","query":"Nvidia NVDA latest company announcement","position_refs":["\(try #require(refs["NVDA"]))"]}
-            ],"limitations":[]}
-            """,
-            """
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: """
             {
               "summary": "组合风险保持可观察",
               "health_score_explanation": "本地约束用于解释风险边界",
@@ -1853,7 +1833,10 @@ struct PositionRepositoryTests {
               "data_quality_notes": [],
               "limitations": ["外部资料仅作背景"]
             }
-            """,
+            """, webSearchCallCount: 2, webSearchQueries: [
+                "Apple Microsoft Nvidia latest company announcements",
+                "US technology sector market update",
+            ])
         ])
         let searcher = MockTavilySearcher(delayNanoseconds: 50_000_000)
         let agent = AIAnalysisAgent(
@@ -1870,8 +1853,10 @@ struct PositionRepositoryTests {
             trigger: .manual
         )
 
-        #expect(await searcher.searchedQueries().count == 3)
-        #expect(await searcher.maximumConcurrentSearchCount() == 2)
+        #expect(await searcher.searchedQueries().isEmpty)
+        #expect(await searcher.maximumConcurrentSearchCount() == 0)
+        #expect(await llm.requestCount() == 1)
+        #expect(await llm.webSearchEnabledValues() == [true])
     }
 
     @Test
@@ -1917,11 +1902,8 @@ struct PositionRepositoryTests {
             quoteCurrency: .usd,
             latestPrice: 120
         )
-        let llm = MockLLMCompleter(responses: [
-            """
-            {"tool_calls":[{"id":"request_1","query":"Apple AAPL 最新公司公告 监管事件","position_refs":["position_\(try #require(store.positions.first).id.uuidString)"]}]}
-            """,
-            """
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: """
             {
               "summary": "组合风险保持可观察",
               "health_score_explanation": "联网来源不可用时继续使用本地约束",
@@ -1932,7 +1914,7 @@ struct PositionRepositoryTests {
               "data_quality_notes": ["本次未获得联网来源"],
               "limitations": ["内容不构成投资建议"]
             }
-            """,
+            """, webSearchCallCount: 1, webSearchQueries: ["Apple AAPL latest company news"])
         ])
         let progressRecorder = AIAnalysisProgressRecorder()
         let agent = AIAnalysisAgent(
@@ -1952,7 +1934,7 @@ struct PositionRepositoryTests {
             }
         )
 
-        #expect(await llm.requestCount() == 2)
+        #expect(await llm.requestCount() == 1)
         #expect(await progressRecorder.stageIDs().contains("web_search_results_ready"))
     }
 
@@ -1969,11 +1951,8 @@ struct PositionRepositoryTests {
             quoteCurrency: .usd,
             latestPrice: 120
         )
-        let positionRef = "position_\(try #require(store.positions.first).id.uuidString)"
-        let llm = MockLLMCompleter(responses: [
-            #"{"status":"continue","tool_calls":[{"id":"first","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
-            #"{"status":"continue","tool_calls":[{"id":"second","query":"Apple AAPL recent regulatory filing news","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
-            """
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: """
             {
               "summary": "组合风险保持可观察",
               "health_score_explanation": "本地约束用于解释风险边界",
@@ -1984,7 +1963,12 @@ struct PositionRepositoryTests {
               "data_quality_notes": ["价格数据来自本地快照"],
               "limitations": ["外部资料仅作背景"]
             }
-            """,
+            """, webSearchCallCount: 2, webSearchQueries: [
+                "Apple AAPL latest company announcement",
+                "Apple AAPL recent regulatory filing news",
+            ], citations: [
+                LLMWebCitation(title: "Apple regulatory filing", url: "https://www.reuters.com/markets/apple-filing"),
+            ])
         ])
         let searcher = SequencedTavilySearcher(responseBatches: [
             [],
@@ -2017,11 +2001,10 @@ struct PositionRepositoryTests {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let state = try decoder.decode(AIAgentLoopState.self, from: stateData)
-        #expect(state.turns.count == 2)
-        #expect(state.turns.map(\.decision) == ["replan", "evidence_sufficient"])
-        #expect(state.stopReason == "evidence_sufficient")
-        #expect(await searcher.searchedQueries().count == 2)
-        #expect(await llm.requestCount() == 3)
+        #expect(state.turns.isEmpty)
+        #expect(state.stopReason == "deepseek_search_completed")
+        #expect(await searcher.searchedQueries().isEmpty)
+        #expect(await llm.requestCount() == 1)
     }
 
     @MainActor
@@ -2619,7 +2602,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v15-evidence-grounded")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v16-deepseek-search")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
@@ -2637,8 +2620,8 @@ struct PositionRepositoryTests {
         #expect(LLMRequestTimeoutPolicy.reportGeneration == AIAgentExecutionBudget.production.reportSeconds)
         #expect(LLMRequestTimeoutPolicy.reportRepair < LLMRequestTimeoutPolicy.reportGeneration)
         #expect(AIAgentExecutionBudget.production.totalSeconds >= 300)
-        #expect(LLMOutputTokenPolicy.followUp == 6_400)
-        #expect(LLMOutputTokenPolicy.reportGeneration == 10_000)
+        #expect(LLMOutputTokenPolicy.followUp == 10_000)
+        #expect(LLMOutputTokenPolicy.reportGeneration == 16_000)
         #expect(AIAnalysisPromptText.repairUser(rawReport: "{}", inputJSON: "{}").contains("target_report_shape"))
     }
 
@@ -2692,6 +2675,142 @@ struct PositionRepositoryTests {
             #expect(FileManager.default.fileExists(atPath: outputURL.path))
         }
         print("PORTFOLIX_CAPTURED_PROMPT=\(outputURL.path)")
+    }
+
+    @Test
+    func reportDropsModelClaimedDomainsWithoutVerifiedSearchSources() throws {
+        let position = makePosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            currency: .usd,
+            quantity: 10,
+            averageCost: 190,
+            latestPrice: 225
+        )
+        let payload = LLMReportPayload(
+            summary: "组合保持分散。",
+            healthScoreExplanation: "当前约束匹配正常。",
+            riskItems: [],
+            assetAlerts: [
+                LLMAssetAlertPayload(
+                    assetName: position.name,
+                    symbol: position.symbol,
+                    title: "关注近期波动",
+                    reason: "模型基于联网信息提示近期波动。",
+                    sourceDomains: ["finance.yahoo.com"]
+                ),
+            ],
+            rebalanceActions: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: ["公开信息可能随时间变化。"]
+        )
+
+        let report = AIAnalysisAgent.report(
+            from: payload,
+            toolResults: [],
+            positions: [position],
+            generatedAt: .now,
+            searchedAt: .now,
+            model: LLMProviderOption.deepSeek.defaultModel,
+            riskProfileVersion: 3
+        )
+
+        #expect(report.assetAlerts.first?.sourceDomains == [])
+        #expect(report.sources.isEmpty)
+        try AIAnalysisSchemaValidator.validate(
+            report: report,
+            allowedPositionRefs: ["position_\(position.id.uuidString)"]
+        )
+    }
+
+    @Test
+    func liveDeepSeekAgentReportAndFollowUpUsingEnvironmentCredential() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PORTFOLIX_RUN_LIVE_DEEPSEEK_AGENT_TEST"] == "1" else { return }
+        let apiKey = try #require(environment["PORTFOLIX_DEEPSEEK_API_KEY"])
+        let model = environment["PORTFOLIX_DEEPSEEK_MODEL"] ?? LLMProviderOption.deepSeek.defaultModel
+        let configuration = AIProviderConfiguration(
+            provider: LLMProviderOption.deepSeek.rawValue,
+            baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+            model: model,
+            isEnabled: true
+        )
+        let searchConfiguration = SearchConfiguration(
+            isEnabled: true,
+            provider: .tavily,
+            quality: .basic
+        )
+        let positions = [
+            makePosition(
+                name: "广发纳斯达克100ETF联接A",
+                symbol: "270042",
+                category: .fund,
+                currency: .cny,
+                quantity: decimal("100000"),
+                averageCost: decimal("1.50"),
+                latestPrice: decimal("1.82"),
+                weeklyTrend: [1.84, 1.83, 1.82, 1.81, 1.80, 1.81, 1.82]
+            ),
+            makePosition(
+                name: "Apple",
+                symbol: "AAPL",
+                category: .usStock,
+                currency: .usd,
+                quantity: decimal("100"),
+                averageCost: decimal("190"),
+                latestPrice: decimal("225"),
+                weeklyTrend: [221, 223, 222, 224, 226, 225, 225]
+            ),
+            makePosition(
+                name: "BTC",
+                symbol: "BTC/USDT",
+                category: .crypto,
+                currency: .usdt,
+                quantity: decimal("0.4"),
+                averageCost: decimal("70000"),
+                latestPrice: decimal("76000"),
+                weeklyTrend: [74500, 75200, 74800, 76100, 77000, 76500, 76000]
+            ),
+            makePosition(
+                name: "现金人民币",
+                symbol: "CNY",
+                category: .cash,
+                currency: .cny,
+                quantity: decimal("80000"),
+                averageCost: 1,
+                latestPrice: 1
+            ),
+        ]
+        let credentialStore = ProviderCredentialStore()
+        try credentialStore.save(apiKey, kind: .llm)
+        let agent = AIAnalysisAgent(credentialStore: credentialStore)
+
+        let reportResult = try await agent.generateReportResult(
+            positions: positions,
+            storeContext: liveAIContext(positions: positions),
+            llmConfiguration: configuration,
+            searchConfiguration: searchConfiguration,
+            trigger: .manual,
+            previousReport: nil
+        )
+        #expect(!reportResult.report.summary.isEmpty)
+        #expect(!reportResult.report.healthScoreExplanation.isEmpty)
+        #expect(!reportResult.report.limitations.isEmpty)
+        #expect(reportResult.artifacts.trace?.events.isEmpty == false)
+
+        let followUp = try await agent.answerFollowUp(
+            question: "请联网搜索最新的美股科技板块信息，并结合这份报告说明当前最需要关注的两项变化。",
+            report: reportResult.report,
+            artifacts: reportResult.artifacts,
+            positions: positions,
+            llmConfiguration: configuration,
+            searchConfiguration: searchConfiguration
+        )
+        #expect(followUp.answer.count >= 80)
+        #expect(followUp.toolCallCount > 0)
+        #expect(followUp.searchMode == "connected_search_completed")
     }
 
     @Test
@@ -2983,8 +3102,8 @@ struct PositionRepositoryTests {
         store.generateAIAnalysis(trigger: .manual)
 
         let message = try await waitForLatestAssistantMessage(in: store)
-        #expect(message.contains("LLM API 和 Search API 均未完成有效配置"))
-        #expect(message.contains("联网增强分析"))
+        #expect(message.contains("DeepSeek API 未完成有效配置"))
+        #expect(!message.contains("Search API"))
     }
 
     @MainActor
@@ -3007,7 +3126,7 @@ struct PositionRepositoryTests {
         store.generateAIAnalysis(trigger: .manual)
 
         let message = try await waitForLatestAssistantMessage(in: store)
-        #expect(message.contains("LLM API 未完成有效配置"))
+        #expect(message.contains("DeepSeek API 未完成有效配置"))
         #expect(!message.contains("Search API"))
     }
 
@@ -3018,7 +3137,15 @@ struct PositionRepositoryTests {
             keys: [.llm: "llm-key"],
             validationStates: [.llm: .valid]
         )
-        let store = try makeStore(credentialStore: credentialStore)
+        let llm = MockLLMCompleter(responses: [], completionResults: [
+            LLMCompletionResult(content: #"{"answer":"BTC 近期走势需要结合当前组合数据和最新公开资料综合判断。","limitations":[]}"#),
+        ])
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: MockTavilySearcher(),
+            credentialStore: credentialStore
+        )
+        let store = try makeStore(credentialStore: credentialStore, aiAgent: agent)
         store.appLanguage = .chinese
         store.searchConfiguration = SearchConfiguration(isEnabled: true, provider: .bocha, quality: .basic)
         store.aiAnalysisReport = makeMinimalAIReport(summary: "组合需要继续观察 BTC。")
@@ -3026,8 +3153,9 @@ struct PositionRepositoryTests {
         store.submitAIAnalysisFollowUp("帮我联网看看 BTC 最近走势")
 
         let message = try await waitForLatestAssistantMessage(in: store)
-        #expect(message.contains("Search API 未完成有效配置"))
-        #expect(!message.contains("LLM API 未完成有效配置"))
+        #expect(message.contains("BTC 近期走势"))
+        #expect(!message.contains("Search API"))
+        #expect(await llm.webSearchEnabledValues() == [true])
     }
 
     @MainActor
@@ -3770,7 +3898,6 @@ struct PositionRepositoryTests {
             sources: []
         )
         let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[]}"#,
             #"{"answer":"今日收益和近一周收益已作为当前上下文参与判断。","limitations":[]}"#,
         ])
         let agent = AIAnalysisAgent(
@@ -3793,13 +3920,12 @@ struct PositionRepositoryTests {
         let prompts = await llm.userPrompts()
         #expect(result.searchMode == "connected_no_search_needed")
         #expect(result.toolCallCount == 0)
-        #expect(await llm.requestCount() == 2)
+        #expect(await llm.requestCount() == 1)
         #expect(prompts.first?.contains("<portfolio_context>") == true)
-        #expect(prompts.last?.contains("<portfolio_context>") == true)
         #expect(prompts.first?.contains(#""today""#) == true)
-        #expect(prompts.last?.contains(#""one_week""#) == true)
-        #expect(prompts.last?.contains(#""profit_amount_cny":"135.86""#) == true)
-        #expect(prompts.last?.contains(#""return_rate_pct":12"#) == true)
+        #expect(prompts.first?.contains(#""one_week""#) == true)
+        #expect(prompts.first?.contains(#""profit_amount_cny":"135.86""#) == true)
+        #expect(prompts.first?.contains(#""return_rate_pct":12"#) == true)
     }
 
     @MainActor
@@ -3857,8 +3983,6 @@ struct PositionRepositoryTests {
             quoteCurrency: .usd,
             latestPrice: 120
         )
-        let position = try #require(store.positions.first)
-        let positionRef = "position_\(position.id.uuidString)"
         let report = AIAnalysisReport(
             generatedAt: .now,
             searchedAt: .now,
@@ -3874,9 +3998,14 @@ struct PositionRepositoryTests {
             limitations: ["内容不构成投资建议"],
             sources: []
         )
-        let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[{"id":"request_1","query":"Apple AAPL 最新公司公告 监管事件","position_refs":["\#(positionRef)"]}]}"#,
-            #"{"answer":"经本轮联网资料核验，可关注 Apple 近期公开公告是否改变报告中的风险边界。","limitations":["外部搜索结果仅作背景"]}"#,
+        let expandedAnswer = #"{"answer":"经本轮联网资料核验，可关注 Apple 近期公开公告是否改变报告中的风险边界。公开资料需要与当前持仓集中度、本地价格日期和既有报告结论一并理解，不能只凭单条新闻调整仓位。后续应继续核对公司公告的具体影响范围、市场是否已经计价，以及相关风险是否会持续影响组合。","limitations":["公开资料仅作背景"]}"#
+        let llm = MockLLMCompleter(responses: [expandedAnswer], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"经本轮联网资料核验，可关注 Apple 近期公开公告是否改变报告中的风险边界。","limitations":["公开资料仅作背景"]}"#,
+                webSearchCallCount: 1,
+                webSearchQueries: ["Apple AAPL latest company announcement"],
+                citations: [LLMWebCitation(title: "Apple update", url: "https://www.reuters.com/markets/apple-update")]
+            ),
         ])
         let tavily = MockTavilySearcher()
         let agent = AIAnalysisAgent(
@@ -3898,16 +4027,16 @@ struct PositionRepositoryTests {
             searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5)
         )
 
-        #expect(result.answer.contains("联网资料"))
+        #expect(result.answer.contains("公开资料"))
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
         #expect(result.loopTurnCount == 1)
-        #expect(await tavily.searchedSymbols() == ["AAPL"])
+        #expect(await tavily.searchedSymbols().isEmpty)
         #expect(await llm.requestCount() == 2)
-        #expect(await llm.systemPrompts().first == AIAnalysisPromptText.followUpToolPlanningSystem)
+        #expect(await llm.systemPrompts().first == AIAnalysisPromptText.followUpSystem)
         #expect(await llm.userPrompts().first?.contains("上一个问题要求继续跟踪 Apple 的新闻") == true)
-        #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
+        #expect(await llm.userPrompts().first?.contains("connected_search_available") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
     }
 
@@ -3924,8 +4053,6 @@ struct PositionRepositoryTests {
             quoteCurrency: .usd,
             latestPrice: 120
         )
-        let position = try #require(store.positions.first)
-        let positionRef = "position_\(position.id.uuidString)"
         let report = AIAnalysisReport(
             generatedAt: .now,
             searchedAt: .now,
@@ -3942,9 +4069,17 @@ struct PositionRepositoryTests {
             sources: []
         )
         let llm = MockLLMCompleter(responses: [
-            #"{"status":"continue","tool_calls":[{"id":"first","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
-            #"{"status":"continue","tool_calls":[{"id":"second","query":"Apple AAPL recent regulatory filing news","position_refs":["\#(positionRef)"]}],"limitations":[]}"#,
-            #"{"answer":"第二轮联网资料补充了近期公开信息，可以结合当前持仓集中度继续复核风险。","limitations":[]}"#,
+            #"{"answer":"公开资料补充了 Apple 近期公告和监管文件的背景。应把这些资料与当前持仓集中度、价格日期和既有报告的风险边界结合理解，不能只依据单条新闻作出仓位调整。后续可继续观察公司披露是否改变盈利预期、市场是否已经计价，以及相关影响是否持续。","limitations":[]}"#,
+        ], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"内建搜索补充了近期公开信息，可以结合当前持仓集中度继续复核风险。","limitations":[]}"#,
+                webSearchCallCount: 2,
+                webSearchQueries: [
+                    "Apple AAPL latest company announcement",
+                    "Apple AAPL recent regulatory filing news",
+                ],
+                citations: [LLMWebCitation(title: "Apple filing update", url: "https://www.reuters.com/markets/apple-update")]
+            ),
         ])
         let searcher = SequencedTavilySearcher(responseBatches: [
             [],
@@ -3975,11 +4110,11 @@ struct PositionRepositoryTests {
         )
 
         #expect(result.searchMode == "connected_search_completed")
-        #expect(result.loopTurnCount == 2)
+        #expect(result.loopTurnCount == 1)
         #expect(result.toolCallCount == 2)
-        #expect(result.toolResultCount == 2)
+        #expect(result.toolResultCount == 1)
         #expect(result.toolPlanJSON.contains("recent regulatory filing"))
-        #expect(await llm.requestCount() == 3)
+        #expect(await llm.requestCount() == 2)
     }
 
     @MainActor
@@ -4022,8 +4157,14 @@ struct PositionRepositoryTests {
             sources: []
         )
         let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[]}"#,
-            #"{"answer":"结合本轮联网资料，若近期净值继续快速上行但波动扩大，可以优先考虑分批减仓；若搜索资料显示板块趋势仍有基本面支撑，可保留一部分仓位继续观察。","limitations":[]}"#,
+            #"{"answer":"结合公开资料，若近期净值继续快速上行但波动扩大，可以优先考虑分批减仓；若资料显示板块趋势仍有基本面支撑，可保留一部分仓位继续观察。判断时还应核对基金最新净值、底层指数表现和当前仓位占比，并预留板块反弹或继续回撤两种情景。","limitations":[]}"#,
+        ], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"结合本轮联网资料，若近期净值继续快速上行但波动扩大，可以优先考虑分批减仓；若搜索资料显示板块趋势仍有基本面支撑，可保留一部分仓位继续观察。","limitations":[]}"#,
+                webSearchCallCount: 1,
+                webSearchQueries: ["华夏国证半导体芯片ETF联接A 008887 近期表现"],
+                citations: [LLMWebCitation(title: "Fund update", url: "https://www.reuters.com/markets/fund-update")]
+            ),
         ])
         let tavily = MockTavilySearcher()
         let agent = AIAnalysisAgent(
@@ -4048,12 +4189,12 @@ struct PositionRepositoryTests {
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
-        #expect(result.answer.contains("联网资料"))
-        #expect(await tavily.searchedSymbols() == ["008887"])
-        #expect(await tavily.searchedQueries().first?.contains("华夏国证半导体芯片ETF联接A") == true)
-        #expect(await tavily.searchedQueries().first?.contains("近期表现") == true)
+        #expect(result.answer.contains("公开资料"))
+        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(result.toolPlanJSON.contains("华夏国证半导体芯片ETF联接A"))
+        #expect(result.toolPlanJSON.contains("近期表现"))
         #expect(await llm.requestCount() == 2)
-        #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
+        #expect(await llm.userPrompts().first?.contains("connected_search_available") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
     }
 
@@ -4086,9 +4227,14 @@ struct PositionRepositoryTests {
             sources: []
         )
         let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[]}"#,
-            #"{"answer":"本轮搜索会按泛市场口径处理，而不是强行绑定到 BTC 或单只基金。若美股新闻显示三大指数和科技板块同步走弱，组合中的海外科技主题基金可能承受更高波动；若只是个别指数或短线消息扰动，则更适合观察后续交易日确认。","limitations":["泛市场新闻不能替代单只基金净值和持仓明细"]}"#,
             #"{"answer":"本轮搜索会按泛市场口径处理，而不是强行绑定到 BTC 或单只基金。搜索结果主要用于补充美股指数、科技板块和海外风险偏好的近期背景：如果三大指数同步走弱，且纳斯达克或大型科技股承压，组合中的海外科技主题基金可能会受到估值回撤和汇率波动的共同影响；如果只是个别指数或短线消息扰动，则更适合继续观察后续交易日是否确认趋势。结合当前报告，重点不是立刻根据一条新闻调整仓位，而是把美股市场方向、科技板块强弱和组合中海外科技暴露放在一起看。后续可以继续关注纳斯达克、S&P 500、Dow Jones 的收盘方向，以及相关基金净值是否出现连续回撤。","limitations":["泛市场新闻不能替代单只基金净值和持仓明细"]}"#,
+        ], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"本轮搜索会按泛市场口径处理，而不是强行绑定到 BTC 或单只基金。若美股新闻显示三大指数和科技板块同步走弱，组合中的海外科技主题基金可能承受更高波动；若只是个别指数或短线消息扰动，则更适合观察后续交易日确认。","limitations":["泛市场新闻不能替代单只基金净值和持仓明细"]}"#,
+                webSearchCallCount: 1,
+                webSearchQueries: ["US stock market latest news Nasdaq S&P 500 Dow Jones"],
+                citations: [LLMWebCitation(title: "US market update", url: "https://www.reuters.com/markets/us-market-update")]
+            ),
         ])
         let tavily = MockTavilySearcher()
         let agent = AIAnalysisAgent(
@@ -4112,10 +4258,10 @@ struct PositionRepositoryTests {
         #expect(result.toolResultCount == 1)
         #expect(result.answer.contains("泛市场"))
         #expect(await tavily.searchedSymbols().isEmpty)
-        #expect(await tavily.searchedQueries().first?.contains("US stock market") == true)
-        #expect(await tavily.searchedQueries().first?.contains("Nasdaq") == true)
-        #expect(await llm.requestCount() == 3)
-        #expect(await llm.userPrompts().last?.contains("connected_search_completed") == true)
+        #expect(result.toolPlanJSON.contains("US stock market"))
+        #expect(result.toolPlanJSON.contains("Nasdaq"))
+        #expect(await llm.requestCount() == 2)
+        #expect(await llm.userPrompts().first?.contains("connected_search_available") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
     }
 
@@ -4132,8 +4278,6 @@ struct PositionRepositoryTests {
             quoteCurrency: .usdt,
             latestPrice: 60_000
         )
-        let position = try #require(store.positions.first)
-        let positionRef = "position_\(position.id.uuidString)"
         let report = AIAnalysisReport(
             generatedAt: .now,
             searchedAt: .now,
@@ -4150,8 +4294,14 @@ struct PositionRepositoryTests {
             sources: []
         )
         let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[{"id":"request_1","query":"比特币定投策略 当前是否适合加仓 分析师观点","position_refs":["\#(positionRef)"]}]}"#,
-            #"{"answer":"结合本轮联网资料，BTC 当前仍应以分批、小额、上限约束内的方式处理，不宜因为短期低迷一次性加大定投。","limitations":[]}"#,
+            #"{"answer":"结合公开资料，BTC 当前仍应以分批、小额、上限约束内的方式处理，不宜因为短期低迷一次性加大定投。还应结合组合中的数字货币占比、个人风险承受能力和价格波动区间设置投入上限，并明确趋势继续下行时的停止条件。","limitations":[]}"#,
+        ], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"结合本轮联网资料，BTC 当前仍应以分批、小额、上限约束内的方式处理，不宜因为短期低迷一次性加大定投。","limitations":[]}"#,
+                webSearchCallCount: 1,
+                webSearchQueries: ["比特币定投策略 当前是否适合加仓 分析师观点"],
+                citations: [LLMWebCitation(title: "Bitcoin market update", url: "https://www.reuters.com/markets/bitcoin-update")]
+            ),
         ])
         let tavily = MockTavilySearcher()
         let agent = AIAnalysisAgent(
@@ -4172,8 +4322,8 @@ struct PositionRepositoryTests {
 
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount == 1)
-        #expect(await tavily.searchedSymbols() == ["BTC/USDT"])
-        #expect(await tavily.searchedQueries() == ["比特币定投策略 当前是否适合加仓 分析师观点"])
+        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(result.toolPlanJSON.contains("比特币定投策略 当前是否适合加仓 分析师观点"))
     }
 
     @MainActor
@@ -5022,6 +5172,66 @@ private actor CapturingDelegatingLLMCompleter: LLMCompleting {
         }
     }
 
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        let startedAt = Date()
+        let requestIndex = records.count
+        records.append(
+            LiveFollowUpDiagnosticOutput.LLMRequest(
+                systemPromptLength: systemPrompt.count,
+                userPromptLength: userPrompt.count,
+                model: configuration.model,
+                maxOutputTokens: configuration.maxOutputTokens,
+                responseLength: nil,
+                responseHead: nil,
+                responseTail: nil,
+                error: nil,
+                elapsedSeconds: nil
+            )
+        )
+        do {
+            let result = try await delegate.completeJSONResult(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                configuration: configuration,
+                apiKey: apiKey,
+                webSearchEnabled: webSearchEnabled,
+                webSearchProgress: webSearchProgress
+            )
+            records[requestIndex] = LiveFollowUpDiagnosticOutput.LLMRequest(
+                systemPromptLength: systemPrompt.count,
+                userPromptLength: userPrompt.count,
+                model: configuration.model,
+                maxOutputTokens: configuration.maxOutputTokens,
+                responseLength: result.content.count,
+                responseHead: String(result.content.prefix(500)),
+                responseTail: String(result.content.suffix(500)),
+                error: nil,
+                elapsedSeconds: Date().timeIntervalSince(startedAt)
+            )
+            return result
+        } catch {
+            records[requestIndex] = LiveFollowUpDiagnosticOutput.LLMRequest(
+                systemPromptLength: systemPrompt.count,
+                userPromptLength: userPrompt.count,
+                model: configuration.model,
+                maxOutputTokens: configuration.maxOutputTokens,
+                responseLength: nil,
+                responseHead: nil,
+                responseTail: nil,
+                error: "\(type(of: error)): \(error.localizedDescription)",
+                elapsedSeconds: Date().timeIntervalSince(startedAt)
+            )
+            throw error
+        }
+    }
+
     func requests() -> [LiveFollowUpDiagnosticOutput.LLMRequest] {
         records
     }
@@ -5092,14 +5302,17 @@ private actor CapturingDelegatingWebSearcher: WebSearching {
 
 private actor MockLLMCompleter: LLMCompleting {
     private var responses: [String]
+    private var completionResults: [LLMCompletionResult]
     private var count = 0
     private var capturedSystemPrompts: [String] = []
     private var capturedUserPrompts: [String] = []
     private var capturedRequestTimeouts: [TimeInterval] = []
     private var capturedOutputTokenLimits: [Int] = []
+    private var capturedWebSearchEnabled: [Bool] = []
 
-    init(responses: [String]) {
+    init(responses: [String], completionResults: [LLMCompletionResult] = []) {
         self.responses = responses
+        self.completionResults = completionResults
     }
 
     func completeJSON(systemPrompt: String, userPrompt: String, configuration: AIProviderConfiguration, apiKey: String) async throws -> String {
@@ -5112,6 +5325,38 @@ private actor MockLLMCompleter: LLMCompleting {
             throw LLMClientError.invalidResponse
         }
         return responses.removeFirst()
+    }
+
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        guard !completionResults.isEmpty else {
+            return LLMCompletionResult(
+                content: try await completeJSON(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    configuration: configuration,
+                    apiKey: apiKey
+                )
+            )
+        }
+        count += 1
+        capturedSystemPrompts.append(systemPrompt)
+        capturedUserPrompts.append(userPrompt)
+        capturedRequestTimeouts.append(configuration.requestTimeout)
+        capturedOutputTokenLimits.append(configuration.maxOutputTokens)
+        capturedWebSearchEnabled.append(webSearchEnabled)
+        let result = completionResults.removeFirst()
+        if result.webSearchCallCount > 0 {
+            await webSearchProgress?(.searching(query: result.webSearchQueries.first))
+            await webSearchProgress?(.completed)
+        }
+        return result
     }
 
     func requestCount() -> Int {
@@ -5132,6 +5377,10 @@ private actor MockLLMCompleter: LLMCompleting {
 
     func outputTokenLimits() -> [Int] {
         capturedOutputTokenLimits
+    }
+
+    func webSearchEnabledValues() -> [Bool] {
+        capturedWebSearchEnabled
     }
 }
 
