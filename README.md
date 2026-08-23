@@ -17,10 +17,6 @@ Portfolix 是一个原生 macOS 投资组合管理 App，面向希望自主记�
   <img src="/Resources/Screenshot-2.png?raw=true" alt="Overview" width="600">
 </div>
 
-<div align="center">
-  <img src="/Resources/Screenshot-3.png?raw=true" alt="Overview" width="600">
-</div>
-
 Portfolix 不连接券商账户，不要求输入任何第三方金融账户密码、Cookie 或交易 Session Token。持仓、历史收益、资产价格快照和设置默认保存在本机，由你自行记录、修改并跟踪。
 
 ## 功能
