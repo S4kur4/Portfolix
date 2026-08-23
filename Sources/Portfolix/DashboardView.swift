@@ -2037,7 +2037,9 @@ private struct DailyProfitCard: View {
     }
 
     private var points: [DailyProfitPoint] {
-        store.dailyProfitHistory.filter { monthInterval.contains($0.date) }
+        store.dailyProfitHistory
+            .filter { monthInterval.contains($0.date) }
+            .sorted { $0.date < $1.date }
     }
 
     private var pointsByDay: [Date: DailyProfitPoint] {
@@ -2260,6 +2262,13 @@ private struct DailyProfitCard: View {
             }
         }
         .chartYScale(domain: chartYDomain)
+        .chartXScale(
+            domain: chartXDomain,
+            range: .plotDimension(
+                startPadding: PortfolixSpacing.md,
+                endPadding: PortfolixSpacing.md
+            )
+        )
         .chartXAxis {
             AxisMarks(values: chartAxisDates) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
@@ -2268,6 +2277,8 @@ private struct DailyProfitCard: View {
                     if let date = value.as(Date.self) {
                         Text(String(calendar.component(.day, from: date)))
                             .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
             }
@@ -2382,6 +2393,17 @@ private struct DailyProfitCard: View {
         return [1, 8, 15, 22, lastDay].compactMap { day in
             calendar.date(byAdding: .day, value: day - 1, to: selectedMonth)
         }
+    }
+
+    private var chartXDomain: ClosedRange<Date> {
+        let firstDay = monthInterval.start
+        let lastDay = calendar.date(byAdding: .day, value: -1, to: monthInterval.end)
+            ?? firstDay
+        let paddedStart = calendar.date(byAdding: .hour, value: -12, to: firstDay)
+            ?? firstDay
+        let paddedEnd = calendar.date(byAdding: .hour, value: 12, to: lastDay)
+            ?? monthInterval.end
+        return paddedStart ... paddedEnd
     }
 
     private var chartYDomain: ClosedRange<Double> {
