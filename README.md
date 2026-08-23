@@ -25,10 +25,10 @@ Portfolix 不连接券商账户，不要求输入任何第三方金融账户密�
 
 ## 功能
 
-- 目前支持记录和跟踪A股、B股、美股、港股、公墓基金、数字货币和现金类资产
-- 维护每日组合快照和资产成本价格
-- 查看组合价值、持仓收益趋势、持仓占比、币种敞口和数据源状态
-- 管理个人风险偏好，并评估组合与个人风险约束的匹配情况
+- 目前支持记录和跟踪A股、B股、美股、港股、公募基金、数字货币和现金类资产
+- 维护每日组合快照和资产成本价格，并可批量更新持仓份额与成本
+- 查看组合价值、每日盈亏、持仓收益趋势、持仓占比和币种敞口
+- 查看结合持仓底层标的生成的投资画像，并评估组合与个人风险约束的匹配情况
 - 使用自行配置的 DeepSeek API 生成智能分析报告，并可按需启用模型内建联网搜索
 - 还可以将持仓明细、每日收益和资产每日价格导出为结构化数据包，供你自行通过其他 AI 工具分析
 
@@ -59,9 +59,9 @@ Portfolix does not connect to brokerage accounts and does not require you to ent
 ## Features
 
 - Multi-Asset Tracking: Currently supports recording and tracking A-shares, B-shares, US stocks, Hong Kong stocks, public funds, digital currencies, and cash assets.
-- Snapshot Management: Maintains daily portfolio snapshots and asset cost bases.
-- Visual Analytics: View portfolio value, holding return trends, holding allocations, currency exposure, and data source statuses.
-- Risk Assessment: Manage your personal risk appetite and evaluate how well your portfolio aligns with your individual risk constraints.
+- Snapshot Management: Maintains daily portfolio snapshots and asset cost bases, with batch updates for holding quantities and costs.
+- Visual Analytics: View portfolio value, daily profit and loss, holding return trends, holding allocations, and currency exposure.
+- Risk Assessment: View an investment profile informed by underlying portfolio exposures and evaluate how well your portfolio aligns with your individual risk constraints.
 - AI-Powered Analysis: Generate intelligent reports with your own DeepSeek API key and optionally use the model's built-in web search.
 - Data Export: Export holding details, daily returns, and daily asset prices as structured data packages for further analysis with other AI tools.
 
