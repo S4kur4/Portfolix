@@ -1,21 +1,33 @@
 import CSQLite
 import Foundation
+import PortfolixCore
 
 @main
 struct PortfolixPriceUpdater {
     static func main() async {
         let updater = BackgroundPriceUpdater()
         let runOnceOnly = CommandLine.arguments.contains("--once")
-        repeat {
-            do {
-                try await updater.runOnce()
-            } catch {}
+        if runOnceOnly {
+            guard (try? updater.automaticUpdatesEnabled()) == true else { return }
+            try? updater.recordAutomaticUpdateRun()
+            try? await updater.runOnce()
+            return
+        }
 
-            if runOnceOnly { return }
+        while !Task.isCancelled {
             guard (try? updater.automaticUpdatesEnabled()) == true else { return }
             let delay = (try? updater.nextUpdateDelaySeconds()) ?? 60 * 60
-            try? await Task.sleep(for: .seconds(delay))
-        } while !Task.isCancelled
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(min(delay, 30)))
+                continue
+            }
+
+            guard (try? updater.claimScheduledUpdate()) == true else {
+                try? await Task.sleep(for: .seconds(1))
+                continue
+            }
+            try? await updater.runOnce()
+        }
     }
 }
 
@@ -70,29 +82,54 @@ private final class BackgroundPriceUpdater {
     }
 
     func automaticUpdatesEnabled() throws -> Bool {
-        guard let value = try appSettingValue(for: "automatic_price_updates_enabled") else {
+        guard let value = try appSettingValue(for: AutomaticPriceUpdateSchedule.enabledSettingKey) else {
             return false
         }
         return value == "true"
     }
 
     func nextUpdateDelaySeconds(now: Date = .now) throws -> Int {
-        let frequency = try appSettingValue(for: "automatic_price_update_frequency") ?? "1 小时"
-        switch frequency {
-        case "5 分钟":
-            return 5 * 60
-        case "15 分钟":
-            return 15 * 60
-        case "30 分钟":
-            return 30 * 60
-        case "4 小时":
-            return 4 * 60 * 60
-        case "8 小时":
-            return 8 * 60 * 60
-        case "每日", "每日固定时间":
-            return nextDailyDelaySeconds(now: now)
-        default:
-            return 60 * 60
+        let frequency = try appSettingValue(for: AutomaticPriceUpdateSchedule.frequencySettingKey) ?? "1 小时"
+        let dailyTimeMinutes = try appSettingValue(for: AutomaticPriceUpdateSchedule.dailyTimeSettingKey)
+            .flatMap(Int.init) ?? 9 * 60
+        var scheduleAnchor = try settingDate(for: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey)
+        if scheduleAnchor == nil {
+            scheduleAnchor = now
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey,
+                value: Self.timestamp(from: now)
+            )
+        }
+        let lastRun = try settingDate(for: AutomaticPriceUpdateSchedule.lastRunSettingKey)
+        return AutomaticPriceUpdateSchedule.nextDelaySeconds(
+            frequency: frequency,
+            dailyTimeMinutes: dailyTimeMinutes,
+            scheduleAnchor: scheduleAnchor,
+            lastRun: lastRun,
+            now: now
+        )
+    }
+
+    func recordAutomaticUpdateRun(at date: Date = .now) throws {
+        try setAppSetting(
+            key: AutomaticPriceUpdateSchedule.lastRunSettingKey,
+            value: Self.timestamp(from: date)
+        )
+    }
+
+    func claimScheduledUpdate(at date: Date = .now) throws -> Bool {
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            guard try automaticUpdatesEnabled(), try nextUpdateDelaySeconds(now: date) == 0 else {
+                try execute("ROLLBACK")
+                return false
+            }
+            try recordAutomaticUpdateRun(at: date)
+            try execute("COMMIT")
+            return true
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
         }
     }
 
@@ -104,25 +141,34 @@ private final class BackgroundPriceUpdater {
         return text(at: 0, in: statement)
     }
 
-    private func nextDailyDelaySeconds(now: Date) -> Int {
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: now)
-        components.hour = 9
-        components.minute = 0
-        components.second = 0
+    private func settingDate(for key: String) throws -> Date? {
+        guard let value = try appSettingValue(for: key) else { return nil }
+        return ISO8601DateFormatter().date(from: value)
+    }
 
-        var nextDate = calendar.date(from: components) ?? now
-        if nextDate <= now {
-            nextDate = calendar.date(byAdding: .day, value: 1, to: nextDate) ?? now.addingTimeInterval(24 * 60 * 60)
-        }
-        return max(60, Int(nextDate.timeIntervalSince(now)))
+    private func setAppSetting(key: String, value: String) throws {
+        let statement = try prepare(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(key, to: 1, in: statement)
+        try bind(value, to: 2, in: statement)
+        try bind(Self.timestamp(), to: 3, in: statement)
+        try stepDone(statement)
     }
 
     private func fetchPositions() throws -> [StoredPosition] {
         let statement = try prepare(
             """
-            SELECT p.id, a.name, a.symbol, a.category, a.quote_currency, p.quantity,
-                   p.average_cost, q.price, q.source, q.quote_time, q.freshness, q.weekly_trend_json
+            SELECT p.id, a.id, a.name, a.symbol, a.category, a.quote_currency, p.quantity,
+                   p.total_cost, p.average_cost, q.price, q.source, q.quote_time,
+                   q.freshness, q.weekly_trend_json
             FROM positions p
             JOIN assets a ON a.id = p.asset_id
             JOIN latest_quotes q ON q.asset_id = a.id
@@ -136,17 +182,19 @@ private final class BackgroundPriceUpdater {
             positions.append(
                 StoredPosition(
                     id: text(at: 0, in: statement),
-                    name: text(at: 1, in: statement),
-                    symbol: text(at: 2, in: statement),
-                    category: text(at: 3, in: statement),
-                    currency: text(at: 4, in: statement),
-                    quantity: Double(text(at: 5, in: statement)) ?? 0,
-                    averageCost: Double(text(at: 6, in: statement)) ?? 0,
-                    latestPrice: Double(text(at: 7, in: statement)) ?? 0,
-                    source: text(at: 8, in: statement),
-                    quoteTime: text(at: 9, in: statement),
-                    freshness: text(at: 10, in: statement),
-                    weeklyTrendJSON: text(at: 11, in: statement)
+                    assetID: text(at: 1, in: statement),
+                    name: text(at: 2, in: statement),
+                    symbol: text(at: 3, in: statement),
+                    category: text(at: 4, in: statement),
+                    currency: text(at: 5, in: statement),
+                    quantity: Double(text(at: 6, in: statement)) ?? 0,
+                    totalCost: Double(text(at: 7, in: statement)) ?? 0,
+                    averageCost: Double(text(at: 8, in: statement)) ?? 0,
+                    latestPrice: Double(text(at: 9, in: statement)) ?? 0,
+                    source: text(at: 10, in: statement),
+                    quoteTime: text(at: 11, in: statement),
+                    freshness: text(at: 12, in: statement),
+                    weeklyTrendJSON: text(at: 13, in: statement)
                 )
             )
         }
@@ -175,7 +223,7 @@ private final class BackgroundPriceUpdater {
         try bind(Self.timestamp(), to: 4, in: statement)
         try bind(position.freshness, to: 5, in: statement)
         try bind(trendJSON, to: 6, in: statement)
-        try bind(position.id, to: 7, in: statement)
+        try bind(position.assetID, to: 7, in: statement)
         try stepDone(statement)
     }
 
@@ -557,7 +605,11 @@ private final class BackgroundPriceUpdater {
     }
 
     private static func timestamp() -> String {
-        ISO8601DateFormatter().string(from: .now)
+        timestamp(from: .now)
+    }
+
+    private static func timestamp(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 
     private static func dayString() -> String {
@@ -577,11 +629,13 @@ private final class BackgroundPriceUpdater {
 
 private struct StoredPosition {
     let id: String
+    let assetID: String
     let name: String
     let symbol: String
     let category: String
     let currency: String
     let quantity: Double
+    let totalCost: Double
     let averageCost: Double
     var latestPrice: Double
     var source: String
@@ -594,7 +648,7 @@ private struct StoredPosition {
     }
 
     var totalCostCNY: Double {
-        quantity * averageCost / rateFromCNY
+        totalCost / rateFromCNY
     }
 
     private var rateFromCNY: Double {

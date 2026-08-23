@@ -1,8 +1,121 @@
 import Foundation
+import PortfolixCore
 import Testing
 @testable import Portfolix
 
 struct PositionRepositoryTests {
+    @Test
+    func automaticPriceUpdateSchedulePreservesIntervalAcrossAppReopen() {
+        let anchor = Date(timeIntervalSince1970: 10_000)
+
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: anchor,
+                lastRun: nil,
+                now: anchor.addingTimeInterval(15 * 60)
+            ) == 45 * 60
+        )
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: anchor,
+                lastRun: nil,
+                now: anchor.addingTimeInterval(20 * 60)
+            ) == 40 * 60
+        )
+
+        let lastRun = anchor.addingTimeInterval(30 * 60)
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: anchor,
+                lastRun: lastRun,
+                now: anchor.addingTimeInterval(45 * 60)
+            ) == 45 * 60
+        )
+    }
+
+    @Test
+    func automaticDailyPriceUpdateScheduleRunsOnlyAtConfiguredTime() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let startOfDay = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 8, day: 23))
+        )
+        let eightThirty = startOfDay.addingTimeInterval(8.5 * 60 * 60)
+        let nine = startOfDay.addingTimeInterval(9 * 60 * 60)
+
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "每日",
+                dailyTimeMinutes: 9 * 60,
+                scheduleAnchor: eightThirty,
+                lastRun: nil,
+                now: eightThirty,
+                calendar: calendar
+            ) == 30 * 60
+        )
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "每日",
+                dailyTimeMinutes: 9 * 60,
+                scheduleAnchor: eightThirty,
+                lastRun: nil,
+                now: nine,
+                calendar: calendar
+            ) == 0
+        )
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "每日",
+                dailyTimeMinutes: 9 * 60,
+                scheduleAnchor: eightThirty,
+                lastRun: nine,
+                now: nine.addingTimeInterval(60),
+                calendar: calendar
+            ) == 23 * 60 * 60 + 59 * 60
+        )
+    }
+
+    @Test @MainActor
+    func portfolioStoreSynchronizesMarketDataWrittenByBackgroundHelper() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let positionID = UUID()
+        let original = makePosition(
+            id: positionID,
+            quantity: 10,
+            averageCost: 100,
+            latestPrice: 110,
+            source: "东方财富",
+            quoteTime: "2026-08-23T08:00:00Z",
+            fetchedAt: "2026-08-23T08:00:00Z",
+            freshness: .updated
+        )
+        try repository.insert(original)
+        let store = PortfolioStore(positionRepository: repository)
+
+        let helperUpdate = makePosition(
+            id: positionID,
+            quantity: 10,
+            averageCost: 100,
+            latestPrice: 112,
+            source: "东方财富",
+            quoteTime: "2026-08-23T09:00:00Z",
+            fetchedAt: "2026-08-23T09:00:00Z",
+            freshness: .updated,
+            weeklyTrend: [106, 107, 108, 109, 110, 111, 112]
+        )
+        try repository.update(helperUpdate)
+
+        store.synchronizePersistedMarketDataIfNeeded()
+
+        #expect(store.positions.first?.latestPrice == 112)
+        #expect(store.positions.first?.quoteTime == "2026-08-23T09:00:00Z")
+        #expect(store.positions.first?.weeklyTrend.last == 112)
+    }
+
     @Test
     func dataPackageRoundTripsFinancialHistoryWithoutSensitiveData() throws {
         let (_, sourceDatabaseURL) = makeDatabaseURLs()

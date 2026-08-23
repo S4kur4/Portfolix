@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import OSLog
+import PortfolixCore
 import ServiceManagement
 import SwiftUI
 
@@ -138,18 +139,6 @@ enum AutomaticPriceUpdateFrequency: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var intervalSeconds: Int? {
-        switch self {
-        case .fiveMinutes: 5 * 60
-        case .fifteenMinutes: 15 * 60
-        case .thirtyMinutes: 30 * 60
-        case .hourly: 60 * 60
-        case .fourHours: 4 * 60 * 60
-        case .eightHours: 8 * 60 * 60
-        case .daily: nil
-        }
-    }
-
     func title(language: AppLanguage) -> String {
         if language == .english {
             switch self {
@@ -166,22 +155,21 @@ enum AutomaticPriceUpdateFrequency: String, CaseIterable, Identifiable {
         }
     }
 
-    func nextDelaySeconds(now: Date = .now) -> Int {
-        if let intervalSeconds {
-            return intervalSeconds
-        }
-
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: now)
-        components.hour = 9
-        components.minute = 0
-        components.second = 0
-
-        var nextDate = calendar.date(from: components) ?? now
-        if nextDate <= now {
-            nextDate = calendar.date(byAdding: .day, value: 1, to: nextDate) ?? now.addingTimeInterval(24 * 60 * 60)
-        }
-        return max(60, Int(nextDate.timeIntervalSince(now)))
+    func nextDelaySeconds(
+        scheduleAnchor: Date?,
+        lastRun: Date?,
+        dailyTimeMinutes: Int = 9 * 60,
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) -> Int {
+        AutomaticPriceUpdateSchedule.nextDelaySeconds(
+            frequency: rawValue,
+            dailyTimeMinutes: dailyTimeMinutes,
+            scheduleAnchor: scheduleAnchor,
+            lastRun: lastRun,
+            now: now,
+            calendar: calendar
+        )
     }
 }
 
@@ -669,16 +657,15 @@ final class PortfolioStore: ObservableObject {
     @Published var backgroundUpdatesEnabled: Bool {
         didSet {
             UserDefaults.standard.set(backgroundUpdatesEnabled, forKey: Self.backgroundUpdatesEnabledDefaultsKey)
-            persistAutomaticPriceUpdateSetting()
-            configureBackgroundUpdateTask()
+            persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
             configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
         }
     }
     @Published var automaticPriceUpdateFrequency: AutomaticPriceUpdateFrequency = .hourly {
         didSet {
             UserDefaults.standard.set(automaticPriceUpdateFrequency.rawValue, forKey: Self.updateFrequencyDefaultsKey)
-            persistAutomaticPriceUpdateSetting()
-            configureBackgroundUpdateTask()
+            persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
+            configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
         }
     }
     @Published var automaticPriceUpdateDailyTimeMinutes = 9 * 60 {
@@ -687,8 +674,8 @@ final class PortfolioStore: ObservableObject {
                 automaticPriceUpdateDailyTimeMinutes,
                 forKey: Self.dailyUpdateTimeDefaultsKey
             )
-            persistAutomaticPriceUpdateSetting()
-            configureBackgroundUpdateTask()
+            persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
+            configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
         }
     }
     @Published var aiConfiguration: AIProviderConfiguration = AIProviderConfigurationStore.loadLLM() {
@@ -736,7 +723,6 @@ final class PortfolioStore: ObservableObject {
     private let positionRepository: PositionRepository?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
-    private var backgroundUpdateTask: Task<Void, Never>?
     private static let backgroundUpdatesEnabledDefaultsKey = "portfolix.backgroundUpdatesEnabled"
     private static let updateFrequencyDefaultsKey = "portfolix.automaticPriceUpdateFrequency"
     private static let dailyUpdateTimeDefaultsKey = "portfolix.automaticPriceUpdateDailyTimeMinutes"
@@ -894,10 +880,7 @@ final class PortfolioStore: ObservableObject {
         refreshProviderCredentialState()
         persistAutomaticPriceUpdateSetting()
         if backgroundUpdatesEnabled {
-            configureBackgroundUpdateTask()
-            configureLoginItem(launchImmediately: false)
-        } else if !Self.shouldSkipLaunchRefresh {
-            Task { await refreshLatestPrices() }
+            configureLoginItem(launchImmediately: true)
         }
     }
 
@@ -906,6 +889,9 @@ final class PortfolioStore: ObservableObject {
         let currentDay = Calendar.current.startOfDay(for: now)
         if lastAIAnalysisRetentionPruneDay != currentDay {
             pruneAIAnalysisChatHistory(now: now)
+        }
+        if backgroundUpdatesEnabled {
+            synchronizePersistedMarketDataIfNeeded()
         }
     }
 
@@ -2348,24 +2334,39 @@ final class PortfolioStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: Self.latestAIInvestmentProfileDefaultsKey)
     }
 
-    private func configureBackgroundUpdateTask() {
-        backgroundUpdateTask?.cancel()
-        backgroundUpdateTask = nil
-
-        guard backgroundUpdatesEnabled else { return }
-        backgroundUpdateTask = Task { [weak self] in
-            await self?.refreshLatestPrices()
-            while !Task.isCancelled {
-                guard let self else { return }
-                let delay = self.automaticPriceUpdateFrequency.nextDelaySeconds()
-                do {
-                    try await Task.sleep(for: .seconds(delay))
-                } catch {
-                    break
-                }
-                await self.refreshLatestPrices()
+    func synchronizePersistedMarketDataIfNeeded() {
+        guard let positionRepository, !isRefreshing else { return }
+        do {
+            let persistedPositions = try positionRepository.fetchPositions()
+            guard Self.marketDataFingerprint(persistedPositions) != Self.marketDataFingerprint(positions) else {
+                return
             }
+            positions = persistedPositions
+            snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+            dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+        } catch {
+            return
         }
+    }
+
+    private static func marketDataFingerprint(_ positions: [Position]) -> String {
+        positions
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map { position in
+                [
+                    position.id.uuidString,
+                    NSDecimalNumber(decimal: position.quantity).stringValue,
+                    NSDecimalNumber(decimal: position.totalCost).stringValue,
+                    NSDecimalNumber(decimal: position.averageCost).stringValue,
+                    NSDecimalNumber(decimal: position.latestPrice).stringValue,
+                    position.source,
+                    position.quoteTime,
+                    position.fetchedAt,
+                    position.freshness.rawValue,
+                    position.weeklyTrend.map { String($0) }.joined(separator: ","),
+                ].joined(separator: "|")
+            }
+            .joined(separator: "#")
     }
 
     private func configureLoginItem(launchImmediately: Bool) {
@@ -2780,19 +2781,34 @@ final class PortfolioStore: ObservableObject {
         return String(format: "%.4f", value)
     }
 
-    private func persistAutomaticPriceUpdateSetting() {
+    private func persistAutomaticPriceUpdateSetting(resetSchedule: Bool = false) {
         persistAppSetting(
-            key: "automatic_price_updates_enabled",
+            key: AutomaticPriceUpdateSchedule.enabledSettingKey,
             value: backgroundUpdatesEnabled ? "true" : "false"
         )
         persistAppSetting(
-            key: "automatic_price_update_frequency",
+            key: AutomaticPriceUpdateSchedule.frequencySettingKey,
             value: automaticPriceUpdateFrequency.rawValue
         )
         persistAppSetting(
-            key: "automatic_price_update_daily_time_minutes",
-            value: String(9 * 60)
+            key: AutomaticPriceUpdateSchedule.dailyTimeSettingKey,
+            value: String(automaticPriceUpdateDailyTimeMinutes)
         )
+
+        guard backgroundUpdatesEnabled, let positionRepository else { return }
+        do {
+            let existingAnchor = try positionRepository.appSetting(
+                for: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey
+            )
+            if resetSchedule || existingAnchor == nil {
+                try positionRepository.setAppSetting(
+                    key: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey,
+                    value: Self.isoDateFormatter.string(from: .now)
+                )
+            }
+        } catch {
+            persistenceErrorMessage = error.localizedDescription
+        }
     }
 
     private func persistAppSetting(key: String, value: String) {

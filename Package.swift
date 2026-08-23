@@ -18,20 +18,24 @@ let package = Package(
         .systemLibrary(
             name: "CSQLite"
         ),
+        .target(
+            name: "PortfolixCore"
+        ),
         .executableTarget(
             name: "Portfolix",
             dependencies: [
                 "CSQLite",
+                "PortfolixCore",
                 .product(name: "Sparkle", package: "Sparkle")
             ]
         ),
         .executableTarget(
             name: "PortfolixPriceUpdater",
-            dependencies: ["CSQLite"]
+            dependencies: ["CSQLite", "PortfolixCore"]
         ),
         .testTarget(
             name: "PortfolixTests",
-            dependencies: ["Portfolix"]
+            dependencies: ["Portfolix", "PortfolixCore"]
         )
     ]
 )
