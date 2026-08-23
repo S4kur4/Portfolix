@@ -3,46 +3,44 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.5</title>
-            <pubDate>Sun, 19 Jul 2026 12:38:33 +0800</pubDate>
+            <title>0.1.6</title>
+            <pubDate>Sun, 23 Aug 2026 20:25:14 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>13</sparkle:version>
-            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.5
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.6
 
-Portfolix v0.1.5 进一步提升了资产总览的信息密度与投资画像的分析能力。
+Portfolix v0.1.6 进一步简化了智能分析配置，并提升了日常持仓维护和行情更新的可靠性。
 
 ## 新功能
 
-- **更智能的投资画像**：分析资产背后的实际投资地区、资产类别与重复基准，能够更准确地识别 QDII 等跨市场资产的真实敞口；联网增强模式可按需补充公开资料。
-- **每日盈亏**：新增日历和柱状图两种视图，支持按月切换，直观查看每日收益、本月累计以及盈利和亏损天数。
-- **年度组合价值曲线**：组合价值卡片新增低干扰的年度资产价值背景曲线，按照真实日期展示资产变化，并将最新数据点定位到实际日期。
+- **DeepSeek 智能分析**：智能分析统一使用 DeepSeek API，并可在联网增强模式下调用模型内建搜索；运行状态会实时展示模型搜索与推理进度。
+- **批量更新持仓**：可在持仓明细中集中修改多项资产的份额、成本价或持仓总成本，减少重复操作。
 
 ## 体验优化
 
-- 统一投资画像、收益趋势和年度资产曲线的视觉样式。
-- 优化组合价值卡片的信息布局、曲线平滑度和更新操作位置。
-- 完善亮色与暗色模式下的数据可读性和图表层级。
+- 自动价格更新严格遵循用户设置的更新频率，重新打开或最小化 App 不再触发额外刷新。
+- 修复每日盈亏柱状图在月末和单日数据场景下的坐标与内容遮挡问题。
+- 简化投资画像说明，并统一侧边栏与主要卡片在亮色和暗色模式下的背景色。
 
 ---
 
-Portfolix v0.1.5 improves portfolio visibility and makes the investment profile more context-aware.
+Portfolix v0.1.6 simplifies intelligent analysis setup and improves the reliability of everyday holding maintenance and market updates.
 
 ## What's New
 
-- **Smarter investment profile**: Looks through holdings to identify their underlying geographic, asset-class, and benchmark exposure, including cross-market products such as QDII funds. Connected mode can retrieve additional public information when needed.
-- **Daily Profit & Loss**: Adds calendar and bar-chart views with monthly navigation, daily results, monthly totals, and profitable/loss-making day counts.
-- **Year-to-date portfolio value curve**: Adds a subtle annual value curve to the portfolio card, mapped to real snapshot dates with the latest point positioned at its actual date.
+- **DeepSeek-powered analysis**: Intelligent analysis now uses the DeepSeek API, with model-native web search available in Connected mode. Live status updates show search and reasoning progress.
+- **Batch holding updates**: Update quantities, cost prices, or total holding costs for multiple assets in one place.
 
 ## Improvements
 
-- Unified chart styling across the investment profile, performance trend, and annual value curve.
-- Refined the portfolio card layout, curve rendering, and refresh control placement.
-- Improved chart hierarchy and readability in both light and dark appearances.
+- Automatic price updates now strictly follow the selected schedule without extra refreshes when reopening or minimizing the app.
+- Fixed Daily Profit & Loss chart coordinates and clipping for month-end and single-day data.
+- Simplified the investment profile description and unified sidebar and primary card backgrounds across light and dark appearances.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.5/Portfolix-0.1.5.dmg" length="5563151" type="application/octet-stream" sparkle:edSignature="VDKoeIErn9lVtRmjswpKZHh6cnRksChcT1XkqdiJBK++z86UEqvGZBFCo51HUxqt0ZqyLtTtb5HnXQNy7KEDAA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.6/Portfolix-0.1.6.dmg" length="5480003" type="application/octet-stream" sparkle:edSignature="A2Ie7XIYfxS77lehsKrPCwt1+C4GZsezq4cbGO5D3Dt+4OszBu10akiZSLP0VGCL0PONAUf35w2748YqkFW/Cw=="/>
         </item>
     </channel>
 </rss>
