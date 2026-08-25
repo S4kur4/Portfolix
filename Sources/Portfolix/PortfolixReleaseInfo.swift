@@ -3,7 +3,7 @@ import Foundation
 
 enum PortfolixReleaseInfo {
     static let fallbackVersion = "0.1.6"
-    static let fallbackBuild = "15"
+    static let fallbackBuild = "16"
     static let fallbackCopyright = "Copyright © 2026 S4kur4. All rights reserved."
 
     static var version: String {

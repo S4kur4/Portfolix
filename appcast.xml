@@ -4,9 +4,9 @@
         <title>Portfolix</title>
         <item>
             <title>0.1.6</title>
-            <pubDate>Tue, 25 Aug 2026 21:05:23 +0800</pubDate>
+            <pubDate>Tue, 25 Aug 2026 21:23:23 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>15</sparkle:version>
+            <sparkle:version>16</sparkle:version>
             <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
@@ -24,6 +24,7 @@ Portfolix v0.1.6 进一步简化了智能分析配置，并提升了日常持仓
 - 自动价格更新严格遵循用户设置的更新频率，重新打开或最小化 App 不再触发额外刷新。
 - 同一天内重复获取行情时会更新当日记录，不再重复累计；后台更新失败时会自动重试并记录准确结果。
 - 智能分析改为读取已保存的最新行情，不再绕过用户设置额外触发价格更新。
+- 修复 App 更新后后台价格组件仍绑定旧构建、反复启动失败并弹出系统错误框的问题。
 - 修复每日盈亏柱状图在月末和单日数据场景下的坐标与内容遮挡问题。
 - 简化投资画像说明，并统一侧边栏与主要卡片在亮色和暗色模式下的背景色。
 
@@ -41,10 +42,11 @@ Portfolix v0.1.6 simplifies intelligent analysis setup and improves the reliabil
 - Automatic price updates now strictly follow the selected schedule without extra refreshes when reopening or minimizing the app.
 - Repeated quote fetches on the same day now replace that day's value instead of accumulating duplicates; background failures are retried and reported accurately.
 - Intelligent analysis now uses the latest saved market data without bypassing the selected quote schedule.
+- Fixed stale background price updater registrations after an app update, which could repeatedly fail to launch and display system error dialogs.
 - Fixed Daily Profit & Loss chart coordinates and clipping for month-end and single-day data.
 - Simplified the investment profile description and unified sidebar and primary card backgrounds across light and dark appearances.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.6/Portfolix-0.1.6.dmg" length="5484285" type="application/octet-stream" sparkle:edSignature="zxqjaB3AyTUPqGveWjh5EfTWJMvhhgIp4lRL+vcoYWr/9VpS49Qke/f7Ml261QBM9atwvs+gFzag3QsvGF72AA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.6/Portfolix-0.1.6.dmg" length="5493141" type="application/octet-stream" sparkle:edSignature="IHOyHR0BeSMmMLg/Mf0xszIKL3D+nFkaGHb4pRqckVdtBocpqe8E8VW/jXqnZC27WJ1x1zulieB0cB/vNVlWCA=="/>
         </item>
     </channel>
 </rss>
