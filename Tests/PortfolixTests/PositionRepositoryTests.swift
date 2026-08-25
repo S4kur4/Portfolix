@@ -37,6 +37,59 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func automaticPriceUpdateSchedulePreventsDuplicateClaimsDuringActiveAttempt() {
+        let anchor = Date(timeIntervalSince1970: 10_000)
+        let dueTime = anchor.addingTimeInterval(60 * 60)
+        let attempt = dueTime.addingTimeInterval(5)
+
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: anchor,
+                lastRun: nil,
+                lastAttempt: attempt,
+                now: attempt.addingTimeInterval(30)
+            ) == AutomaticPriceUpdateSchedule.attemptLeaseSeconds - 30
+        )
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: anchor,
+                lastRun: nil,
+                lastAttempt: attempt,
+                now: attempt.addingTimeInterval(TimeInterval(AutomaticPriceUpdateSchedule.attemptLeaseSeconds))
+            ) == 0
+        )
+    }
+
+    @Test
+    func dailyPriceTrendReplacesSameDayPriceAndAppendsNextDayPrice() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let dayOne = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 23, hour: 9)))
+        let sameDay = dayOne.addingTimeInterval(6 * 60 * 60)
+        let nextDay = dayOne.addingTimeInterval(24 * 60 * 60)
+
+        let replaced = DailyPriceTrend.merging(
+            existing: [98, 100],
+            latestPrice: 102,
+            previousFetchedAt: dayOne,
+            fetchedAt: sameDay,
+            calendar: calendar
+        )
+        #expect(replaced == [98, 102])
+
+        let appended = DailyPriceTrend.merging(
+            existing: replaced,
+            latestPrice: 105,
+            previousFetchedAt: sameDay,
+            fetchedAt: nextDay,
+            calendar: calendar
+        )
+        #expect(appended == [98, 102, 105])
+    }
+
+    @Test
     func automaticDailyPriceUpdateScheduleRunsOnlyAtConfiguredTime() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))

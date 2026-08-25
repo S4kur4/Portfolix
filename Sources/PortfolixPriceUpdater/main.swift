@@ -9,8 +9,9 @@ struct PortfolixPriceUpdater {
         let runOnceOnly = CommandLine.arguments.contains("--once")
         if runOnceOnly {
             guard (try? updater.automaticUpdatesEnabled()) == true else { return }
-            try? updater.recordAutomaticUpdateRun()
-            try? await updater.runOnce()
+            try? updater.recordAutomaticUpdateAttempt()
+            let summary = await updater.performUpdate()
+            try? updater.recordAutomaticUpdateCompletion(summary)
             return
         }
 
@@ -26,7 +27,8 @@ struct PortfolixPriceUpdater {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
-            try? await updater.runOnce()
+            let summary = await updater.performUpdate()
+            try? updater.recordAutomaticUpdateCompletion(summary)
         }
     }
 }
@@ -48,37 +50,89 @@ private final class BackgroundPriceUpdater {
         sqlite3_close(database)
     }
 
-    func runOnce() async throws {
-        guard try automaticUpdatesEnabled() else { return }
+    func performUpdate() async -> UpdateRunSummary {
+        do {
+            return try await runOnce()
+        } catch {
+            return .fatal(error)
+        }
+    }
+
+    private func runOnce() async throws -> UpdateRunSummary {
+        guard try automaticUpdatesEnabled() else { return .disabled }
         let positions = try fetchPositions()
         var updated = positions
+        var eligibleCount = 0
+        var updatedCount = 0
+        var failureMessages: [String] = []
 
         for index in updated.indices {
+            guard Self.supportsAutomaticQuote(updated[index].category) else { continue }
+            eligibleCount += 1
             do {
-                switch updated[index].category {
-                case "A 股", "B 股", "港股", "美股", "公募基金":
-                    let quote = try await resolveNativeQuote(for: updated[index])
-                    updated[index].latestPrice = quote.price
-                    updated[index].source = quote.source
-                    updated[index].freshness = "已更新"
-                    updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
-                case "数字货币":
-                    let okxQuote = try await resolveOKXQuote(symbol: updated[index].symbol)
-                    let quote = (price: okxQuote.price, quoteTime: okxQuote.quoteTime, source: "OKX")
-                    updated[index].latestPrice = quote.price
-                    updated[index].source = quote.source
-                    updated[index].freshness = "已更新"
-                    updated[index].quoteTime = quote.quoteTime ?? Self.quoteTime()
-                default:
-                    continue
-                }
-                try updateLatestQuote(updated[index])
-            } catch {}
+                updated[index] = try await refreshPositionWithRetry(updated[index])
+                updatedCount += 1
+            } catch {
+                failureMessages.append(Self.failureSummary(for: error))
+            }
         }
 
         if !positions.isEmpty {
             try replaceDailySnapshots(positions: updated)
         }
+        return UpdateRunSummary(
+            eligibleCount: eligibleCount,
+            updatedCount: updatedCount,
+            failedCount: max(0, eligibleCount - updatedCount),
+            errorSummary: failureMessages.prefix(3).joined(separator: " | ")
+        )
+    }
+
+    private func refreshPositionWithRetry(_ position: StoredPosition) async throws -> StoredPosition {
+        var lastError: Error = UpdaterError.invalidResponse
+        for attempt in 0..<2 {
+            do {
+                var refreshed = try await resolveLatestQuote(for: position)
+                refreshed = try updateLatestQuote(refreshed)
+                return refreshed
+            } catch {
+                lastError = error
+                if attempt == 0 {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
+        throw lastError
+    }
+
+    private func resolveLatestQuote(for position: StoredPosition) async throws -> StoredPosition {
+        var refreshed = position
+        switch position.category {
+        case "A 股", "B 股", "港股", "美股", "公募基金":
+            let quote = try await resolveNativeQuote(for: position)
+            refreshed.latestPrice = quote.price
+            refreshed.source = quote.source
+            refreshed.freshness = "已更新"
+            refreshed.quoteTime = quote.quoteTime ?? Self.quoteTime()
+        case "数字货币":
+            let quote = try await resolveOKXQuote(symbol: position.symbol)
+            refreshed.latestPrice = quote.price
+            refreshed.source = "OKX"
+            refreshed.freshness = "已更新"
+            refreshed.quoteTime = quote.quoteTime ?? Self.quoteTime()
+        default:
+            throw UpdaterError.requestFailed("该资产暂不支持自动行情")
+        }
+        return refreshed
+    }
+
+    private static func supportsAutomaticQuote(_ category: String) -> Bool {
+        ["A 股", "B 股", "港股", "美股", "公募基金", "数字货币"].contains(category)
+    }
+
+    private static func failureSummary(for error: Error) -> String {
+        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        return String(message.prefix(240))
     }
 
     func automaticUpdatesEnabled() throws -> Bool {
@@ -101,20 +155,58 @@ private final class BackgroundPriceUpdater {
             )
         }
         let lastRun = try settingDate(for: AutomaticPriceUpdateSchedule.lastRunSettingKey)
+        let lastAttempt = try settingDate(for: AutomaticPriceUpdateSchedule.lastAttemptSettingKey)
         return AutomaticPriceUpdateSchedule.nextDelaySeconds(
             frequency: frequency,
             dailyTimeMinutes: dailyTimeMinutes,
             scheduleAnchor: scheduleAnchor,
             lastRun: lastRun,
+            lastAttempt: lastAttempt,
             now: now
         )
     }
 
-    func recordAutomaticUpdateRun(at date: Date = .now) throws {
+    func recordAutomaticUpdateAttempt(at date: Date = .now) throws {
         try setAppSetting(
-            key: AutomaticPriceUpdateSchedule.lastRunSettingKey,
+            key: AutomaticPriceUpdateSchedule.lastAttemptSettingKey,
             value: Self.timestamp(from: date)
         )
+    }
+
+    func recordAutomaticUpdateCompletion(_ summary: UpdateRunSummary, at date: Date = .now) throws {
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.lastRunSettingKey,
+                value: Self.timestamp(from: date)
+            )
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.lastResultSettingKey,
+                value: summary.result
+            )
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.lastUpdatedCountSettingKey,
+                value: String(summary.updatedCount)
+            )
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.lastFailedCountSettingKey,
+                value: String(summary.failedCount)
+            )
+            try setAppSetting(
+                key: AutomaticPriceUpdateSchedule.lastErrorSettingKey,
+                value: summary.errorSummary
+            )
+            if summary.failedCount == 0, summary.updatedCount > 0 {
+                try setAppSetting(
+                    key: AutomaticPriceUpdateSchedule.lastSuccessSettingKey,
+                    value: Self.timestamp(from: date)
+                )
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     func claimScheduledUpdate(at date: Date = .now) throws -> Bool {
@@ -124,7 +216,7 @@ private final class BackgroundPriceUpdater {
                 try execute("ROLLBACK")
                 return false
             }
-            try recordAutomaticUpdateRun(at: date)
+            try recordAutomaticUpdateAttempt(at: date)
             try execute("COMMIT")
             return true
         } catch {
@@ -167,7 +259,7 @@ private final class BackgroundPriceUpdater {
         let statement = try prepare(
             """
             SELECT p.id, a.id, a.name, a.symbol, a.category, a.quote_currency, p.quantity,
-                   p.total_cost, p.average_cost, q.price, q.source, q.quote_time,
+                   p.total_cost, p.average_cost, q.price, q.source, q.quote_time, q.fetched_at,
                    q.freshness, q.weekly_trend_json
             FROM positions p
             JOIN assets a ON a.id = p.asset_id
@@ -193,21 +285,25 @@ private final class BackgroundPriceUpdater {
                     latestPrice: Double(text(at: 9, in: statement)) ?? 0,
                     source: text(at: 10, in: statement),
                     quoteTime: text(at: 11, in: statement),
-                    freshness: text(at: 12, in: statement),
-                    weeklyTrendJSON: text(at: 13, in: statement)
+                    fetchedAt: text(at: 12, in: statement),
+                    freshness: text(at: 13, in: statement),
+                    weeklyTrendJSON: text(at: 14, in: statement)
                 )
             )
         }
         return positions
     }
 
-    private func updateLatestQuote(_ position: StoredPosition) throws {
-        var trend = (try? JSONDecoder().decode([Double].self, from: Data(position.weeklyTrendJSON.utf8))) ?? []
-        if trend.isEmpty {
-            trend = Array(repeating: position.latestPrice, count: 7)
-        } else {
-            trend = Array(trend.dropFirst() + [position.latestPrice])
-        }
+    private func updateLatestQuote(_ position: StoredPosition) throws -> StoredPosition {
+        let fetchedAt = Date()
+        let previousFetchedAt = ISO8601DateFormatter().date(from: position.fetchedAt)
+        let existingTrend = (try? JSONDecoder().decode([Double].self, from: Data(position.weeklyTrendJSON.utf8))) ?? []
+        let trend = DailyPriceTrend.merging(
+            existing: existingTrend,
+            latestPrice: position.latestPrice,
+            previousFetchedAt: previousFetchedAt,
+            fetchedAt: fetchedAt
+        )
         let trendJSON = String(data: try JSONEncoder().encode(trend), encoding: .utf8) ?? "[]"
         let statement = try prepare(
             """
@@ -220,11 +316,16 @@ private final class BackgroundPriceUpdater {
         try bind(Self.numberString(position.latestPrice), to: 1, in: statement)
         try bind(position.source, to: 2, in: statement)
         try bind(position.quoteTime, to: 3, in: statement)
-        try bind(Self.timestamp(), to: 4, in: statement)
+        try bind(Self.timestamp(from: fetchedAt), to: 4, in: statement)
         try bind(position.freshness, to: 5, in: statement)
         try bind(trendJSON, to: 6, in: statement)
         try bind(position.assetID, to: 7, in: statement)
         try stepDone(statement)
+
+        var persisted = position
+        persisted.fetchedAt = Self.timestamp(from: fetchedAt)
+        persisted.weeklyTrendJSON = trendJSON
+        return persisted
     }
 
     private func replaceDailySnapshots(positions: [StoredPosition]) throws {
@@ -627,6 +728,36 @@ private final class BackgroundPriceUpdater {
     }
 }
 
+private struct UpdateRunSummary {
+    let eligibleCount: Int
+    let updatedCount: Int
+    let failedCount: Int
+    let errorSummary: String
+
+    static let disabled = UpdateRunSummary(
+        eligibleCount: 0,
+        updatedCount: 0,
+        failedCount: 0,
+        errorSummary: ""
+    )
+
+    static func fatal(_ error: Error) -> UpdateRunSummary {
+        UpdateRunSummary(
+            eligibleCount: 0,
+            updatedCount: 0,
+            failedCount: 1,
+            errorSummary: String(error.localizedDescription.prefix(240))
+        )
+    }
+
+    var result: String {
+        if eligibleCount == 0, failedCount == 0 { return "no_eligible_assets" }
+        if failedCount == 0 { return "success" }
+        if updatedCount > 0 { return "partial" }
+        return "failed"
+    }
+}
+
 private struct StoredPosition {
     let id: String
     let assetID: String
@@ -640,8 +771,9 @@ private struct StoredPosition {
     var latestPrice: Double
     var source: String
     var quoteTime: String
+    var fetchedAt: String
     var freshness: String
-    let weeklyTrendJSON: String
+    var weeklyTrendJSON: String
 
     var marketValueCNY: Double {
         quantity * latestPrice / rateFromCNY

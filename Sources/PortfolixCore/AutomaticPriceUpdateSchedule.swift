@@ -6,42 +6,58 @@ public enum AutomaticPriceUpdateSchedule {
     public static let dailyTimeSettingKey = "automatic_price_update_daily_time_minutes"
     public static let scheduleAnchorSettingKey = "automatic_price_update_schedule_anchor_at"
     public static let lastRunSettingKey = "automatic_price_update_last_run_at"
+    public static let lastAttemptSettingKey = "automatic_price_update_last_attempt_at"
+    public static let lastSuccessSettingKey = "automatic_price_update_last_success_at"
+    public static let lastResultSettingKey = "automatic_price_update_last_result"
+    public static let lastUpdatedCountSettingKey = "automatic_price_update_last_updated_count"
+    public static let lastFailedCountSettingKey = "automatic_price_update_last_failed_count"
+    public static let lastErrorSettingKey = "automatic_price_update_last_error"
+    public static let attemptLeaseSeconds = 2 * 60
 
     public static func nextDelaySeconds(
         frequency: String,
         dailyTimeMinutes: Int = 9 * 60,
         scheduleAnchor: Date?,
         lastRun: Date?,
+        lastAttempt: Date? = nil,
         now: Date = .now,
         calendar: Calendar = .current
     ) -> Int {
+        let scheduledDelay: Int
         if let interval = intervalSeconds(for: frequency) {
             let reference = [scheduleAnchor, lastRun]
                 .compactMap { $0 }
                 .max() ?? now
             let dueDate = reference.addingTimeInterval(TimeInterval(interval))
-            return max(0, Int(ceil(dueDate.timeIntervalSince(now))))
+            scheduledDelay = max(0, Int(ceil(dueDate.timeIntervalSince(now))))
+        } else {
+            let minutes = min(max(dailyTimeMinutes, 0), 23 * 60 + 59)
+            let reference = [scheduleAnchor, lastRun]
+                .compactMap { $0 }
+                .max() ?? now
+            let startOfToday = calendar.startOfDay(for: now)
+            let todayRun = calendar.date(byAdding: .minute, value: minutes, to: startOfToday) ?? now
+
+            if now < todayRun {
+                scheduledDelay = max(0, Int(ceil(todayRun.timeIntervalSince(now))))
+            } else if reference < todayRun {
+                scheduledDelay = 0
+            } else {
+                let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday)
+                    ?? now.addingTimeInterval(24 * 60 * 60)
+                let nextRun = calendar.date(byAdding: .minute, value: minutes, to: tomorrow)
+                    ?? tomorrow
+                scheduledDelay = max(0, Int(ceil(nextRun.timeIntervalSince(now))))
+            }
         }
 
-        let minutes = min(max(dailyTimeMinutes, 0), 23 * 60 + 59)
-        let reference = [scheduleAnchor, lastRun]
-            .compactMap { $0 }
-            .max() ?? now
-        let startOfToday = calendar.startOfDay(for: now)
-        let todayRun = calendar.date(byAdding: .minute, value: minutes, to: startOfToday) ?? now
-
-        if now < todayRun {
-            return max(0, Int(ceil(todayRun.timeIntervalSince(now))))
+        guard scheduledDelay == 0,
+              let lastAttempt,
+              lastRun.map({ lastAttempt > $0 }) ?? true else {
+            return scheduledDelay
         }
-        if reference < todayRun {
-            return 0
-        }
-
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday)
-            ?? now.addingTimeInterval(24 * 60 * 60)
-        let nextRun = calendar.date(byAdding: .minute, value: minutes, to: tomorrow)
-            ?? tomorrow
-        return max(0, Int(ceil(nextRun.timeIntervalSince(now))))
+        let leaseEnd = lastAttempt.addingTimeInterval(TimeInterval(attemptLeaseSeconds))
+        return max(0, Int(ceil(leaseEnd.timeIntervalSince(now))))
     }
 
     private static func intervalSeconds(for frequency: String) -> Int? {
