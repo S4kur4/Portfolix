@@ -664,14 +664,13 @@ final class PortfolioStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(backgroundUpdatesEnabled, forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
-            configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
+            configureLoginItem()
         }
     }
     @Published var automaticPriceUpdateFrequency: AutomaticPriceUpdateFrequency = .hourly {
         didSet {
             UserDefaults.standard.set(automaticPriceUpdateFrequency.rawValue, forKey: Self.updateFrequencyDefaultsKey)
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
-            configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
         }
     }
     @Published var automaticPriceUpdateDailyTimeMinutes = 9 * 60 {
@@ -681,7 +680,6 @@ final class PortfolioStore: ObservableObject {
                 forKey: Self.dailyUpdateTimeDefaultsKey
             )
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
-            configureLoginItem(launchImmediately: backgroundUpdatesEnabled)
         }
     }
     @Published var aiConfiguration: AIProviderConfiguration = AIProviderConfigurationStore.loadLLM() {
@@ -725,7 +723,9 @@ final class PortfolioStore: ObservableObject {
     private let positionRepository: PositionRepository?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
+    private var loginItemConfigurationTask: Task<Void, Never>?
     private static let backgroundUpdatesEnabledDefaultsKey = "portfolix.backgroundUpdatesEnabled"
+    private static let registeredPriceUpdaterBuildDefaultsKey = "portfolix.registeredPriceUpdaterBuild"
     private static let updateFrequencyDefaultsKey = "portfolix.automaticPriceUpdateFrequency"
     private static let dailyUpdateTimeDefaultsKey = "portfolix.automaticPriceUpdateDailyTimeMinutes"
     private static let appLanguageDefaultsKey = "portfolix.appLanguage"
@@ -747,6 +747,11 @@ final class PortfolioStore: ObservableObject {
     private static var loginItemIdentifier: String {
         let mainBundleIdentifier = Bundle.main.bundleIdentifier ?? "app.portfolix.mac"
         return "\(mainBundleIdentifier).PriceUpdater"
+    }
+    private static var currentBundleBuild: String {
+        let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return normalized.isEmpty ? "development" : normalized
     }
     private static let isoDateFormatter = ISO8601DateFormatter()
 
@@ -881,9 +886,7 @@ final class PortfolioStore: ObservableObject {
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
         persistAutomaticPriceUpdateSetting()
-        if backgroundUpdatesEnabled {
-            configureLoginItem(launchImmediately: true)
-        }
+        configureLoginItem()
     }
 
     func updateRelativeTime(now: Date = .now) {
@@ -2404,40 +2407,79 @@ final class PortfolioStore: ObservableObject {
             .joined(separator: "#")
     }
 
-    private func configureLoginItem(launchImmediately: Bool) {
+    private func configureLoginItem() {
         guard positionRepository != nil, !Self.shouldSkipLaunchRefresh, !Self.shouldSkipLoginItemConfiguration else { return }
-        Task { @MainActor in
-            let service = SMAppService.loginItem(identifier: Self.loginItemIdentifier)
-            do {
-                if backgroundUpdatesEnabled {
-                    try service.register()
-                    if launchImmediately {
-                        launchLoginItemIfAvailable()
-                    }
-                } else {
-                    try service.unregister()
+        let previousTask = loginItemConfigurationTask
+        loginItemConfigurationTask = Task { @MainActor [weak self] in
+            _ = await previousTask?.value
+            guard let self else { return }
+            await self.applyLoginItemConfiguration()
+        }
+    }
+
+    private func applyLoginItemConfiguration() async {
+        let service = SMAppService.loginItem(identifier: Self.loginItemIdentifier)
+        let defaults = UserDefaults.standard
+        let action = LoginItemRegistrationPolicy.action(
+            isEnabled: backgroundUpdatesEnabled,
+            currentBuild: Self.currentBundleBuild,
+            registeredBuild: defaults.string(forKey: Self.registeredPriceUpdaterBuildDefaultsKey),
+            status: Self.loginItemStatus(service.status)
+        )
+
+        do {
+            switch action {
+            case .none:
+                return
+            case .register:
+                try service.register()
+                defaults.set(Self.currentBundleBuild, forKey: Self.registeredPriceUpdaterBuildDefaultsKey)
+            case .reregister:
+                try await Self.unregisterLoginItem(service)
+                guard backgroundUpdatesEnabled else {
+                    defaults.removeObject(forKey: Self.registeredPriceUpdaterBuildDefaultsKey)
+                    return
                 }
-            } catch {
-                persistenceErrorMessage = "自动获取最新价格后台组件配置失败：\(error.localizedDescription)"
+                try service.register()
+                defaults.set(Self.currentBundleBuild, forKey: Self.registeredPriceUpdaterBuildDefaultsKey)
+            case .unregister:
+                try await Self.unregisterLoginItem(service)
+                defaults.removeObject(forKey: Self.registeredPriceUpdaterBuildDefaultsKey)
+            case .requiresApproval:
+                persistenceErrorMessage = localizedText(
+                    "自动获取最新价格需要在系统设置的登录项中允许 Portfolix。",
+                    "Automatic price updates require allowing Portfolix in System Settings > Login Items.",
+                    language: appLanguage
+                )
+            }
+        } catch {
+            persistenceErrorMessage = localizedText(
+                "自动获取最新价格后台组件配置失败：\(error.localizedDescription)",
+                "Automatic price update background component configuration failed: \(error.localizedDescription)",
+                language: appLanguage
+            )
+        }
+    }
+
+    private static func unregisterLoginItem(_ service: SMAppService) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            service.unregister { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
             }
         }
     }
 
-    private func launchLoginItemIfAvailable() {
-        let helperURL = Bundle.main.bundleURL
-            .appendingPathComponent("Contents")
-            .appendingPathComponent("Library")
-            .appendingPathComponent("LoginItems")
-            .appendingPathComponent("PortfolixPriceUpdater.app")
-        guard FileManager.default.fileExists(atPath: helperURL.path) else { return }
-
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        NSWorkspace.shared.openApplication(at: helperURL, configuration: configuration) { [weak self] _, error in
-            guard let error else { return }
-            Task { @MainActor in
-                self?.persistenceErrorMessage = "自动获取最新价格后台组件启动失败：\(error.localizedDescription)"
-            }
+    private static func loginItemStatus(_ status: SMAppService.Status) -> LoginItemRegistrationStatus {
+        switch status {
+        case .notRegistered: .notRegistered
+        case .enabled: .enabled
+        case .requiresApproval: .requiresApproval
+        case .notFound: .notFound
+        @unknown default: .notFound
         }
     }
 

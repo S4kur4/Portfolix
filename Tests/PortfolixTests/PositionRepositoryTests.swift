@@ -5,6 +5,42 @@ import Testing
 
 struct PositionRepositoryTests {
     @Test
+    func loginItemRegistrationPolicyRefreshesAnOutdatedHelperWithoutManualLaunch() {
+        #expect(
+            LoginItemRegistrationPolicy.action(
+                isEnabled: true,
+                currentBuild: "15",
+                registeredBuild: "14",
+                status: .enabled
+            ) == .reregister
+        )
+        #expect(
+            LoginItemRegistrationPolicy.action(
+                isEnabled: true,
+                currentBuild: "15",
+                registeredBuild: "15",
+                status: .enabled
+            ) == .none
+        )
+        #expect(
+            LoginItemRegistrationPolicy.action(
+                isEnabled: false,
+                currentBuild: "15",
+                registeredBuild: "14",
+                status: .enabled
+            ) == .unregister
+        )
+        #expect(
+            LoginItemRegistrationPolicy.action(
+                isEnabled: true,
+                currentBuild: "15",
+                registeredBuild: nil,
+                status: .requiresApproval
+            ) == .requiresApproval
+        )
+    }
+
+    @Test
     func automaticPriceUpdateSchedulePreservesIntervalAcrossAppReopen() {
         let anchor = Date(timeIntervalSince1970: 10_000)
 
