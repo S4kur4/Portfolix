@@ -1410,12 +1410,12 @@ final class PortfolioStore: ObservableObject {
         context: AIAnalysisStoreContext,
         refreshedCount: Int
     ) {
-        let refreshedCount = await refreshPricesForAIAnalysis()
+        await prepareMarketDataForAIAnalysis()
         let positionPerformance = loadAIPositionPerformance(asOf: Date())
         return (
             positions: positions,
             context: makeAIStoreContext(positionPerformance: positionPerformance),
-            refreshedCount: refreshedCount
+            refreshedCount: 0
         )
     }
 #endif
@@ -1610,10 +1610,10 @@ final class PortfolioStore: ObservableObject {
 
         var analysisContext = makeAIStoreContext()
         do {
-            updateAIAnalysisProgress(.refreshingPrices(assetCount: positions.count), startedAt: startedAt)
-            let refreshedCount = await refreshPricesForAIAnalysis()
+            updateAIAnalysisProgress(.loadingMarketData(assetCount: positions.count), startedAt: startedAt)
+            await prepareMarketDataForAIAnalysis()
             updateAIAnalysisProgress(
-                .pricesRefreshed(updated: refreshedCount, total: positions.count),
+                .marketDataLoaded(total: positions.count),
                 startedAt: startedAt
             )
             let positionPerformance = loadAIPositionPerformance(asOf: Date())
@@ -2441,14 +2441,14 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
-    private func refreshPricesForAIAnalysis() async -> Int {
+    private func prepareMarketDataForAIAnalysis() async {
         if isRefreshing {
             let deadline = Date().addingTimeInterval(30)
             while isRefreshing, Date() < deadline {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
-        return await refreshLatestPrices(refreshInvestmentProfile: false)
+        synchronizePersistedMarketDataIfNeeded()
     }
 
     @discardableResult

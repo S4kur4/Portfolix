@@ -6,8 +6,8 @@ enum AIAnalysisTrigger: String, Codable {
 }
 
 enum AIAnalysisProgress: Equatable, Sendable {
-    case refreshingPrices(assetCount: Int)
-    case pricesRefreshed(updated: Int, total: Int)
+    case loadingMarketData(assetCount: Int)
+    case marketDataLoaded(total: Int)
     case preflight
     case buildingInput
     case planningToolCalls
@@ -26,8 +26,8 @@ enum AIAnalysisProgress: Equatable, Sendable {
 
     var telemetryID: String {
         switch self {
-        case .refreshingPrices: "refreshing_prices"
-        case .pricesRefreshed: "prices_refreshed"
+        case .loadingMarketData: "loading_market_data"
+        case .marketDataLoaded: "market_data_loaded"
         case .preflight: "preflight"
         case .buildingInput: "building_input"
         case .planningToolCalls: "planning_tool_calls"
@@ -48,10 +48,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
 
     func title(language: AppLanguage) -> String {
         switch self {
-        case let .refreshingPrices(assetCount):
-            localizedText("正在更新 \(assetCount) 项资产价格", "Refreshing prices for \(assetCount) assets", language: language)
-        case let .pricesRefreshed(updated, total):
-            localizedText("已更新 \(updated)/\(total) 项资产价格", "Updated prices for \(updated)/\(total) assets", language: language)
+        case let .loadingMarketData(assetCount):
+            localizedText("正在读取 \(assetCount) 项资产行情", "Loading market data for \(assetCount) assets", language: language)
+        case let .marketDataLoaded(total):
+            localizedText("已载入 \(total) 项资产行情", "Loaded market data for \(total) assets", language: language)
         case .preflight:
             localizedText("正在检查分析配置", "Checking analysis configuration", language: language)
         case .buildingInput:
@@ -95,10 +95,10 @@ enum AIAnalysisProgress: Equatable, Sendable {
 
     func detail(language: AppLanguage) -> String {
         switch self {
-        case .refreshingPrices:
-            localizedText("逐项获取最新报价；失败项保留原价格并标记数据状态", "Fetching current quotes; failed items retain their prior price and data status", language: language)
-        case let .pricesRefreshed(updated, total):
-            localizedText("本次成功刷新 \(updated) 项，共 \(total) 项持仓", "Refreshed \(updated) of \(total) holdings", language: language)
+        case .loadingMarketData:
+            localizedText("同步后台已保存的最新行情，不额外发起价格请求", "Syncing the latest saved market data without issuing another price request", language: language)
+        case let .marketDataLoaded(total):
+            localizedText("已核对 \(total) 项持仓的价格与历史记录", "Checked prices and history for \(total) holdings", language: language)
         case .preflight:
             localizedText("核对持仓、模型配置和凭据状态", "Checking holdings, model configuration, and credentials", language: language)
         case .buildingInput:
@@ -138,7 +138,7 @@ enum AIAnalysisProgress: Equatable, Sendable {
 
     func failureContext(language: AppLanguage) -> String {
         switch self {
-        case .refreshingPrices, .pricesRefreshed: localizedText("更新资产价格", "price refresh", language: language)
+        case .loadingMarketData, .marketDataLoaded: localizedText("读取行情数据", "market data loading", language: language)
         case .preflight: localizedText("配置检查", "configuration check", language: language)
         case .buildingInput: localizedText("整理组合数据", "portfolio data preparation", language: language)
         case .planningToolCalls, .replanningToolCalls: localizedText("判断联网需求", "connected information assessment", language: language)
