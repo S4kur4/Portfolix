@@ -216,7 +216,7 @@ struct PositionsView: View {
                         .lineLimit(1)
                 }
             }
-            .width(min: 130, ideal: 170)
+            .width(min: 112, ideal: 140)
 
             TableColumn(localizedText("类别", "Type", language: store.appLanguage)) { position in
                 HStack(spacing: PortfolixSpacing.xs) {
