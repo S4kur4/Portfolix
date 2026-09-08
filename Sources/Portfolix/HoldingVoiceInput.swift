@@ -2,10 +2,12 @@ import SwiftUI
 import AppKit
 @preconcurrency import AVFoundation
 @preconcurrency import Speech
+import OSLog
 import PortfolixCore
 
 @MainActor
 private final class HoldingVoiceRecorder: ObservableObject {
+    private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
     @Published private(set) var level: CGFloat = 0
@@ -18,9 +20,11 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private var recognizer: SFSpeechRecognizer?
     private var timeout: Task<Void, Never>?
     private var session: UUID?
+    private var recognitionAttempt: UUID?
     private var held = false
     private var hasTap = false
     private var receivedFinal = false
+    private var retryCount = 0
     private var transcript = ""
     private var commit: ((String) -> Void)?
     private var numeric = false
@@ -32,12 +36,12 @@ private final class HoldingVoiceRecorder: ObservableObject {
         self.commit = commit
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let consumed = MainActor.assumeIsolated {
-                guard let self, event.keyCode == 63, NSApp.isActive else { return false }
-                if event.modifierFlags.contains(.function) { self.press() } else { self.release() }
-                return true
+            MainActor.assumeIsolated {
+                guard let self, event.keyCode == 63, NSApp.isActive else { return }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if flags.contains(.function) { self.press() } else { self.release() }
             }
-            return consumed ? nil : event
+            return event
         }
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
@@ -58,6 +62,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
     func press() {
         guard !held, !isFinishing, commit != nil else { return }
         held = true
+        retryCount = 0
         let id = UUID()
         session = id
         let locale = Locale(identifier: english ? "en-US" : "zh-CN")
@@ -101,8 +106,8 @@ private final class HoldingVoiceRecorder: ObservableObject {
         self.recognizer = recognizer
         self.engine = engine
         self.request = request
-        transcript = ""
-        receivedFinal = false
+        let attempt = UUID()
+        recognitionAttempt = attempt
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -120,12 +125,17 @@ private final class HoldingVoiceRecorder: ObservableObject {
         recognition = recognizer.recognitionTask(with: request) { [weak self] result, error in
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal == true
-            let failed = error != nil
+            let failure = error.map(SpeechTaskFailure.init)
             Task { @MainActor in
-                guard let self, self.session == id else { return }
+                guard let self, self.session == id, self.recognitionAttempt == attempt else { return }
                 if let text { self.transcript = text }
-                if isFinal { self.receivedFinal = true; self.stopAudio(); self.complete() }
-                else if failed, !self.receivedFinal { self.fail("语音识别未完成，请重试。原内容已保留。", "Speech recognition failed. Your original value is unchanged.") }
+                if isFinal {
+                    self.receivedFinal = true
+                    self.stopAudio()
+                    self.complete()
+                } else if let failure, !self.receivedFinal {
+                    self.handleRecognitionFailure(failure, id: id, locale: locale)
+                }
             }
         }
         do {
@@ -145,8 +155,8 @@ private final class HoldingVoiceRecorder: ObservableObject {
     func release() {
         guard held else { return }
         held = false
-        guard isRecording else { cancel(); return }
         if receivedFinal { complete(); return }
+        guard isRecording else { cancel(); return }
         stopAudio()
         isRecording = false
         isFinishing = true
@@ -154,10 +164,56 @@ private final class HoldingVoiceRecorder: ObservableObject {
         timeout?.cancel()
         let id = session
         timeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, self?.session == id else { return }
+            if self?.hasTranscript == true {
+                self?.complete()
+                return
+            }
+            try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled, self?.session == id else { return }
             self?.fail("语音识别超时，请重试。原内容已保留。", "Speech recognition timed out. Your original value is unchanged.")
         }
+    }
+
+    private var hasTranscript: Bool {
+        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func handleRecognitionFailure(_ failure: SpeechTaskFailure, id: UUID, locale: Locale) {
+        Self.logger.error("Speech task failed: domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
+
+        if hasTranscript {
+            receivedFinal = true
+            stopAudio()
+            isRecording = false
+            isFinishing = held
+            complete()
+            return
+        }
+
+        if held, retryCount == 0, failure.isRetryable {
+            retryCount += 1
+            recognitionAttempt = nil
+            stopAudio()
+            recognition?.cancel()
+            recognition = nil
+            request = nil
+            recognizer = nil
+            isRecording = false
+            isFinishing = true
+            timeout?.cancel()
+            timeout = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self, self.session == id, self.held else { return }
+                self.isFinishing = false
+                self.start(id: id, locale: locale)
+            }
+            return
+        }
+
+        let message = failure.message()
+        fail(message.chinese, message.english)
     }
 
     private func complete() {
@@ -187,7 +243,9 @@ private final class HoldingVoiceRecorder: ObservableObject {
 
     func cancel() {
         session = nil
+        recognitionAttempt = nil
         held = false
+        retryCount = 0
         timeout?.cancel()
         timeout = nil
         stopAudio()
@@ -203,6 +261,37 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private func fail(_ chinese: String, _ english: String) {
         cancel()
         errorMessage = self.english ? english : chinese
+    }
+}
+
+private struct SpeechTaskFailure: Sendable {
+    let domain: String
+    let code: Int
+
+    init(_ error: any Error) {
+        let error = error as NSError
+        domain = error.domain
+        code = error.code
+    }
+
+    var isRetryable: Bool {
+        (domain == "kAFAssistantErrorDomain" && [203, 1100, 1101, 1107, 1110].contains(code))
+            || (domain == "kLSRErrorDomain" && code == 300)
+    }
+
+    func message() -> (chinese: String, english: String) {
+        switch (domain, code) {
+        case ("kLSRErrorDomain", 102):
+            ("当前语言的听写资源尚未安装，请先在系统设置中启用对应语言的听写。", "Dictation resources for this language are not installed. Enable this dictation language in System Settings first.")
+        case ("kLSRErrorDomain", 201):
+            ("系统听写已关闭，请先在系统设置中启用听写。", "System Dictation is disabled. Enable Dictation in System Settings first.")
+        case ("kAFAssistantErrorDomain", 1110):
+            ("没有识别到内容，请重试。原内容已保留。", "No speech was recognized. Your original value is unchanged.")
+        case ("kAFAssistantErrorDomain", 1700):
+            ("请在系统设置中允许 Portfolix 使用语音识别。", "Allow Speech Recognition for Portfolix in System Settings.")
+        default:
+            ("系统语音识别暂时不可用，请重试。原内容已保留。", "System speech recognition is temporarily unavailable. Your original value is unchanged.")
+        }
     }
 }
 
