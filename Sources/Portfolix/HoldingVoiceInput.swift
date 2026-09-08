@@ -10,7 +10,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
-    @Published private(set) var level: CGFloat = 0
+    @Published private(set) var levels = Array(repeating: CGFloat.zero, count: 36)
     @Published var errorMessage: String?
     private var monitor: Any?
     private var resignObserver: NSObjectProtocol?
@@ -18,6 +18,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognition: SFSpeechRecognitionTask?
     private var recognizer: SFSpeechRecognizer?
+    private var modernSession: (any HoldingSpeechSession)?
     private var timeout: Task<Void, Never>?
     private var session: UUID?
     private var recognitionAttempt: UUID?
@@ -63,24 +64,32 @@ private final class HoldingVoiceRecorder: ObservableObject {
         guard !held, !isFinishing, commit != nil else { return }
         held = true
         retryCount = 0
+        transcript = ""
+        receivedFinal = false
+        levels = Array(repeating: 0, count: levels.count)
+        isFinishing = true
         let id = UUID()
         session = id
         let locale = Locale(identifier: english ? "en-US" : "zh-CN")
         Task { [weak self] in
             guard let self else { return }
-            let speechAuthorized = await Self.requestSpeechAuthorization()
-            guard self.session == id, self.held else { return }
-            guard speechAuthorized else {
-                self.fail("请在系统设置中允许 Portfolix 使用语音识别。", "Allow Speech Recognition for Portfolix in System Settings.")
-                return
-            }
             let audioAuthorized = await AVCaptureDevice.requestAccess(for: .audio)
             guard self.session == id, self.held else { return }
             guard audioAuthorized else {
                 self.fail("请在系统设置中允许 Portfolix 使用麦克风。", "Allow Microphone access for Portfolix in System Settings.")
                 return
             }
-            self.start(id: id, locale: locale)
+            if #available(macOS 26.0, *) {
+                await self.startModern(id: id, locale: locale)
+            } else {
+                let speechAuthorized = await Self.requestSpeechAuthorization()
+                guard self.session == id, self.held else { return }
+                guard speechAuthorized else {
+                    self.fail("请在系统设置中允许 Portfolix 使用语音识别。", "Allow Speech Recognition for Portfolix in System Settings.")
+                    return
+                }
+                self.startLegacy(id: id, locale: locale)
+            }
         }
     }
 
@@ -92,7 +101,46 @@ private final class HoldingVoiceRecorder: ObservableObject {
         }
     }
 
-    private func start(id: UUID, locale: Locale) {
+    @available(macOS 26.0, *)
+    private func startModern(id: UUID, locale: Locale) async {
+        isFinishing = true
+        do {
+            let modernSession = try await HoldingSpeechAnalyzerSession.start(
+                locale: locale,
+                onLevel: { [weak self] level in self?.record(level: level, id: id) },
+                onTranscript: { [weak self] text in
+                    guard let self, self.session == id else { return }
+                    self.transcript = text
+                },
+                onComplete: { [weak self] text in
+                    guard let self, self.session == id else { return }
+                    self.transcript = text
+                    self.modernSession = nil
+                    self.isRecording = false
+                    self.isFinishing = false
+                    self.receivedFinal = true
+                    self.complete()
+                },
+                onFailure: { [weak self] error in
+                    guard let self, self.session == id else { return }
+                    self.handleModernFailure(error)
+                }
+            )
+            guard session == id, held else {
+                modernSession.cancel()
+                return
+            }
+            self.modernSession = modernSession
+            isFinishing = false
+            isRecording = true
+            scheduleRecordingTimeout(id: id)
+        } catch {
+            guard session == id else { return }
+            handleModernFailure(error)
+        }
+    }
+
+    private func startLegacy(id: UUID, locale: Locale) {
         guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable,
               recognizer.supportsOnDeviceRecognition else {
             fail("当前语言的本机语音识别不可用，请检查系统语音语言设置。", "On-device speech recognition is unavailable for this language. Check your system speech language settings.")
@@ -116,8 +164,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
         }
         let sink = VoiceAudioSink(request: request) { [weak self] value in
             Task { @MainActor in
-                guard let self, self.session == id, self.isRecording else { return }
-                self.level = CGFloat(value)
+                self?.record(level: value, id: id)
             }
         }
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in sink.append(buffer) }
@@ -142,11 +189,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
             engine.prepare()
             try engine.start()
             isRecording = true
-            timeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(30))
-                guard !Task.isCancelled, self?.session == id else { return }
-                self?.release()
-            }
+            scheduleRecordingTimeout(id: id)
         } catch {
             fail("无法启动麦克风，请检查输入设备后重试。", "Cannot start the microphone. Check your input device and retry.")
         }
@@ -156,6 +199,14 @@ private final class HoldingVoiceRecorder: ObservableObject {
         guard held else { return }
         held = false
         if receivedFinal { complete(); return }
+        if let modernSession {
+            isRecording = false
+            isFinishing = true
+            timeout?.cancel()
+            modernSession.finish()
+            scheduleFinalizationTimeout(id: session)
+            return
+        }
         guard isRecording else { cancel(); return }
         stopAudio()
         isRecording = false
@@ -174,6 +225,51 @@ private final class HoldingVoiceRecorder: ObservableObject {
             guard !Task.isCancelled, self?.session == id else { return }
             self?.fail("语音识别超时，请重试。原内容已保留。", "Speech recognition timed out. Your original value is unchanged.")
         }
+    }
+
+    private func scheduleRecordingTimeout(id: UUID) {
+        timeout?.cancel()
+        timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, self?.session == id else { return }
+            self?.release()
+        }
+    }
+
+    private func scheduleFinalizationTimeout(id: UUID?) {
+        timeout?.cancel()
+        timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, self?.session == id else { return }
+            self?.fail("语音识别超时，请重试。原内容已保留。", "Speech recognition timed out. Your original value is unchanged.")
+        }
+    }
+
+    private func record(level: Float, id: UUID) {
+        guard session == id, isRecording else { return }
+        let value = CGFloat(level)
+        levels.removeFirst()
+        levels.append(value)
+    }
+
+    @available(macOS 26.0, *)
+    private func handleModernFailure(_ error: any Error) {
+        let failure = SpeechTaskFailure(error)
+        Self.logger.error("SpeechAnalyzer failed: domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
+        if let error = error as? HoldingSpeechAnalyzerError {
+            switch error {
+            case .unsupportedLocale:
+                fail("当前语言暂不支持本机语音输入。", "On-device voice input is not supported for this language.")
+            case .assetsUnavailable:
+                fail("无法准备本机语音模型，请检查网络后重试。", "The on-device speech model could not be prepared. Check your network and retry.")
+            case .noMicrophone:
+                fail("没有可用的麦克风。", "No microphone is available.")
+            case .unsupportedAudioFormat:
+                fail("当前麦克风格式无法用于语音识别。", "The current microphone format cannot be used for speech recognition.")
+            }
+            return
+        }
+        fail("系统语音识别暂时不可用，请重试。原内容已保留。", "System speech recognition is temporarily unavailable. Your original value is unchanged.")
     }
 
     private var hasTranscript: Bool {
@@ -207,7 +303,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled, let self, self.session == id, self.held else { return }
                 self.isFinishing = false
-                self.start(id: id, locale: locale)
+                self.startLegacy(id: id, locale: locale)
             }
             return
         }
@@ -248,6 +344,8 @@ private final class HoldingVoiceRecorder: ObservableObject {
         retryCount = 0
         timeout?.cancel()
         timeout = nil
+        modernSession?.cancel()
+        modernSession = nil
         stopAudio()
         recognition?.cancel()
         recognition = nil
@@ -255,7 +353,8 @@ private final class HoldingVoiceRecorder: ObservableObject {
         recognizer = nil
         isRecording = false
         isFinishing = false
-        level = 0
+        levels = Array(repeating: 0, count: levels.count)
+        transcript = ""
     }
 
     private func fail(_ chinese: String, _ english: String) {
@@ -332,17 +431,10 @@ private struct HoldingVoiceInputModifier: ViewModifier {
                             RoundedRectangle(cornerRadius: PortfolixRadius.compact)
                                 .stroke(PortfolixTheme.violet, lineWidth: 1)
                         }
-                        .overlay(alignment: .leading) {
-                            HStack(spacing: 2) {
-                                ForEach(0..<5) { index in
-                                    Capsule().fill(PortfolixTheme.violet)
-                                        .frame(width: 2, height: 3 + recorder.level * CGFloat([8, 16, 22, 14, 7][index]))
-                                }
-                            }
-                            .frame(width: 26, height: 26)
-                            .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: 4))
-                            .padding(.leading, 4)
-                            .animation(.linear(duration: 0.08), value: recorder.level)
+                        .overlay {
+                            HoldingVoiceWaveform(levels: recorder.levels, isFinishing: recorder.isFinishing)
+                                .padding(.horizontal, PortfolixSpacing.sm)
+                                .padding(.vertical, PortfolixSpacing.xs)
                         }
                         .allowsHitTesting(false)
                 }
@@ -363,6 +455,35 @@ private struct HoldingVoiceInputModifier: ViewModifier {
             )) {
                 Button(language == .english ? "OK" : "好") { recorder.errorMessage = nil }
             } message: { Text(recorder.errorMessage ?? "") }
+    }
+}
+
+private struct HoldingVoiceWaveform: View {
+    let levels: [CGFloat]
+    let isFinishing: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard !levels.isEmpty, size.width > 0, size.height > 0 else { return }
+            let step = size.width / CGFloat(levels.count)
+            let width = max(1, min(3, step * 0.52))
+            for (index, level) in levels.enumerated() {
+                let normalized = max(0.08, min(1, level))
+                let height = max(2, normalized * size.height * 0.82)
+                let rect = CGRect(
+                    x: CGFloat(index) * step + (step - width) / 2,
+                    y: (size.height - height) / 2,
+                    width: width,
+                    height: height
+                )
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: width / 2),
+                    with: .color(PortfolixTheme.violet.opacity(isFinishing ? 0.45 : 0.9))
+                )
+            }
+        }
+        .animation(.linear(duration: 0.08), value: levels)
+        .accessibilityHidden(true)
     }
 }
 
