@@ -3411,7 +3411,7 @@ struct SettingsView: View {
                     }
                     SettingsDivider()
                     SettingsRow(
-                        title: "MCP Server",
+                        title: settingsText("MCP 服务器", "MCP Server"),
                         helpText: settingsText(
                             "允许本机 Agent 只读访问持仓与历史收益，不开放 API Key 或聊天记录。",
                             "Allow local agents to read holdings and historical returns. API keys and chat history are excluded."
