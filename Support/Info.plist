@@ -28,5 +28,9 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Portfolix 使用麦克风将您说出的持仓信息填入当前字段。Microphone access lets you dictate holding details.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Portfolix 使用本机语音识别填写持仓信息，不保存录音。On-device speech recognition fills holding fields without saving audio.</string>
 </dict>
 </plist>

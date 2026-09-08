@@ -167,6 +167,7 @@ private struct PositionUpdateTableHeader: View {
 
 private struct PositionUpdateRow: View {
     @Binding var draft: PositionUpdateDraft
+    @FocusState private var focusedField: PositionUpdateField?
     let language: AppLanguage
     let highlightsInvalidFields: Bool
 
@@ -265,6 +266,8 @@ private struct PositionUpdateRow: View {
                     )
             }
             .disabled(isDisabled)
+            .focused($focusedField, equals: field)
+            .holdingVoiceInput(text: text, isFocused: !isDisabled && focusedField == field, numeric: true, language: language)
             .accessibilityLabel("\(draft.position.name) \(field.title(language: language))")
     }
 

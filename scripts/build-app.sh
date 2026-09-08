@@ -107,5 +107,5 @@ sign_sparkle_framework() {
 
 sign_sparkle_framework "$APP_FRAMEWORKS_DIR/Sparkle.framework"
 /usr/bin/codesign --force --sign - "$HELPER_APP_DIR"
-/usr/bin/codesign --force --sign - "$APP_DIR"
+/usr/bin/codesign --force --sign - --entitlements "$ROOT_DIR/Support/Portfolix.entitlements" "$APP_DIR"
 print "$APP_DIR"

@@ -142,6 +142,10 @@ struct PositionEditorSheet: View {
                         .foregroundStyle(inputColor(for: field))
                         .focused($focusedField, equals: field)
                         .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
+                        .holdingVoiceInput(
+                            text: text, isFocused: focusedField == field,
+                            numeric: field == .quantity || field == .cost, language: language
+                        )
                 }
             }
             .frame(

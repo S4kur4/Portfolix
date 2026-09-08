@@ -147,6 +147,10 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Portfolix 使用麦克风将您说出的持仓信息填入当前字段。Microphone access lets you dictate holding details.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Portfolix 使用本机语音识别填写持仓信息，不保存录音。On-device speech recognition fills holding fields without saving audio.</string>
 </dict>
 </plist>
 PLIST
@@ -211,7 +215,11 @@ sign_sparkle_framework() {
 
 sign_sparkle_framework "$APP_FRAMEWORKS/Sparkle.framework"
 sign_path "$HELPER_APP"
-sign_path "$APP_BUNDLE"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  /usr/bin/codesign --force --sign - --entitlements "$ROOT_DIR/Support/Portfolix.entitlements" "$APP_BUNDLE"
+else
+  /usr/bin/codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" --entitlements "$ROOT_DIR/Support/Portfolix.entitlements" "$APP_BUNDLE"
+fi
 
 ditto "$APP_BUNDLE" "$STAGING_DIR/$APP_NAME.app"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING_DIR" -ov -format UDZO -fs "$DMG_FILESYSTEM" "$TEMP_DMG_PATH"
