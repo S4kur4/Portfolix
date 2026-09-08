@@ -140,9 +140,7 @@ final class HoldingSpeechAnalyzerSession: HoldingSpeechSession {
             continuation: inputContinuation,
             onLevel: onLevel
         )
-        engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: naturalFormat) { buffer, _ in
-            sink.append(buffer)
-        }
+        sink.installTap(on: engine.inputNode, format: naturalFormat)
         hasTap = true
         engine.prepare()
         do {
@@ -274,6 +272,12 @@ private final class AnalyzerAudioSink: @unchecked Sendable {
         }
         guard conversionError == nil, status != .error, converted.frameLength > 0 else { return }
         continuation?.yield(AnalyzerInput(buffer: converted))
+    }
+
+    func installTap(on inputNode: AVAudioInputNode, format: AVAudioFormat) {
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [self] buffer, _ in
+            append(buffer)
+        }
     }
 
     private func updateLevel(from buffer: AVAudioPCMBuffer) {

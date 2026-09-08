@@ -167,7 +167,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
                 self?.record(level: value, id: id)
             }
         }
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in sink.append(buffer) }
+        sink.installTap(on: input, format: format)
         hasTap = true
         recognition = recognizer.recognitionTask(with: request) { [weak self] result, error in
             let text = result?.bestTranscription.formattedString
@@ -411,6 +411,12 @@ private final class VoiceAudioSink: @unchecked Sendable {
         var peak: Float = 0
         for index in 0..<Int(buffer.frameLength) { peak = max(peak, abs(channel[index])) }
         update(min(1, peak * 8))
+    }
+
+    func installTap(on inputNode: AVAudioInputNode, format: AVAudioFormat) {
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [self] buffer, _ in
+            append(buffer)
+        }
     }
 }
 
