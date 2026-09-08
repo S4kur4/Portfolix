@@ -223,7 +223,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
             }
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled, self?.session == id else { return }
-            self?.fail("语音识别超时，请重试。原内容已保留。", "Speech recognition timed out. Your original value is unchanged.")
+            self?.cancel()
         }
     }
 
@@ -241,13 +241,16 @@ private final class HoldingVoiceRecorder: ObservableObject {
         timeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, self?.session == id else { return }
-            self?.fail("语音识别超时，请重试。原内容已保留。", "Speech recognition timed out. Your original value is unchanged.")
+            self?.cancel()
         }
     }
 
     private func record(level: Float, id: UUID) {
         guard session == id, isRecording else { return }
-        let value = CGFloat(level)
+        let previous = levels.last ?? 0
+        let target = CGFloat(level)
+        let response: CGFloat = target > previous ? 0.72 : 0.38
+        let value = previous + (target - previous) * response
         levels.removeFirst()
         levels.append(value)
     }
@@ -256,6 +259,14 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private func handleModernFailure(_ error: any Error) {
         let failure = SpeechTaskFailure(error)
         Self.logger.error("SpeechAnalyzer failed: domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
+        if hasTranscript {
+            modernSession = nil
+            isRecording = false
+            isFinishing = held
+            receivedFinal = true
+            complete()
+            return
+        }
         if let error = error as? HoldingSpeechAnalyzerError {
             switch error {
             case .unsupportedLocale:
@@ -269,7 +280,7 @@ private final class HoldingVoiceRecorder: ObservableObject {
             }
             return
         }
-        fail("系统语音识别暂时不可用，请重试。原内容已保留。", "System speech recognition is temporarily unavailable. Your original value is unchanged.")
+        cancel()
     }
 
     private var hasTranscript: Bool {
@@ -308,21 +319,18 @@ private final class HoldingVoiceRecorder: ObservableObject {
             return
         }
 
-        let message = failure.message()
-        fail(message.chinese, message.english)
+        if let message = failure.userActionMessage() {
+            fail(message.chinese, message.english)
+        } else {
+            cancel()
+        }
     }
 
     private func complete() {
         // Final results can arrive before release; never replace text while Fn is held.
         guard !held else { return }
-        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            fail("没有识别到内容，请重试。", "No speech was recognized. Please retry.")
-            return
-        }
-        let value = numeric ? SpokenNumber.normalize(text) : text
-        guard let value else {
-            fail("未识别到明确的数字，请逐位读出数字和小数点。原内容已保留。", "No unambiguous number was recognized. Say the digits and decimal point. Your original value is unchanged.")
+        guard let value = HoldingVoiceTranscript.value(from: transcript, numeric: numeric) else {
+            cancel()
             return
         }
         let apply = commit
@@ -363,6 +371,14 @@ private final class HoldingVoiceRecorder: ObservableObject {
     }
 }
 
+enum HoldingVoiceTranscript {
+    static func value(from transcript: String, numeric: Bool) -> String? {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return numeric ? (SpokenNumber.normalize(text) ?? text) : text
+    }
+}
+
 private struct SpeechTaskFailure: Sendable {
     let domain: String
     let code: Int
@@ -378,18 +394,16 @@ private struct SpeechTaskFailure: Sendable {
             || (domain == "kLSRErrorDomain" && code == 300)
     }
 
-    func message() -> (chinese: String, english: String) {
+    func userActionMessage() -> (chinese: String, english: String)? {
         switch (domain, code) {
         case ("kLSRErrorDomain", 102):
             ("当前语言的听写资源尚未安装，请先在系统设置中启用对应语言的听写。", "Dictation resources for this language are not installed. Enable this dictation language in System Settings first.")
         case ("kLSRErrorDomain", 201):
             ("系统听写已关闭，请先在系统设置中启用听写。", "System Dictation is disabled. Enable Dictation in System Settings first.")
-        case ("kAFAssistantErrorDomain", 1110):
-            ("没有识别到内容，请重试。原内容已保留。", "No speech was recognized. Your original value is unchanged.")
         case ("kAFAssistantErrorDomain", 1700):
             ("请在系统设置中允许 Portfolix 使用语音识别。", "Allow Speech Recognition for Portfolix in System Settings.")
         default:
-            ("系统语音识别暂时不可用，请重试。原内容已保留。", "System speech recognition is temporarily unavailable. Your original value is unchanged.")
+            nil
         }
     }
 }
@@ -406,15 +420,16 @@ private final class VoiceAudioSink: @unchecked Sendable {
     func append(_ buffer: AVAudioPCMBuffer) {
         request.append(buffer)
         frames += Int(buffer.frameLength)
-        guard frames >= Int(buffer.format.sampleRate / 15), let channel = buffer.floatChannelData?[0] else { return }
-        frames = 0
+        let updateInterval = max(1, Int(buffer.format.sampleRate / 60))
+        guard frames >= updateInterval, let channel = buffer.floatChannelData?[0] else { return }
+        frames %= updateInterval
         var peak: Float = 0
         for index in 0..<Int(buffer.frameLength) { peak = max(peak, abs(channel[index])) }
         update(min(1, peak * 8))
     }
 
     func installTap(on inputNode: AVAudioInputNode, format: AVAudioFormat) {
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 256, format: format) { [self] buffer, _ in
             append(buffer)
         }
     }
@@ -432,7 +447,11 @@ private struct HoldingVoiceInputModifier: ViewModifier {
             .overlay {
                 if recorder.isRecording || recorder.isFinishing {
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                        .fill(PortfolixTheme.violet.opacity(0.12))
+                        .fill(PortfolixTheme.panelElevated)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+                                .fill(PortfolixTheme.violet.opacity(0.14))
+                        }
                         .overlay {
                             RoundedRectangle(cornerRadius: PortfolixRadius.compact)
                                 .stroke(PortfolixTheme.violet, lineWidth: 1)
@@ -488,7 +507,7 @@ private struct HoldingVoiceWaveform: View {
                 )
             }
         }
-        .animation(.linear(duration: 0.08), value: levels)
+        .animation(.linear(duration: 1 / 60), value: levels)
         .accessibilityHidden(true)
     }
 }

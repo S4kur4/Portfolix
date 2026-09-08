@@ -275,16 +275,17 @@ private final class AnalyzerAudioSink: @unchecked Sendable {
     }
 
     func installTap(on inputNode: AVAudioInputNode, format: AVAudioFormat) {
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 256, format: format) { [self] buffer, _ in
             append(buffer)
         }
     }
 
     private func updateLevel(from buffer: AVAudioPCMBuffer) {
         framesSinceLevelUpdate += Int(buffer.frameLength)
-        guard framesSinceLevelUpdate >= Int(buffer.format.sampleRate / 20),
+        let updateInterval = max(1, Int(buffer.format.sampleRate / 60))
+        guard framesSinceLevelUpdate >= updateInterval,
               let channel = buffer.floatChannelData?[0] else { return }
-        framesSinceLevelUpdate = 0
+        framesSinceLevelUpdate %= updateInterval
         var peak: Float = 0
         for index in 0..<Int(buffer.frameLength) { peak = max(peak, abs(channel[index])) }
         let level = min(1, peak * 8)

@@ -1,5 +1,6 @@
 import Testing
 import PortfolixCore
+@testable import Portfolix
 
 struct HoldingVoiceInputTests {
     @Test(arguments: [
@@ -16,5 +17,14 @@ struct HoldingVoiceInputTests {
     @Test(arguments: ["", "一百二", "一万二", "12 34", "12,34", "10 或 20", "-100", "NaN", "Infinity", "12元", "百分之五", "一二百", "一千百", "一亿亿", "999999999999999999999999999999999999999999"])
     func rejectsAmbiguousOrUnsafeNumbers(_ input: String) {
         #expect(SpokenNumber.normalize(input) == nil)
+    }
+
+    @Test
+    func voiceTranscriptUsesBestEffortFormattingWithoutRejectingInput() {
+        #expect(HoldingVoiceTranscript.value(from: "  一百零二  ", numeric: true) == "102")
+        #expect(HoldingVoiceTranscript.value(from: "一百二", numeric: true) == "一百二")
+        #expect(HoldingVoiceTranscript.value(from: "苹果", numeric: true) == "苹果")
+        #expect(HoldingVoiceTranscript.value(from: " Apple ", numeric: false) == "Apple")
+        #expect(HoldingVoiceTranscript.value(from: "   ", numeric: true) == nil)
     }
 }
