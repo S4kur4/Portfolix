@@ -237,26 +237,12 @@ struct PositionsView: View {
             }
             .width(72)
 
-            TableColumn(localizedText("持仓成本", "Cost Basis", language: store.appLanguage)) { position in
-                Text(formatMoney(position.averageCost, currency: position.quoteCurrency))
-                    .foregroundStyle(primaryRowColor(for: position))
-                    .monospacedDigit()
-            }
-            .width(102)
-
             TableColumn(localizedText("总成本", "Total Cost", language: store.appLanguage)) { position in
                 Text(formatMoney(position.totalCost, currency: position.quoteCurrency))
                     .foregroundStyle(primaryRowColor(for: position))
                     .monospacedDigit()
             }
             .width(116)
-
-            TableColumn(localizedText("最新价格", "Latest Price", language: store.appLanguage)) { position in
-                Text(formatMoney(position.latestPrice, currency: position.quoteCurrency))
-                    .foregroundStyle(primaryRowColor(for: position))
-                    .monospacedDigit()
-            }
-            .width(104)
 
             TableColumn(localizedText("当前市值", "Market Value", language: store.appLanguage)) { position in
                 Text(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
