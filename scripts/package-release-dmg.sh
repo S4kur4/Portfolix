@@ -87,14 +87,15 @@ else
   BIN_DIR="$(CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" SWIFTPM_MODULECACHE_OVERRIDE="$MODULE_CACHE_DIR" swift build --package-path "$ROOT_DIR" --configuration release --scratch-path "$BUILD_DIR" --cache-path "$SWIFTPM_CACHE_DIR" --show-bin-path)"
 fi
 
-if [[ ! -x "$BIN_DIR/$EXECUTABLE_NAME" || ! -x "$BIN_DIR/PortfolixPriceUpdater" ]]; then
+if [[ ! -x "$BIN_DIR/$EXECUTABLE_NAME" || ! -x "$BIN_DIR/PortfolixPriceUpdater" || ! -x "$BIN_DIR/PortfolixMCP" ]]; then
   echo "missing release binaries in $BIN_DIR" >&2
   exit 1
 fi
 
 cp "$BIN_DIR/$EXECUTABLE_NAME" "$APP_MACOS/$APP_NAME"
 cp "$BIN_DIR/PortfolixPriceUpdater" "$HELPER_MACOS/PortfolixPriceUpdater"
-chmod +x "$APP_MACOS/$APP_NAME" "$HELPER_MACOS/PortfolixPriceUpdater"
+cp "$BIN_DIR/PortfolixMCP" "$APP_MACOS/PortfolixMCP"
+chmod +x "$APP_MACOS/$APP_NAME" "$HELPER_MACOS/PortfolixPriceUpdater" "$APP_MACOS/PortfolixMCP"
 /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_MACOS/$APP_NAME" 2>/dev/null || true
 
 if [[ -d "$SPARKLE_FRAMEWORK_SOURCE" ]]; then
@@ -215,6 +216,7 @@ sign_sparkle_framework() {
 
 sign_sparkle_framework "$APP_FRAMEWORKS/Sparkle.framework"
 sign_path "$HELPER_APP"
+sign_path "$APP_MACOS/PortfolixMCP"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   /usr/bin/codesign --force --sign - --entitlements "$ROOT_DIR/Support/Portfolix.entitlements" "$APP_BUNDLE"
 else

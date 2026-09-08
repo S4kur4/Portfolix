@@ -10,6 +10,7 @@ SPARKLE_FEED_URL="${PORTFOLIX_SPARKLE_FEED_URL:-https://raw.githubusercontent.co
 SPARKLE_PUBLIC_ED_KEY="${PORTFOLIX_SPARKLE_PUBLIC_ED_KEY:-BX7U6Nmwk+IBB5lluFk8rJ3KFopJfeYJS7DFOR+wqZM=}"
 EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/Portfolix"
 HELPER_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixPriceUpdater"
+MCP_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixMCP"
 APP_DIR="$BUILD_DIR/Portfolix.app"
 APP_FRAMEWORKS_DIR="$APP_DIR/Contents/Frameworks"
 HELPER_APP_DIR="$APP_DIR/Contents/Library/LoginItems/PortfolixPriceUpdater.app"
@@ -33,11 +34,16 @@ if [[ ! -x "$HELPER_EXECUTABLE" ]]; then
   print -u2 "Missing helper executable: $HELPER_EXECUTABLE"
   exit 1
 fi
+if [[ ! -x "$MCP_EXECUTABLE" ]]; then
+  print -u2 "Missing MCP executable: $MCP_EXECUTABLE"
+  exit 1
+fi
 
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_FRAMEWORKS_DIR"
 mkdir -p "$HELPER_APP_DIR/Contents/MacOS" "$HELPER_APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/Support/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Portfolix"
+cp "$MCP_EXECUTABLE" "$APP_DIR/Contents/MacOS/PortfolixMCP"
 /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/Portfolix" 2>/dev/null || true
 
 if [[ -d "$SPARKLE_FRAMEWORK_SOURCE" ]]; then
@@ -107,5 +113,6 @@ sign_sparkle_framework() {
 
 sign_sparkle_framework "$APP_FRAMEWORKS_DIR/Sparkle.framework"
 /usr/bin/codesign --force --sign - "$HELPER_APP_DIR"
+/usr/bin/codesign --force --sign - "$APP_DIR/Contents/MacOS/PortfolixMCP"
 /usr/bin/codesign --force --sign - --entitlements "$ROOT_DIR/Support/Portfolix.entitlements" "$APP_DIR"
 print "$APP_DIR"

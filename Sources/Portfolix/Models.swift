@@ -694,6 +694,18 @@ final class PortfolioStore: ObservableObject {
         }
     }
     @Published var hasLLMAPIKey = false
+    @Published private(set) var mcpReadAccessEnabled = false
+
+    func setMCPReadAccessEnabled(_ enabled: Bool) {
+        guard let positionRepository else {
+            persistenceErrorMessage = appLanguage == .english ? "Local storage is unavailable; MCP access was not changed." : "本地存储不可用，未更改 MCP 访问授权。"
+            return
+        }
+        do {
+            try positionRepository.setAppSetting(key: MCPAccess.settingKey, value: enabled ? "true" : "false")
+            mcpReadAccessEnabled = enabled
+        } catch { persistenceErrorMessage = error.localizedDescription }
+    }
     @Published var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var hasValidLLMAPIKey: Bool {
         hasLLMAPIKey && llmAPIKeyValidationState == .valid
@@ -873,6 +885,7 @@ final class PortfolioStore: ObservableObject {
         snapshotHistory = loadedSnapshots
         dailyProfitHistory = loadedDailyProfitHistory
         self.positionRepository = activeRepository
+        mcpReadAccessEnabled = (try? activeRepository?.appSetting(for: MCPAccess.settingKey)) == "true"
         loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
         aiAnalysisReport = latestReport.flatMap { report in

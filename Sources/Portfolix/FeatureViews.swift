@@ -3409,6 +3409,15 @@ struct SettingsView: View {
                             configurationSheet = .llm
                         }
                     }
+                    SettingsDivider()
+                    SettingsRow(
+                        title: "MCP Server",
+                        helpText: settingsText(
+                            "允许本机 Agent 只读访问持仓与历史收益，不开放 API Key 或聊天记录。",
+                            "Allow local agents to read holdings and historical returns. API keys and chat history are excluded."
+                        ),
+                        helpPlacement: .trailing
+                    ) { MCPAccessControls() }
                 }
 
                 SettingsSection(title: settingsText("数据备份", "Data Backup"), symbol: "externaldrive.badge.timemachine") {

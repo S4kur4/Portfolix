@@ -9,7 +9,8 @@ let package = Package(
     ],
     products: [
         .executable(name: "Portfolix", targets: ["Portfolix"]),
-        .executable(name: "PortfolixPriceUpdater", targets: ["PortfolixPriceUpdater"])
+        .executable(name: "PortfolixPriceUpdater", targets: ["PortfolixPriceUpdater"]),
+        .executable(name: "PortfolixMCP", targets: ["PortfolixMCP"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0")
@@ -21,6 +22,8 @@ let package = Package(
         .target(
             name: "PortfolixCore"
         ),
+        .target(name: "PortfolixMCPKit", dependencies: ["CSQLite", "PortfolixCore"]),
+        .executableTarget(name: "PortfolixMCP", dependencies: ["PortfolixMCPKit", "PortfolixCore"]),
         .executableTarget(
             name: "Portfolix",
             dependencies: [
@@ -35,7 +38,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PortfolixTests",
-            dependencies: ["Portfolix", "PortfolixCore"]
+            dependencies: ["Portfolix", "PortfolixCore", "PortfolixMCPKit"]
         )
     ]
 )
