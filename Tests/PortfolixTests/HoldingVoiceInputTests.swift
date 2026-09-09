@@ -22,9 +22,13 @@ struct HoldingVoiceInputTests {
     @Test
     func voiceTranscriptUsesBestEffortFormattingWithoutRejectingInput() {
         #expect(HoldingVoiceTranscript.value(from: "  一百零二  ", numeric: true) == "102")
+        #expect(HoldingVoiceTranscript.value(from: "1339 7.5", numeric: true) == "13397.5")
+        #expect(HoldingVoiceTranscript.value(from: "一 百 零 二", numeric: true) == "102")
         #expect(HoldingVoiceTranscript.value(from: "一百二", numeric: true) == "一百二")
         #expect(HoldingVoiceTranscript.value(from: "苹果", numeric: true) == "苹果")
+        #expect(HoldingVoiceTranscript.value(from: "Apple 123", numeric: true) == "Apple 123")
         #expect(HoldingVoiceTranscript.value(from: " Apple ", numeric: false) == "Apple")
+        #expect(HoldingVoiceTranscript.value(from: "hello world", numeric: false) == "hello world")
         #expect(HoldingVoiceTranscript.value(from: "   ", numeric: true) == nil)
     }
 }

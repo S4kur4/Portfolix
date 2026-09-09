@@ -375,7 +375,15 @@ enum HoldingVoiceTranscript {
     static func value(from transcript: String, numeric: Bool) -> String? {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        return numeric ? (SpokenNumber.normalize(text) ?? text) : text
+        guard numeric else { return text }
+        if let normalized = SpokenNumber.normalize(text) { return normalized }
+
+        // Speech recognition can insert grouping spaces inside an otherwise valid number.
+        let compactText = text.filter { !$0.isWhitespace }
+        if compactText != text, let normalized = SpokenNumber.normalize(compactText) {
+            return normalized
+        }
+        return text
     }
 }
 
