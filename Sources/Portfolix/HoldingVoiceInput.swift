@@ -10,6 +10,8 @@ enum HoldingVoiceWaveformMetrics {
     static let barSpacing: CGFloat = 1.5
     static let sampleInterval: TimeInterval = 1.0 / 30.0
     static let historyCount = 768
+    static let noiseFloor: CGFloat = 0.08
+    static let activationSampleCount = 2
 
     static var barStep: CGFloat { barWidth + barSpacing }
 
@@ -24,17 +26,24 @@ enum HoldingVoiceWaveformMetrics {
     static func anchor(for tick: Int64) -> Date {
         Date(timeIntervalSinceReferenceDate: TimeInterval(tick) * sampleInterval)
     }
+
+    static func visualLevel(from rawLevel: CGFloat) -> CGFloat {
+        guard rawLevel > noiseFloor else { return 0 }
+        return min(1, (rawLevel - noiseFloor) / (1 - noiseFloor))
+    }
 }
 
 struct HoldingVoiceWaveformSnapshot: Equatable {
     var levels: [CGFloat]
     var anchor: Date
+    var hasDetectedSignal: Bool
 
     static func empty(at date: Date = Date()) -> HoldingVoiceWaveformSnapshot {
         let tick = HoldingVoiceWaveformMetrics.tick(at: date)
         return HoldingVoiceWaveformSnapshot(
             levels: Array(repeating: 0, count: HoldingVoiceWaveformMetrics.historyCount),
-            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick)
+            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick),
+            hasDetectedSignal: false
         )
     }
 }
@@ -67,6 +76,8 @@ final class HoldingVoiceRecorder: ObservableObject {
     private var waveformTick = HoldingVoiceWaveformMetrics.tick(at: Date())
     private var pendingLevel: CGFloat = 0
     private var smoothedLevel: CGFloat = 0
+    private var signalSampleCount = 0
+    private var hasDetectedSignal = false
 
     func focus(
         numeric: Bool,
@@ -324,7 +335,16 @@ final class HoldingVoiceRecorder: ObservableObject {
         let stepCount = min(Int(elapsedTicks), HoldingVoiceWaveformMetrics.historyCount)
         var newLevels: [CGFloat] = []
         newLevels.reserveCapacity(stepCount)
-        var target = pendingLevel
+        var target = HoldingVoiceWaveformMetrics.visualLevel(from: pendingLevel)
+
+        if target > 0 {
+            signalSampleCount += 1
+            if signalSampleCount >= HoldingVoiceWaveformMetrics.activationSampleCount {
+                hasDetectedSignal = true
+            }
+        } else {
+            signalSampleCount = 0
+        }
 
         for _ in 0 ..< stepCount {
             let response: CGFloat = target > smoothedLevel ? 0.48 : 0.24
@@ -340,7 +360,8 @@ final class HoldingVoiceRecorder: ObservableObject {
         pendingLevel = 0
         waveform = HoldingVoiceWaveformSnapshot(
             levels: levels,
-            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick)
+            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick),
+            hasDetectedSignal: hasDetectedSignal
         )
     }
 
@@ -352,6 +373,8 @@ final class HoldingVoiceRecorder: ObservableObject {
     private func resetWaveform(at date: Date = Date()) {
         prepareWaveformSampling(at: date)
         smoothedLevel = 0
+        signalSampleCount = 0
+        hasDetectedSignal = false
         waveform = .empty(at: date)
     }
 
@@ -626,12 +649,17 @@ struct HoldingVoiceWaveform: View {
     let isFinishing: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
+        TimelineView(.animation(
+            minimumInterval: 1.0 / 120.0,
+            paused: !snapshot.hasDetectedSignal
+        )) { timeline in
             Canvas(rendersAsynchronously: true) { context, size in
                 guard !snapshot.levels.isEmpty, size.width > 0, size.height > 0 else { return }
 
                 let elapsed = max(0, timeline.date.timeIntervalSince(snapshot.anchor))
-                let phase = min(1, elapsed / HoldingVoiceWaveformMetrics.sampleInterval)
+                let phase = snapshot.hasDetectedSignal
+                    ? min(1, elapsed / HoldingVoiceWaveformMetrics.sampleInterval)
+                    : 0
                 let newestX = size.width
                     - HoldingVoiceWaveformMetrics.barWidth
                     - CGFloat(phase) * HoldingVoiceWaveformMetrics.barStep

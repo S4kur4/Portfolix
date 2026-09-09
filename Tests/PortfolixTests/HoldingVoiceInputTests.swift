@@ -29,6 +29,15 @@ struct HoldingVoiceInputTests {
         #expect(date.timeIntervalSince(anchor) < HoldingVoiceWaveformMetrics.sampleInterval)
     }
 
+    @Test
+    func waveformNoiseFloorKeepsSilentInputStationary() {
+        #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 0) == 0)
+        #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 0.08) == 0)
+        #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 0.54) == 0.5)
+        #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 1) == 1)
+        #expect(HoldingVoiceWaveformMetrics.activationSampleCount == 2)
+    }
+
     @Test(arguments: [
         ("12345.67", "12345.67"), ("12,345.67", "12345.67"),
         ("１２３．４５", "123.45"), ("一二三点四五。", "123.45"),
