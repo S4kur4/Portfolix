@@ -37,7 +37,6 @@ struct LLMConfigurationSheet: View {
     @State private var apiKey = ""
     @State private var availableModels = LLMProviderOption.deepSeekModels
     @State private var connectionStatus: ProviderConnectionStatus?
-    @State private var isFetchingModels = false
     @State private var isValidatingAPIKey = false
     @State private var isAPIKeyVisible = false
     @State private var apiKeyValidationTask: Task<Void, Never>?
@@ -68,25 +67,17 @@ struct LLMConfigurationSheet: View {
 
                     if !availableModels.isEmpty {
                         ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
-                            HStack(spacing: PortfolixSpacing.sm) {
-                                if isFetchingModels {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-
-                                Picker("", selection: $model) {
-                                    ForEach(availableModels, id: \.self) { model in
-                                        Text(model).tag(model)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .labelsHidden()
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                                .onChange(of: model) { _, _ in
-                                    scheduleAPIKeyValidation()
+                            Picker("", selection: $model) {
+                                ForEach(availableModels, id: \.self) { model in
+                                    Text(model).tag(model)
                                 }
                             }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                             .frame(width: valueFieldWidth, alignment: .trailing)
+                            .onChange(of: model) { _, _ in
+                                scheduleAPIKeyValidation()
+                            }
                         }
                     } else {
                         ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
@@ -323,8 +314,6 @@ struct LLMConfigurationSheet: View {
         let key = (explicitAPIKey ?? activeAPIKey).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
 
-        isFetchingModels = true
-        defer { isFetchingModels = false }
         let configuration = AIProviderConfiguration(
             provider: provider.rawValue,
             baseURL: baseURL,
