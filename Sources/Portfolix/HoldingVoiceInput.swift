@@ -6,7 +6,7 @@ import OSLog
 import PortfolixCore
 
 @MainActor
-private final class HoldingVoiceRecorder: ObservableObject {
+final class HoldingVoiceRecorder: ObservableObject {
     private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
@@ -31,18 +31,37 @@ private final class HoldingVoiceRecorder: ObservableObject {
     private var numeric = false
     private var english = false
 
-    func focus(numeric: Bool, english: Bool, commit: @escaping (String) -> Void) {
+    func focus(
+        numeric: Bool,
+        english: Bool,
+        shortcut: VoiceInputShortcut = .functionModifier,
+        commit: @escaping (String) -> Void
+    ) {
         self.numeric = numeric
         self.english = english
         self.commit = commit
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, event.keyCode == 63, NSApp.isActive else { return }
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if flags.contains(.function) { self.press() } else { self.release() }
+
+        switch shortcut {
+        case .functionModifier:
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, event.keyCode == 63, NSApp.isActive else { return }
+                    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    if flags.contains(.function) { self.press() } else { self.release() }
+                }
+                return event
             }
-            return event
+        case .f1:
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, event.keyCode == 122, NSApp.isActive else { return }
+                    if event.type == .keyDown { self.press() } else { self.release() }
+                }
+                return event.keyCode == 122 ? nil : event
+            }
+        case .none:
+            break
         }
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
@@ -90,6 +109,16 @@ private final class HoldingVoiceRecorder: ObservableObject {
                 }
                 self.startLegacy(id: id, locale: locale)
             }
+        }
+    }
+
+    func toggle() {
+        if held {
+            release()
+        } else if isRecording || isFinishing {
+            cancel()
+        } else {
+            press()
         }
     }
 
@@ -371,6 +400,12 @@ private final class HoldingVoiceRecorder: ObservableObject {
     }
 }
 
+enum VoiceInputShortcut {
+    case functionModifier
+    case f1
+    case none
+}
+
 enum HoldingVoiceTranscript {
     static func value(from transcript: String, numeric: Bool) -> String? {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -515,7 +550,7 @@ private struct HoldingVoiceInputModifier: ViewModifier {
     }
 }
 
-private struct HoldingVoiceWaveform: View {
+struct HoldingVoiceWaveform: View {
     let levels: [CGFloat]
     let isFinishing: Bool
 

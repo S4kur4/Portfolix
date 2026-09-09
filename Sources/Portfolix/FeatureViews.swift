@@ -1885,25 +1885,65 @@ private struct AIReportChatComposer: View {
     let generate: () -> Void
     let sendFollowUp: (String) -> Void
     @State private var draftMessage = ""
+    @StateObject private var voiceRecorder = HoldingVoiceRecorder()
+    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            TextField(placeholder, text: $draftMessage)
-                .textFieldStyle(.plain)
-                .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.primaryText)
-                .lineLimit(1)
-                .padding(.horizontal, PortfolixSpacing.lg)
-                .frame(height: AIReportComposerMetrics.controlHeight)
-                .portfolixGlass(
-                    in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                    fallbackTint: PortfolixTheme.panelElevated,
-                    fallbackOpacity: 0.68,
-                    interactive: true
-                )
-                .onSubmit {
-                    submitFollowUp()
+            HStack(spacing: PortfolixSpacing.sm) {
+                ZStack {
+                    TextField(placeholder, text: $draftMessage)
+                        .textFieldStyle(.plain)
+                        .font(PortfolixTypography.body)
+                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .lineLimit(1)
+                        .focused($isComposerFocused)
+                        .opacity(isVoiceActive ? 0 : 1)
+                        .disabled(isVoiceActive)
+                        .onSubmit {
+                            submitFollowUp()
+                        }
+
+                    if isVoiceActive {
+                        HoldingVoiceWaveform(
+                            levels: voiceRecorder.levels,
+                            isFinishing: voiceRecorder.isFinishing
+                        )
+                        .padding(.vertical, PortfolixSpacing.xs)
+                        .allowsHitTesting(false)
+                    }
                 }
+
+                Button {
+                    isComposerFocused = true
+                    voiceRecorder.toggle()
+                } label: {
+                    Image(systemName: isVoiceActive ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isVoiceActive ? PortfolixTheme.lilac : PortfolixTheme.secondaryText)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(voiceButtonHelp)
+            }
+            .padding(.leading, PortfolixSpacing.lg)
+            .padding(.trailing, PortfolixSpacing.sm)
+            .frame(height: AIReportComposerMetrics.controlHeight)
+            .portfolixGlass(
+                in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
+                tint: isVoiceActive ? PortfolixTheme.violet.opacity(0.18) : nil,
+                fallbackTint: isVoiceActive ? PortfolixTheme.violet : PortfolixTheme.panelElevated,
+                fallbackOpacity: isVoiceActive ? 0.14 : 0.68,
+                interactive: true
+            )
+            .overlay {
+                if isVoiceActive {
+                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                        .stroke(PortfolixTheme.violet, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
 
             AIReportGenerateButton(
                 title: hasReport
@@ -1923,6 +1963,22 @@ private struct AIReportChatComposer: View {
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
+        .onAppear { configureVoiceRecorder() }
+        .onChange(of: language) { _, _ in configureVoiceRecorder() }
+        .onDisappear { voiceRecorder.blur() }
+        .alert(
+            localizedText("语音输入", "Voice Input", language: language),
+            isPresented: Binding(
+                get: { voiceRecorder.errorMessage != nil },
+                set: { if !$0 { voiceRecorder.errorMessage = nil } }
+            )
+        ) {
+            Button(localizedText("好", "OK", language: language)) {
+                voiceRecorder.errorMessage = nil
+            }
+        } message: {
+            Text(voiceRecorder.errorMessage ?? "")
+        }
     }
 
     private var placeholder: String {
@@ -1931,6 +1987,26 @@ private struct AIReportChatComposer: View {
 
     private var canSubmitFollowUp: Bool {
         canSendFollowUp && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isVoiceActive: Bool {
+        voiceRecorder.isRecording || voiceRecorder.isFinishing
+    }
+
+    private var voiceButtonHelp: String {
+        localizedText(
+            isVoiceActive ? "结束语音输入。" : "开始语音输入，也可按住 F1。",
+            isVoiceActive ? "Finish voice input." : "Start voice input, or hold F1.",
+            language: language
+        )
+    }
+
+    private func configureVoiceRecorder() {
+        voiceRecorder.focus(
+            numeric: false,
+            english: language == .english,
+            shortcut: .f1
+        ) { draftMessage = $0 }
     }
 
     private func submitFollowUp() {
