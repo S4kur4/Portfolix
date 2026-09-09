@@ -3446,8 +3446,8 @@ struct SettingsView: View {
                     SettingsToggleRow(
                         title: settingsText("AI 资产分析", "AI Asset Analysis"),
                         helpText: settingsText(
-                            "开启后，Portfolix 将通过 DeepSeek 分析您的资产组合、收益及风险偏好",
-                            "When enabled, Portfolix uses DeepSeek to analyze your portfolio, returns, and risk preferences"
+                            "开启后，Portfolix 将通过 DeepSeek 分析您的资产组合、收益及风险偏好。",
+                            "When enabled, Portfolix uses DeepSeek to analyze your portfolio, returns, and risk preferences."
                         ),
                         helpPlacement: .trailing,
                         isOn: $store.aiConfiguration.isEnabled
