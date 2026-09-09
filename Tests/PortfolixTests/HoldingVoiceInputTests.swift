@@ -36,6 +36,22 @@ struct HoldingVoiceInputTests {
         #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 0.54) == 0.5)
         #expect(HoldingVoiceWaveformMetrics.visualLevel(from: 1) == 1)
         #expect(HoldingVoiceWaveformMetrics.activationSampleCount == 2)
+
+        let silent = HoldingVoiceWaveformSnapshot.empty()
+        #expect(!silent.hasVisibleSignal(for: 120))
+        #expect(!silent.hasVisibleSignal(for: 720))
+    }
+
+    @Test
+    func waveformStopsAfterTheSignalLeavesTheVisibleWindow() {
+        var snapshot = HoldingVoiceWaveformSnapshot.empty()
+        snapshot.levels[snapshot.levels.count - 1] = 0.8
+        #expect(snapshot.hasVisibleSignal(for: 120))
+
+        let visibleCount = HoldingVoiceWaveformMetrics.visibleBarCount(for: 120)
+        snapshot.levels = Array(snapshot.levels.dropLast(visibleCount))
+            + Array(repeating: 0, count: visibleCount)
+        #expect(!snapshot.hasVisibleSignal(for: 120))
     }
 
     @Test(arguments: [
