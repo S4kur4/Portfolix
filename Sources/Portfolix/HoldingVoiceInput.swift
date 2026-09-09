@@ -557,19 +557,31 @@ struct HoldingVoiceWaveform: View {
     var body: some View {
         Canvas { context, size in
             guard !levels.isEmpty, size.width > 0, size.height > 0 else { return }
-            let step = size.width / CGFloat(levels.count)
-            let width = max(1, min(3, step * 0.52))
-            for (index, level) in levels.enumerated() {
+            let barWidth: CGFloat = 1.75
+            let barSpacing: CGFloat = 1.5
+            let step = barWidth + barSpacing
+            let barCount = max(1, Int((size.width + barSpacing) / step))
+            let contentWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
+            let leadingInset = max(0, (size.width - contentWidth) / 2)
+
+            for index in 0 ..< barCount {
+                let samplePosition = barCount > 1
+                    ? CGFloat(index) / CGFloat(barCount - 1) * CGFloat(levels.count - 1)
+                    : CGFloat(levels.count - 1)
+                let lowerIndex = Int(samplePosition.rounded(.down))
+                let upperIndex = min(lowerIndex + 1, levels.count - 1)
+                let fraction = samplePosition - CGFloat(lowerIndex)
+                let level = levels[lowerIndex] + (levels[upperIndex] - levels[lowerIndex]) * fraction
                 let normalized = max(0.08, min(1, level))
                 let height = max(2, normalized * size.height * 0.82)
                 let rect = CGRect(
-                    x: CGFloat(index) * step + (step - width) / 2,
+                    x: leadingInset + CGFloat(index) * step,
                     y: (size.height - height) / 2,
-                    width: width,
+                    width: barWidth,
                     height: height
                 )
                 context.fill(
-                    Path(roundedRect: rect, cornerRadius: width / 2),
+                    Path(roundedRect: rect, cornerRadius: barWidth / 2),
                     with: .color(PortfolixTheme.violet.opacity(isFinishing ? 0.45 : 0.9))
                 )
             }
