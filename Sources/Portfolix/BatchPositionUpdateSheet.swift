@@ -45,6 +45,9 @@ struct BatchPositionUpdateSheet: View {
                         }
                     }
                 }
+                .clipShape(
+                    RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                )
             }
             .padding(.horizontal, PortfolixSpacing.xl)
             .padding(.vertical, PortfolixSpacing.xl)
