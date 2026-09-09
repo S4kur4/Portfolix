@@ -156,8 +156,11 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         }
     }
 
-    func listModels(configuration _: AIProviderConfiguration, apiKey _: String) async throws -> [String] {
-        LLMProviderOption.deepSeekModels
+    func listModels(configuration: AIProviderConfiguration, apiKey: String) async throws -> [String] {
+        try await OpenAICompatibleClient(session: session).listModels(
+            configuration: configuration,
+            apiKey: apiKey
+        )
     }
 
     private func makeRequest(

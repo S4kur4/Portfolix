@@ -68,17 +68,25 @@ struct LLMConfigurationSheet: View {
 
                     if !availableModels.isEmpty {
                         ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
-                            Picker("", selection: $model) {
-                                ForEach(availableModels, id: \.self) { model in
-                                    Text(model).tag(model)
+                            HStack(spacing: PortfolixSpacing.sm) {
+                                if isFetchingModels {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+
+                                Picker("", selection: $model) {
+                                    ForEach(availableModels, id: \.self) { model in
+                                        Text(model).tag(model)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .onChange(of: model) { _, _ in
+                                    scheduleAPIKeyValidation()
                                 }
                             }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
                             .frame(width: valueFieldWidth, alignment: .trailing)
-                            .onChange(of: model) { _, _ in
-                                scheduleAPIKeyValidation()
-                            }
                         }
                     } else {
                         ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
@@ -130,13 +138,19 @@ struct LLMConfigurationSheet: View {
             let configuration = store.aiConfiguration
             provider = .deepSeek
             baseURL = LLMProviderOption.deepSeek.defaultBaseURL
-            model = LLMProviderOption.deepSeekModels.contains(configuration.model)
+            availableModels = LLMProviderOption.sanitizedDeepSeekModels(
+                LLMProviderOption.deepSeekModels
+                    + AIProviderConfigurationStore.loadCachedModels(provider: .deepSeek)
+            )
+            model = availableModels.contains(configuration.model)
                 ? configuration.model
                 : LLMProviderOption.deepSeek.defaultModel
-            availableModels = LLMProviderOption.deepSeekModels
             store.refreshProviderCredentialState()
             apiKey = (try? store.readProviderAPIKey(kind: .llm)) ?? ""
             isAPIKeyVisible = false
+        }
+        .task {
+            await refreshModelsFromAPI()
         }
         .onDisappear {
             apiKeyValidationTask?.cancel()
@@ -286,6 +300,7 @@ struct LLMConfigurationSheet: View {
 
             do {
                 try await LLMAPIKeyValidationProbe.validate(configuration: configuration, apiKey: key)
+                await refreshModelsFromAPI(apiKey: key)
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     isValidatingAPIKey = false
@@ -303,11 +318,11 @@ struct LLMConfigurationSheet: View {
         }
     }
 
-    private func fetchModelsAndValidate() async {
-        guard hasValidBaseURL else {
-            connectionStatus = .failure(baseURLValidationError ?? text("API Base URL 无效", "Invalid API Base URL"))
-            return
-        }
+    private func refreshModelsFromAPI(apiKey explicitAPIKey: String? = nil) async {
+        guard hasValidBaseURL else { return }
+        let key = (explicitAPIKey ?? activeAPIKey).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+
         isFetchingModels = true
         defer { isFetchingModels = false }
         let configuration = AIProviderConfiguration(
@@ -318,24 +333,18 @@ struct LLMConfigurationSheet: View {
         )
 
         do {
-            let models = try await LLMProviderClient.shared.listModels(configuration: configuration, apiKey: activeAPIKey)
+            let fetchedModels = try await LLMProviderClient.shared.listModels(
+                configuration: configuration,
+                apiKey: key
+            )
+            let models = LLMProviderOption.sanitizedDeepSeekModels(fetchedModels)
+            guard !models.isEmpty else { return }
+            let previousModel = model
             availableModels = models
             AIProviderConfigurationStore.saveCachedModels(models, provider: provider)
-            if !models.isEmpty {
-                model = models.first ?? model
-            }
-            let validationConfiguration = AIProviderConfiguration(
-                provider: provider.rawValue,
-                baseURL: baseURL,
-                model: model.trimmingCharacters(in: .whitespacesAndNewlines),
-                isEnabled: store.aiConfiguration.isEnabled
-            )
-            try await LLMAPIKeyValidationProbe.validate(configuration: validationConfiguration, apiKey: activeAPIKey)
-            connectionStatusFingerprint = validationFingerprint(apiKey: activeAPIKey)
-            connectionStatus = .success(text("API 已验证", "API validated"))
+            model = models.contains(previousModel) ? previousModel : (models.first ?? previousModel)
         } catch {
-            connectionStatus = .failure(error.localizedDescription)
-            connectionStatusFingerprint = validationFingerprint(apiKey: activeAPIKey)
+            // Keep the embedded or cached catalog available when refresh fails.
         }
     }
 

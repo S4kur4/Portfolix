@@ -508,7 +508,10 @@ struct AIReportView: View {
     }
 
     private var availableModelOptions: [String] {
-        LLMProviderOption.deepSeekModels
+        LLMProviderOption.sanitizedDeepSeekModels(
+            LLMProviderOption.deepSeekModels
+                + AIProviderConfigurationStore.loadCachedModels(provider: .deepSeek)
+        )
     }
 }
 

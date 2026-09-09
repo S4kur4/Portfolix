@@ -38,4 +38,42 @@ struct ProviderConfigurationSheetTests {
         #expect(view.plainField.stringValue == key)
         #expect(view.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.count == 1)
     }
+
+    @Test
+    func deepSeekModelCatalogRejectsUnexpectedIdentifiers() {
+        let models = LLMProviderOption.sanitizedDeepSeekModels([
+            " deepseek-v4-pro ",
+            "deepseek-v4-pro",
+            "deepseek-v5-preview",
+            "../unexpected",
+            "deepseek-model with spaces",
+        ])
+
+        #expect(models == ["deepseek-v4-pro", "deepseek-v5-preview"])
+    }
+
+    @Test
+    func cachedDeepSeekModelCanBeSelectedAndRestored() throws {
+        let suiteName = "Portfolix.ProviderConfigurationSheetTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = "deepseek-v5-preview"
+
+        AIProviderConfigurationStore.saveCachedModels(
+            [model],
+            provider: .deepSeek,
+            defaults: defaults
+        )
+        AIProviderConfigurationStore.saveLLM(
+            AIProviderConfiguration(
+                provider: LLMProviderOption.deepSeek.rawValue,
+                baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+                model: model,
+                isEnabled: true
+            ),
+            defaults: defaults
+        )
+
+        #expect(AIProviderConfigurationStore.loadLLM(defaults: defaults).model == model)
+    }
 }

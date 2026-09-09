@@ -197,7 +197,25 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         return LLMProviderOption(rawValue: value) ?? .openAICompatible
     }
 
-    static let deepSeekModels = ["deepseek-v4-flash", "deepseek-v4-pro"]
+    static let deepSeekModels = [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash-vision-exp",
+    ]
+
+    static func sanitizedDeepSeekModels(_ models: [String]) -> [String] {
+        let allowedCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
+        return models.reduce(into: [String]()) { result, model in
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("deepseek-"),
+                  trimmed.utf8.count <= 128,
+                  trimmed.unicodeScalars.allSatisfy(allowedCharacters.contains),
+                  !result.contains(trimmed) else {
+                return
+            }
+            result.append(trimmed)
+        }
+    }
 }
 
 struct AIProviderConfiguration: Equatable {
@@ -347,11 +365,12 @@ enum AIProviderConfigurationStore {
     private static let searchProviderKey = "portfolix.ai.search.provider"
     private static let searchQualityKey = "portfolix.ai.search.quality"
 
-    static func loadLLM() -> AIProviderConfiguration {
-        let defaults = UserDefaults.standard
+    static func loadLLM(defaults: UserDefaults = .standard) -> AIProviderConfiguration {
         let fallback = AIProviderConfiguration.default
         let savedModel = defaults.string(forKey: llmModelKey)
-        let model = LLMProviderOption.deepSeekModels.contains(savedModel ?? "")
+        let availableModels = LLMProviderOption.deepSeekModels
+            + loadCachedModels(provider: .deepSeek, defaults: defaults)
+        let model = availableModels.contains(savedModel ?? "")
             ? (savedModel ?? fallback.model)
             : fallback.model
         return AIProviderConfiguration(
@@ -362,9 +381,10 @@ enum AIProviderConfigurationStore {
         )
     }
 
-    static func saveLLM(_ configuration: AIProviderConfiguration) {
-        let defaults = UserDefaults.standard
-        let model = LLMProviderOption.deepSeekModels.contains(configuration.model)
+    static func saveLLM(_ configuration: AIProviderConfiguration, defaults: UserDefaults = .standard) {
+        let availableModels = LLMProviderOption.deepSeekModels
+            + loadCachedModels(provider: .deepSeek, defaults: defaults)
+        let model = availableModels.contains(configuration.model)
             ? configuration.model
             : LLMProviderOption.deepSeek.defaultModel
         defaults.set(LLMProviderOption.deepSeek.rawValue, forKey: llmProviderKey)
@@ -373,17 +393,29 @@ enum AIProviderConfigurationStore {
         defaults.set(configuration.isEnabled, forKey: llmEnabledKey)
     }
 
-    static func loadCachedModels(provider: LLMProviderOption) -> [String] {
-        UserDefaults.standard.stringArray(forKey: cachedModelsKey(provider: provider)) ?? []
+    static func loadCachedModels(
+        provider: LLMProviderOption,
+        defaults: UserDefaults = .standard
+    ) -> [String] {
+        let models = defaults.stringArray(forKey: cachedModelsKey(provider: provider)) ?? []
+        return provider == .deepSeek
+            ? LLMProviderOption.sanitizedDeepSeekModels(models)
+            : models
     }
 
-    static func saveCachedModels(_ models: [String], provider: LLMProviderOption) {
-        let cleaned = models.reduce(into: [String]()) { result, model in
-            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !result.contains(trimmed) else { return }
-            result.append(trimmed)
-        }
-        UserDefaults.standard.set(cleaned, forKey: cachedModelsKey(provider: provider))
+    static func saveCachedModels(
+        _ models: [String],
+        provider: LLMProviderOption,
+        defaults: UserDefaults = .standard
+    ) {
+        let cleaned = provider == .deepSeek
+            ? LLMProviderOption.sanitizedDeepSeekModels(models)
+            : models.reduce(into: [String]()) { result, model in
+                let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !result.contains(trimmed) else { return }
+                result.append(trimmed)
+            }
+        defaults.set(cleaned, forKey: cachedModelsKey(provider: provider))
     }
 
     private static func cachedModelsKey(provider: LLMProviderOption) -> String {
