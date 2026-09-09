@@ -443,33 +443,25 @@ private final class VoiceAudioSink: @unchecked Sendable {
     }
 }
 
+enum HoldingVoiceInputAppearance: Equatable {
+    case highlightedField
+    case waveformOnly
+}
+
 private struct HoldingVoiceInputModifier: ViewModifier {
     @StateObject private var recorder = HoldingVoiceRecorder()
     @Binding var text: String
     let isFocused: Bool
     let numeric: Bool
     let language: AppLanguage
+    let appearance: HoldingVoiceInputAppearance
 
     func body(content: Content) -> some View {
         content
+            .opacity(isVoiceActive && appearance == .waveformOnly ? 0 : 1)
             .overlay {
-                if recorder.isRecording || recorder.isFinishing {
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                        .fill(PortfolixTheme.panelElevated)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                                .fill(PortfolixTheme.violet.opacity(0.14))
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                                .stroke(PortfolixTheme.violet, lineWidth: 1)
-                        }
-                        .overlay {
-                            HoldingVoiceWaveform(levels: recorder.levels, isFinishing: recorder.isFinishing)
-                                .padding(.horizontal, PortfolixSpacing.sm)
-                                .padding(.vertical, PortfolixSpacing.xs)
-                        }
-                        .allowsHitTesting(false)
+                if isVoiceActive {
+                    voiceOverlay
                 }
             }
             .help(language == .english ? "Hold Fn to speak; release to fill this field." : "按住 Fn 说话，松开后填入当前字段。")
@@ -488,6 +480,38 @@ private struct HoldingVoiceInputModifier: ViewModifier {
             )) {
                 Button(language == .english ? "OK" : "好") { recorder.errorMessage = nil }
             } message: { Text(recorder.errorMessage ?? "") }
+    }
+
+    private var isVoiceActive: Bool {
+        recorder.isRecording || recorder.isFinishing
+    }
+
+    @ViewBuilder
+    private var voiceOverlay: some View {
+        switch appearance {
+        case .highlightedField:
+            RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+                .fill(PortfolixTheme.panelElevated)
+                .overlay {
+                    RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+                        .fill(PortfolixTheme.violet.opacity(0.14))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+                        .stroke(PortfolixTheme.violet, lineWidth: 1)
+                }
+                .overlay { waveform }
+                .allowsHitTesting(false)
+        case .waveformOnly:
+            waveform
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var waveform: some View {
+        HoldingVoiceWaveform(levels: recorder.levels, isFinishing: recorder.isFinishing)
+            .padding(.horizontal, PortfolixSpacing.sm)
+            .padding(.vertical, PortfolixSpacing.xs)
     }
 }
 
@@ -521,7 +545,19 @@ private struct HoldingVoiceWaveform: View {
 }
 
 extension View {
-    func holdingVoiceInput(text: Binding<String>, isFocused: Bool, numeric: Bool, language: AppLanguage) -> some View {
-        modifier(HoldingVoiceInputModifier(text: text, isFocused: isFocused, numeric: numeric, language: language))
+    func holdingVoiceInput(
+        text: Binding<String>,
+        isFocused: Bool,
+        numeric: Bool,
+        language: AppLanguage,
+        appearance: HoldingVoiceInputAppearance
+    ) -> some View {
+        modifier(HoldingVoiceInputModifier(
+            text: text,
+            isFocused: isFocused,
+            numeric: numeric,
+            language: language,
+            appearance: appearance
+        ))
     }
 }

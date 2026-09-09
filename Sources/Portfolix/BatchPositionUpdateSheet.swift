@@ -267,7 +267,13 @@ private struct PositionUpdateRow: View {
             }
             .disabled(isDisabled)
             .focused($focusedField, equals: field)
-            .holdingVoiceInput(text: text, isFocused: !isDisabled && focusedField == field, numeric: true, language: language)
+            .holdingVoiceInput(
+                text: text,
+                isFocused: !isDisabled && focusedField == field,
+                numeric: true,
+                language: language,
+                appearance: .highlightedField
+            )
             .accessibilityLabel("\(draft.position.name) \(field.title(language: language))")
     }
 

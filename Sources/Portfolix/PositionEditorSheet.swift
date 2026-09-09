@@ -144,7 +144,9 @@ struct PositionEditorSheet: View {
                         .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
                         .holdingVoiceInput(
                             text: text, isFocused: focusedField == field,
-                            numeric: field == .quantity || field == .cost, language: language
+                            numeric: field == .quantity || field == .cost,
+                            language: language,
+                            appearance: .waveformOnly
                         )
                 }
             }
