@@ -5,12 +5,46 @@ import AppKit
 import OSLog
 import PortfolixCore
 
+enum HoldingVoiceWaveformMetrics {
+    static let barWidth: CGFloat = 1.75
+    static let barSpacing: CGFloat = 1.5
+    static let sampleInterval: TimeInterval = 1.0 / 30.0
+    static let historyCount = 768
+
+    static var barStep: CGFloat { barWidth + barSpacing }
+
+    static func visibleBarCount(for width: CGFloat) -> Int {
+        max(1, Int(ceil(width / barStep)) + 1)
+    }
+
+    static func tick(at date: Date) -> Int64 {
+        Int64(floor(date.timeIntervalSinceReferenceDate / sampleInterval))
+    }
+
+    static func anchor(for tick: Int64) -> Date {
+        Date(timeIntervalSinceReferenceDate: TimeInterval(tick) * sampleInterval)
+    }
+}
+
+struct HoldingVoiceWaveformSnapshot: Equatable {
+    var levels: [CGFloat]
+    var anchor: Date
+
+    static func empty(at date: Date = Date()) -> HoldingVoiceWaveformSnapshot {
+        let tick = HoldingVoiceWaveformMetrics.tick(at: date)
+        return HoldingVoiceWaveformSnapshot(
+            levels: Array(repeating: 0, count: HoldingVoiceWaveformMetrics.historyCount),
+            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick)
+        )
+    }
+}
+
 @MainActor
 final class HoldingVoiceRecorder: ObservableObject {
     private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
-    @Published private(set) var levels = Array(repeating: CGFloat.zero, count: 36)
+    @Published private(set) var waveform = HoldingVoiceWaveformSnapshot.empty()
     @Published var errorMessage: String?
     private var monitor: Any?
     private var resignObserver: NSObjectProtocol?
@@ -30,6 +64,9 @@ final class HoldingVoiceRecorder: ObservableObject {
     private var commit: ((String) -> Void)?
     private var numeric = false
     private var english = false
+    private var waveformTick = HoldingVoiceWaveformMetrics.tick(at: Date())
+    private var pendingLevel: CGFloat = 0
+    private var smoothedLevel: CGFloat = 0
 
     func focus(
         numeric: Bool,
@@ -85,7 +122,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         retryCount = 0
         transcript = ""
         receivedFinal = false
-        levels = Array(repeating: 0, count: levels.count)
+        resetWaveform()
         isFinishing = true
         let id = UUID()
         session = id
@@ -161,6 +198,7 @@ final class HoldingVoiceRecorder: ObservableObject {
             }
             self.modernSession = modernSession
             isFinishing = false
+            prepareWaveformSampling()
             isRecording = true
             scheduleRecordingTimeout(id: id)
         } catch {
@@ -217,6 +255,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         do {
             engine.prepare()
             try engine.start()
+            prepareWaveformSampling()
             isRecording = true
             scheduleRecordingTimeout(id: id)
         } catch {
@@ -276,12 +315,44 @@ final class HoldingVoiceRecorder: ObservableObject {
 
     private func record(level: Float, id: UUID) {
         guard session == id, isRecording else { return }
-        let previous = levels.last ?? 0
-        let target = CGFloat(level)
-        let response: CGFloat = target > previous ? 0.72 : 0.38
-        let value = previous + (target - previous) * response
-        levels.removeFirst()
-        levels.append(value)
+        pendingLevel = max(pendingLevel, CGFloat(level))
+
+        let tick = HoldingVoiceWaveformMetrics.tick(at: Date())
+        guard tick > waveformTick else { return }
+
+        let elapsedTicks = tick - waveformTick
+        let stepCount = min(Int(elapsedTicks), HoldingVoiceWaveformMetrics.historyCount)
+        var newLevels: [CGFloat] = []
+        newLevels.reserveCapacity(stepCount)
+        var target = pendingLevel
+
+        for _ in 0 ..< stepCount {
+            let response: CGFloat = target > smoothedLevel ? 0.48 : 0.24
+            smoothedLevel += (target - smoothedLevel) * response
+            newLevels.append(smoothedLevel)
+            target *= 0.82
+        }
+
+        let retainedCount = HoldingVoiceWaveformMetrics.historyCount - stepCount
+        var levels = Array(waveform.levels.suffix(retainedCount))
+        levels.append(contentsOf: newLevels)
+        waveformTick = tick
+        pendingLevel = 0
+        waveform = HoldingVoiceWaveformSnapshot(
+            levels: levels,
+            anchor: HoldingVoiceWaveformMetrics.anchor(for: tick)
+        )
+    }
+
+    private func prepareWaveformSampling(at date: Date = Date()) {
+        waveformTick = HoldingVoiceWaveformMetrics.tick(at: date)
+        pendingLevel = 0
+    }
+
+    private func resetWaveform(at date: Date = Date()) {
+        prepareWaveformSampling(at: date)
+        smoothedLevel = 0
+        waveform = .empty(at: date)
     }
 
     @available(macOS 26.0, *)
@@ -390,7 +461,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         recognizer = nil
         isRecording = false
         isFinishing = false
-        levels = Array(repeating: 0, count: levels.count)
+        resetWaveform()
         transcript = ""
     }
 
@@ -544,49 +615,53 @@ private struct HoldingVoiceInputModifier: ViewModifier {
     }
 
     private var waveform: some View {
-        HoldingVoiceWaveform(levels: recorder.levels, isFinishing: recorder.isFinishing)
+        HoldingVoiceWaveform(snapshot: recorder.waveform, isFinishing: recorder.isFinishing)
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, PortfolixSpacing.xs)
     }
 }
 
 struct HoldingVoiceWaveform: View {
-    let levels: [CGFloat]
+    let snapshot: HoldingVoiceWaveformSnapshot
     let isFinishing: Bool
 
     var body: some View {
-        Canvas { context, size in
-            guard !levels.isEmpty, size.width > 0, size.height > 0 else { return }
-            let barWidth: CGFloat = 1.75
-            let barSpacing: CGFloat = 1.5
-            let step = barWidth + barSpacing
-            let barCount = max(1, Int((size.width + barSpacing) / step))
-            let contentWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
-            let leadingInset = max(0, (size.width - contentWidth) / 2)
+        TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
+            Canvas(rendersAsynchronously: true) { context, size in
+                guard !snapshot.levels.isEmpty, size.width > 0, size.height > 0 else { return }
 
-            for index in 0 ..< barCount {
-                let samplePosition = barCount > 1
-                    ? CGFloat(index) / CGFloat(barCount - 1) * CGFloat(levels.count - 1)
-                    : CGFloat(levels.count - 1)
-                let lowerIndex = Int(samplePosition.rounded(.down))
-                let upperIndex = min(lowerIndex + 1, levels.count - 1)
-                let fraction = samplePosition - CGFloat(lowerIndex)
-                let level = levels[lowerIndex] + (levels[upperIndex] - levels[lowerIndex]) * fraction
-                let normalized = max(0.08, min(1, level))
-                let height = max(2, normalized * size.height * 0.82)
-                let rect = CGRect(
-                    x: leadingInset + CGFloat(index) * step,
-                    y: (size.height - height) / 2,
-                    width: barWidth,
-                    height: height
+                let elapsed = max(0, timeline.date.timeIntervalSince(snapshot.anchor))
+                let phase = min(1, elapsed / HoldingVoiceWaveformMetrics.sampleInterval)
+                let newestX = size.width
+                    - HoldingVoiceWaveformMetrics.barWidth
+                    - CGFloat(phase) * HoldingVoiceWaveformMetrics.barStep
+                let barCount = min(
+                    snapshot.levels.count,
+                    HoldingVoiceWaveformMetrics.visibleBarCount(for: size.width)
                 )
-                context.fill(
-                    Path(roundedRect: rect, cornerRadius: barWidth / 2),
-                    with: .color(PortfolixTheme.violet.opacity(isFinishing ? 0.45 : 0.9))
-                )
+
+                for age in 0 ..< barCount {
+                    let x = newestX - CGFloat(age) * HoldingVoiceWaveformMetrics.barStep
+                    guard x + HoldingVoiceWaveformMetrics.barWidth >= 0 else { break }
+                    let level = snapshot.levels[snapshot.levels.count - 1 - age]
+                    let normalized = max(0.08, min(1, level))
+                    let height = max(2, normalized * size.height * 0.82)
+                    let rect = CGRect(
+                        x: x,
+                        y: (size.height - height) / 2,
+                        width: HoldingVoiceWaveformMetrics.barWidth,
+                        height: height
+                    )
+                    context.fill(
+                        Path(
+                            roundedRect: rect,
+                            cornerRadius: HoldingVoiceWaveformMetrics.barWidth / 2
+                        ),
+                        with: .color(PortfolixTheme.violet.opacity(isFinishing ? 0.45 : 0.9))
+                    )
+                }
             }
         }
-        .animation(.linear(duration: 1 / 60), value: levels)
         .accessibilityHidden(true)
     }
 }

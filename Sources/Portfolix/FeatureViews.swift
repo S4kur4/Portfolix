@@ -1918,7 +1918,7 @@ private struct AIReportChatComposer: View {
 
                     if isVoiceActive {
                         HoldingVoiceWaveform(
-                            levels: voiceRecorder.levels,
+                            snapshot: voiceRecorder.waveform,
                             isFinishing: voiceRecorder.isFinishing
                         )
                         .padding(.vertical, PortfolixSpacing.xs)

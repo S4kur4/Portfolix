@@ -1,8 +1,34 @@
+import Foundation
 import Testing
 import PortfolixCore
 @testable import Portfolix
 
 struct HoldingVoiceInputTests {
+    @Test
+    func waveformWidthOnlyChangesTheVisibleBarCount() {
+        let shortCount = HoldingVoiceWaveformMetrics.visibleBarCount(for: 120)
+        let longCount = HoldingVoiceWaveformMetrics.visibleBarCount(for: 720)
+
+        #expect(HoldingVoiceWaveformMetrics.barWidth == 1.75)
+        #expect(HoldingVoiceWaveformMetrics.barSpacing == 1.5)
+        #expect(longCount > shortCount)
+        #expect(
+            abs(
+                CGFloat(longCount - shortCount) * HoldingVoiceWaveformMetrics.barStep - 600
+            ) <= HoldingVoiceWaveformMetrics.barStep
+        )
+    }
+
+    @Test
+    func waveformTimelineUsesOneGlobalSamplingGrid() {
+        let date = Date(timeIntervalSinceReferenceDate: 123_456.789)
+        let tick = HoldingVoiceWaveformMetrics.tick(at: date)
+        let anchor = HoldingVoiceWaveformMetrics.anchor(for: tick)
+
+        #expect(anchor <= date)
+        #expect(date.timeIntervalSince(anchor) < HoldingVoiceWaveformMetrics.sampleInterval)
+    }
+
     @Test(arguments: [
         ("12345.67", "12345.67"), ("12,345.67", "12345.67"),
         ("１２３．４５", "123.45"), ("一二三点四五。", "123.45"),
