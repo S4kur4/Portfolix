@@ -8,6 +8,7 @@ struct PositionsView: View {
     @State private var isBatchDeletionConfirmationPresented = false
     @State private var isPositionUpdatePresented = false
     @State private var operationErrorMessage: String?
+    @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
@@ -69,6 +70,7 @@ struct PositionsView: View {
                             TextField(localizedText("搜索资产代码或名称", "Search code or name", language: store.appLanguage), text: $store.searchText)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 12))
+                                .focused($isSearchFieldFocused)
                         }
                         .padding(.horizontal, PortfolixSpacing.md)
                         .padding(.vertical, PortfolixSpacing.sm)
@@ -78,6 +80,13 @@ struct PositionsView: View {
                             fallbackTint: PortfolixTheme.panelElevated,
                             fallbackOpacity: 0.62,
                             interactive: true
+                        )
+                        .holdingVoiceInput(
+                            text: $store.searchText,
+                            isFocused: isSearchFieldFocused,
+                            numeric: false,
+                            language: store.appLanguage,
+                            appearance: .highlightedField
                         )
 
                         Spacer()
