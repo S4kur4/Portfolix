@@ -205,6 +205,22 @@ struct PositionRepositoryTests {
         #expect(store.positions.first?.weeklyTrend.last == 112)
     }
 
+    @Test @MainActor
+    func portfolioStoreWithInjectedRepositoryDoesNotOverwriteBackgroundUpdateAuthorization() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        try repository.setAppSetting(
+            key: AutomaticPriceUpdateSchedule.enabledSettingKey,
+            value: "true"
+        )
+
+        _ = PortfolioStore(positionRepository: repository)
+
+        #expect(
+            try repository.appSetting(for: AutomaticPriceUpdateSchedule.enabledSettingKey) == "true"
+        )
+    }
+
     @Test
     func dataPackageRoundTripsFinancialHistoryWithoutSensitiveData() throws {
         let (_, sourceDatabaseURL) = makeDatabaseURLs()

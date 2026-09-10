@@ -847,7 +847,8 @@ final class PortfolioStore: ObservableObject {
         credentialStore: ProviderCredentialStoring? = nil,
         aiAgent: AIAnalysisAgent? = nil
     ) {
-        backgroundUpdatesEnabled = positionRepository == nil && !Self.shouldSkipLaunchRefresh
+        let managesSystemBackgroundUpdates = positionRepository == nil && !Self.shouldSkipLaunchRefresh
+        backgroundUpdatesEnabled = managesSystemBackgroundUpdates
             ? UserDefaults.standard.bool(forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             : false
         automaticPriceUpdateFrequency = Self.savedAutomaticPriceUpdateFrequency()
@@ -898,8 +899,10 @@ final class PortfolioStore: ObservableObject {
         seedAIAnalysisChatIfNeeded()
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
-        persistAutomaticPriceUpdateSetting()
-        configureLoginItem()
+        if managesSystemBackgroundUpdates {
+            persistAutomaticPriceUpdateSetting()
+            configureLoginItem()
+        }
     }
 
     func updateRelativeTime(now: Date = .now) {
