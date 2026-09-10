@@ -3,50 +3,50 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.6</title>
-            <pubDate>Tue, 25 Aug 2026 21:23:23 +0800</pubDate>
+            <title>0.1.7</title>
+            <pubDate>Thu, 10 Sep 2026 21:13:43 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>16</sparkle:version>
-            <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
+            <sparkle:version>17</sparkle:version>
+            <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.6
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.7
 
-Portfolix v0.1.6 进一步简化了智能分析配置，并提升了日常持仓维护和行情更新的可靠性。
+Portfolix v0.1.7 让日常持仓维护更轻松，并首次提供安全、可控的本机 MCP 数据访问能力。
 
 ## 新功能
 
-- **DeepSeek 智能分析**：智能分析统一使用 DeepSeek API，并可在联网增强模式下调用模型内建搜索；运行状态会实时展示模型搜索与推理进度。
-- **批量更新持仓**：可在持仓明细中集中修改多项资产的份额、成本价或持仓总成本，减少重复操作。
+- **本机语音输入**：在添加、编辑及批量更新持仓时，可按住 Fn 说话并在松开后填入内容；持仓搜索和 Portfolix Agent 输入框也支持语音输入。语音识别由 Apple 本机框架完成，录音不会发送给 DeepSeek。
+- **只读 MCP 服务器**：可按需授权本机 AI 工具读取持仓、组合历史、每日盈亏及资产价格历史。该能力默认关闭，不开放 API Key、聊天记录、任意 SQL、文件访问或写入操作。
+- **DeepSeek 模型目录更新**：打开 DeepSeek API 配置后，可使用当前凭据获取并缓存服务端可用模型列表。
 
 ## 体验优化
 
-- 自动价格更新严格遵循用户设置的更新频率，重新打开或最小化 App 不再触发额外刷新。
-- 同一天内重复获取行情时会更新当日记录，不再重复累计；后台更新失败时会自动重试并记录准确结果。
-- 智能分析改为读取已保存的最新行情，不再绕过用户设置额外触发价格更新。
-- 修复 App 更新后后台价格组件仍绑定旧构建、反复启动失败并弹出系统错误框的问题。
-- 修复每日盈亏柱状图在月末和单日数据场景下的坐标与内容遮挡问题。
-- 简化投资画像说明，并统一侧边栏与主要卡片在亮色和暗色模式下的背景色。
+- 精简持仓明细表格，移除持仓成本价和最新价格两列，并调整默认列宽，使常用信息在默认窗口下完整显示。
+- 统一所有语音输入场景的高亮、波形粗细、速度和静音状态，修复焦点切换闪烁、识别崩溃、数字空格及波形抖动问题。
+- 后台行情更新写入本地数据后，重新打开窗口或回到 App 时会立即呈现最新结果，不再等待下一次界面轮询。
+- 修复测试模式可能覆盖正式环境后台行情开关的问题，并保持用户设定的更新频率不变。
+- 补齐持仓搜索框的语音输入提示，并统一智能分析说明的中英文标点。
 
 ---
 
-Portfolix v0.1.6 simplifies intelligent analysis setup and improves the reliability of everyday holding maintenance and market updates.
+Portfolix v0.1.7 makes everyday holding maintenance easier and introduces secure, opt-in local MCP data access.
 
 ## What's New
 
-- **DeepSeek-powered analysis**: Intelligent analysis now uses the DeepSeek API, with model-native web search available in Connected mode. Live status updates show search and reasoning progress.
-- **Batch holding updates**: Update quantities, cost prices, or total holding costs for multiple assets in one place.
+- **On-device voice input**: Hold Fn to dictate when adding, editing, or batch-updating holdings, then release to fill the field. Voice input is also available in holding search and the Portfolix Agent composer. Recognition uses Apple's on-device frameworks, and audio is not sent to DeepSeek.
+- **Read-only MCP server**: Authorized local AI tools can read holdings, portfolio history, daily profit and loss, and asset price history. Access is off by default and excludes API keys, chat history, arbitrary SQL, file access, and all write operations.
+- **Updated DeepSeek model catalog**: The DeepSeek API configuration can retrieve and cache the models currently available to the configured credential.
 
 ## Improvements
 
-- Automatic price updates now strictly follow the selected schedule without extra refreshes when reopening or minimizing the app.
-- Repeated quote fetches on the same day now replace that day's value instead of accumulating duplicates; background failures are retried and reported accurately.
-- Intelligent analysis now uses the latest saved market data without bypassing the selected quote schedule.
-- Fixed stale background price updater registrations after an app update, which could repeatedly fail to launch and display system error dialogs.
-- Fixed Daily Profit & Loss chart coordinates and clipping for month-end and single-day data.
-- Simplified the investment profile description and unified sidebar and primary card backgrounds across light and dark appearances.
+- Simplified the holdings table by removing the cost-price and latest-price columns and refining default widths so essential information fits in the standard window.
+- Unified voice input highlighting, waveform thickness, speed, and silent state across the app, while fixing focus flashes, recognition crashes, spaces inside dictated numbers, and waveform jitter.
+- Market data written by the background updater now appears immediately when a window opens or the app returns to the foreground, without waiting for the next UI polling interval.
+- Prevented test mode from overwriting the production background-update preference while preserving the user's selected schedule.
+- Added the requested voice-input hint to holding search and standardized punctuation in bilingual intelligent-analysis descriptions.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.6/Portfolix-0.1.6.dmg" length="5493141" type="application/octet-stream" sparkle:edSignature="IHOyHR0BeSMmMLg/Mf0xszIKL3D+nFkaGHb4pRqckVdtBocpqe8E8VW/jXqnZC27WJ1x1zulieB0cB/vNVlWCA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.7/Portfolix-0.1.7.dmg" length="5725046" type="application/octet-stream" sparkle:edSignature="YKKY61Uk3oZsjNHCVeUnL/0kkvJn9r/wsFGpG4AwmXxzA2bVv1RdnjQyaIvRCIInN5OBE+70A1i4wfVQZrsfDQ=="/>
         </item>
     </channel>
 </rss>
