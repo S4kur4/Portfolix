@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: PortfolioStore
     @State private var sidebarWidth: CGFloat = 218
     private let relativeTimeTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -93,6 +94,13 @@ struct RootView: View {
             }
         } message: {
             Text(store.persistenceErrorMessage ?? "")
+        }
+        .onAppear {
+            store.synchronizePersistedMarketDataIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            store.synchronizePersistedMarketDataIfNeeded()
         }
         .onReceive(relativeTimeTimer) { now in
             store.updateRelativeTime(now: now)
