@@ -87,6 +87,11 @@ struct PositionsView: View {
                             language: store.appLanguage,
                             appearance: .highlightedField
                         )
+                        .help(localizedText(
+                            "选中搜索框后，可按住 Fn 进行语音输入。",
+                            "Focus the search field, then hold Fn to dictate.",
+                            language: store.appLanguage
+                        ))
 
                         Spacer()
 
