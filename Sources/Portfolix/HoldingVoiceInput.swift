@@ -670,7 +670,7 @@ private struct HoldingVoiceInputModifier: ViewModifier {
     }
 
     private var waveform: some View {
-        HoldingVoiceWaveform(snapshot: recorder.waveform, isFinishing: recorder.isFinishing)
+        HoldingVoiceWaveform(snapshot: recorder.waveform)
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, PortfolixSpacing.xs)
     }
@@ -678,42 +678,56 @@ private struct HoldingVoiceInputModifier: ViewModifier {
 
 struct HoldingVoiceWaveform: View {
     let snapshot: HoldingVoiceWaveformSnapshot
-    let isFinishing: Bool
 
     var body: some View {
         GeometryReader { proxy in
-            if snapshot.hasVisibleSignal(for: proxy.size.width) {
-                TimelineView(.animation()) { timeline in
-                    Canvas { context, size in
-                        drawWaveform(
-                            in: &context,
-                            size: size,
-                            phase: HoldingVoiceWaveformMetrics.phase(
-                                from: snapshot.anchor,
-                                to: timeline.date
-                            ),
-                            levels: snapshot.levels
-                        )
-                    }
-                }
-            } else {
+            ZStack {
                 Canvas { context, size in
-                    drawWaveform(
-                        in: &context,
-                        size: size,
-                        phase: 0,
-                        levels: Array(
-                            repeating: 0,
-                            count: HoldingVoiceWaveformMetrics.visibleBarCount(for: size.width)
-                        )
-                    )
+                    drawBaseline(in: &context, size: size)
+                }
+
+                if snapshot.hasVisibleSignal(for: proxy.size.width) {
+                    TimelineView(.animation()) { timeline in
+                        Canvas { context, size in
+                            drawSignal(
+                                in: &context,
+                                size: size,
+                                phase: HoldingVoiceWaveformMetrics.phase(
+                                    from: snapshot.anchor,
+                                    to: timeline.date
+                                ),
+                                levels: snapshot.levels
+                            )
+                        }
+                    }
                 }
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func drawWaveform(
+    private func drawBaseline(
+        in context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let barCount = HoldingVoiceWaveformMetrics.visibleBarCount(for: size.width)
+        for age in 0 ..< barCount {
+            let x = size.width
+                - HoldingVoiceWaveformMetrics.barWidth
+                - CGFloat(age) * HoldingVoiceWaveformMetrics.barStep
+            guard x + HoldingVoiceWaveformMetrics.barWidth >= 0 else { break }
+            drawBar(
+                in: &context,
+                x: x,
+                height: 2,
+                canvasHeight: size.height
+            )
+        }
+    }
+
+    private func drawSignal(
         in context: inout GraphicsContext,
         size: CGSize,
         phase: CGFloat,
@@ -733,22 +747,35 @@ struct HoldingVoiceWaveform: View {
             let x = newestX - CGFloat(age) * HoldingVoiceWaveformMetrics.barStep
             guard x + HoldingVoiceWaveformMetrics.barWidth >= 0 else { break }
             let level = levels[levels.count - 1 - age]
-            let normalized = max(0.08, min(1, level))
-            let height = max(2, normalized * size.height * 0.82)
-            let rect = CGRect(
+            guard level > HoldingVoiceWaveformMetrics.silenceEpsilon else { continue }
+            drawBar(
+                in: &context,
                 x: x,
-                y: (size.height - height) / 2,
-                width: HoldingVoiceWaveformMetrics.barWidth,
-                height: height
-            )
-            context.fill(
-                Path(
-                    roundedRect: rect,
-                    cornerRadius: HoldingVoiceWaveformMetrics.barWidth / 2
-                ),
-                with: .color(PortfolixTheme.violet.opacity(isFinishing ? 0.45 : 0.9))
+                height: max(2, min(1, level) * size.height * 0.82),
+                canvasHeight: size.height
             )
         }
+    }
+
+    private func drawBar(
+        in context: inout GraphicsContext,
+        x: CGFloat,
+        height: CGFloat,
+        canvasHeight: CGFloat
+    ) {
+        let rect = CGRect(
+            x: x,
+            y: (canvasHeight - height) / 2,
+            width: HoldingVoiceWaveformMetrics.barWidth,
+            height: height
+        )
+        context.fill(
+            Path(
+                roundedRect: rect,
+                cornerRadius: HoldingVoiceWaveformMetrics.barWidth / 2
+            ),
+            with: .color(PortfolixTheme.violet.opacity(0.9))
+        )
     }
 }
 
