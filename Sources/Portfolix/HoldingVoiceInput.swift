@@ -621,7 +621,11 @@ private struct HoldingVoiceInputModifier: ViewModifier {
                     voiceOverlay
                 }
             }
-            .help(language == .english ? "Hold Fn to speak; release to fill this field." : "按住 Fn 说话，松开后填入当前字段。")
+            .accessibilityHint(
+                language == .english
+                    ? "Hold Fn to speak; release to fill this field."
+                    : "按住 Fn 说话，松开后填入当前字段。"
+            )
             .onChange(of: isFocused, initial: true) { _, focused in
                 if focused {
                     recorder.focus(numeric: numeric, english: language == .english) { text = $0 }

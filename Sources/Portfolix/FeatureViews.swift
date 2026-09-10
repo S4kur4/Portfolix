@@ -78,8 +78,7 @@ struct PositionsView: View {
                         .portfolixGlass(
                             in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
                             fallbackTint: PortfolixTheme.panelElevated,
-                            fallbackOpacity: 0.62,
-                            interactive: true
+                            fallbackOpacity: 0.62
                         )
                         .holdingVoiceInput(
                             text: $store.searchText,
@@ -1937,7 +1936,7 @@ private struct AIReportChatComposer: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help(voiceButtonHelp)
+                .accessibilityLabel(voiceButtonHelp)
             }
             .padding(.leading, PortfolixSpacing.lg)
             .padding(.trailing, PortfolixSpacing.sm)
@@ -1946,8 +1945,7 @@ private struct AIReportChatComposer: View {
                 in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
                 tint: isVoiceActive ? PortfolixTheme.violet.opacity(0.18) : nil,
                 fallbackTint: isVoiceActive ? PortfolixTheme.violet : PortfolixTheme.panelElevated,
-                fallbackOpacity: isVoiceActive ? 0.14 : 0.68,
-                interactive: true
+                fallbackOpacity: isVoiceActive ? 0.14 : 0.68
             )
             .overlay {
                 if isVoiceActive {
