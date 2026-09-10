@@ -33,6 +33,10 @@ enum HoldingVoiceWaveformMetrics {
         guard rawLevel > noiseFloor else { return 0 }
         return min(1, (rawLevel - noiseFloor) / (1 - noiseFloor))
     }
+
+    static func phase(from anchor: Date, to date: Date) -> CGFloat {
+        CGFloat(max(0, date.timeIntervalSince(anchor) / sampleInterval))
+    }
 }
 
 struct HoldingVoiceWaveformSnapshot: Equatable {
@@ -675,14 +679,15 @@ struct HoldingVoiceWaveform: View {
     var body: some View {
         GeometryReader { proxy in
             if snapshot.hasVisibleSignal(for: proxy.size.width) {
-                TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
-                    Canvas(rendersAsynchronously: true) { context, size in
-                        let elapsed = max(0, timeline.date.timeIntervalSince(snapshot.anchor))
-                        let phase = min(1, elapsed / HoldingVoiceWaveformMetrics.sampleInterval)
+                TimelineView(.animation()) { timeline in
+                    Canvas { context, size in
                         drawWaveform(
                             in: &context,
                             size: size,
-                            phase: CGFloat(phase),
+                            phase: HoldingVoiceWaveformMetrics.phase(
+                                from: snapshot.anchor,
+                                to: timeline.date
+                            ),
                             levels: snapshot.levels
                         )
                     }

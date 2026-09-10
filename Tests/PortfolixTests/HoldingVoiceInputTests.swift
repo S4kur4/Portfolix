@@ -24,9 +24,16 @@ struct HoldingVoiceInputTests {
         let date = Date(timeIntervalSinceReferenceDate: 123_456.789)
         let tick = HoldingVoiceWaveformMetrics.tick(at: date)
         let anchor = HoldingVoiceWaveformMetrics.anchor(for: tick)
+        let delayedFrame = anchor.addingTimeInterval(
+            HoldingVoiceWaveformMetrics.sampleInterval * 2.5
+        )
 
         #expect(anchor <= date)
         #expect(date.timeIntervalSince(anchor) < HoldingVoiceWaveformMetrics.sampleInterval)
+        #expect(
+            abs(HoldingVoiceWaveformMetrics.phase(from: anchor, to: delayedFrame) - 2.5)
+                < 0.000_001
+        )
     }
 
     @Test
