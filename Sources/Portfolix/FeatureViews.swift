@@ -445,6 +445,7 @@ struct AIReportView: View {
         .onAppear {
             store.refreshProviderCredentialState()
             store.refreshAIAnalysisChatRetention()
+            store.refreshDeepSeekModelCatalog()
         }
     }
 
@@ -493,9 +494,7 @@ struct AIReportView: View {
         Binding(
             get: { store.aiConfiguration.model },
             set: { model in
-                var configuration = store.aiConfiguration
-                configuration.model = model
-                store.aiConfiguration = configuration
+                store.selectAIModel(model)
             }
         )
     }
@@ -504,18 +503,13 @@ struct AIReportView: View {
         Binding(
             get: { store.searchConfiguration.isEnabled ? .connected : .basic },
             set: { mode in
-                var configuration = store.searchConfiguration
-                configuration.isEnabled = mode == .connected
-                store.searchConfiguration = configuration
+                store.selectSmartAnalysisMode(mode)
             }
         )
     }
 
     private var availableModelOptions: [String] {
-        LLMProviderOption.sanitizedDeepSeekModels(
-            LLMProviderOption.deepSeekModels
-                + AIProviderConfigurationStore.loadCachedModels(provider: .deepSeek)
-        )
+        store.availableLLMModels
     }
 }
 
@@ -3459,8 +3453,8 @@ struct SettingsView: View {
                     SettingsRow(
                         title: settingsText("分析模式", "Analysis Mode"),
                         helpText: settingsText(
-                            "基础模式使用模型已有知识；联网增强会按需使用 DeepSeek 内建搜索。",
-                            "Basic uses the model's existing knowledge; Connected uses DeepSeek's built-in search when needed."
+                            "基础模式可使用所有模型；联网增强会自动使用支持内建搜索的模型。",
+                            "Basic supports every model; Connected automatically uses a model with built-in search."
                         ),
                         helpPlacement: .trailing
                     ) {
@@ -3695,7 +3689,7 @@ struct SettingsView: View {
                 store.searchConfiguration.isEnabled ? .connected : .basic
             },
             set: { mode in
-                store.searchConfiguration.isEnabled = mode == .connected
+                store.selectSmartAnalysisMode(mode)
             }
         )
     }

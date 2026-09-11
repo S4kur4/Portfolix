@@ -10,6 +10,7 @@ enum LLMClientError: LocalizedError, Equatable {
     case badRequest(String)
     case serverError(Int)
     case unsupportedJSONMode(String?)
+    case webSearchUnavailable(String)
     case emptyFinalContent(reasoningCharacters: Int, finishReason: String?)
     case truncatedFinalContent(finishReason: String?)
     case requestFailed(String)
@@ -37,6 +38,8 @@ enum LLMClientError: LocalizedError, Equatable {
                 return "LLM 模型不支持 JSON mode：\(message)"
             }
             return "LLM 模型不支持 JSON mode"
+        case let .webSearchUnavailable(model):
+            return "模型 \(model) 未执行联网搜索，请切换至支持联网增强的 DeepSeek 模型"
         case let .emptyFinalContent(reasoningCharacters, finishReason):
             let reason = finishReason.map { "，结束原因：\($0)" } ?? ""
             if reasoningCharacters > 0 {

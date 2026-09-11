@@ -3271,6 +3271,24 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
+    func smartAnalysisModeKeepsModelAndSearchCapabilityInSync() throws {
+        let store = try makeStore()
+        store.updateAvailableDeepSeekModels(["deepseek-flash", "deepseek-v4-pro"])
+
+        store.selectAIModel("deepseek-flash")
+        store.selectSmartAnalysisMode(.connected)
+
+        #expect(store.aiConfiguration.model == "deepseek-v4-pro")
+        #expect(store.searchConfiguration.isEnabled)
+
+        store.selectAIModel("deepseek-flash")
+
+        #expect(store.aiConfiguration.model == "deepseek-flash")
+        #expect(!store.searchConfiguration.isEnabled)
+    }
+
+    @MainActor
+    @Test
     func aiFollowUpOnlyMentionsSearchWhenConnectedSearchNeedsIt() async throws {
         let credentialStore = MockCredentialStore(
             keys: [.llm: "llm-key"],

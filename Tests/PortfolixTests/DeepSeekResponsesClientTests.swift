@@ -75,6 +75,74 @@ struct DeepSeekResponsesClientTests {
     }
 
     @Test
+    func connectedRequestUsesExplicitSearchAndReasoningConfiguration() throws {
+        let request = try DeepSeekResponsesClient().makeRequest(
+            configuration: AIProviderConfiguration.default,
+            apiKey: "test-key",
+            instructions: "Return JSON.",
+            input: "Search first.",
+            expectsJSON: true,
+            webSearchEnabled: true,
+            stream: true
+        )
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let reasoning = try #require(object["reasoning"] as? [String: String])
+        let toolChoice = try #require(object["tool_choice"] as? [String: String])
+        let tools = try #require(object["tools"] as? [[String: String]])
+
+        #expect(object["model"] as? String == "deepseek-flash")
+        #expect(object["temperature"] == nil)
+        #expect(reasoning["effort"] == "high")
+        #expect(toolChoice["type"] == "web_search")
+        #expect(tools == [["type": "web_search"]])
+    }
+
+    @Test
+    func validationRequestDisablesReasoning() throws {
+        let request = try DeepSeekResponsesClient().makeRequest(
+            configuration: AIProviderConfiguration.default,
+            apiKey: "test-key",
+            instructions: "Reply OK.",
+            input: "Hi",
+            expectsJSON: false,
+            webSearchEnabled: false,
+            stream: false,
+            reasoningEffort: .none
+        )
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let reasoning = try #require(object["reasoning"] as? [String: String])
+
+        #expect(reasoning["effort"] == "none")
+        #expect(object["tools"] == nil)
+        #expect(object["tool_choice"] == nil)
+    }
+
+    @Test
+    func connectedResponseMustContainEvidenceOfAnActualSearch() throws {
+        let noSearch = LLMCompletionResult(content: #"{"answer":"cached knowledge"}"#)
+
+        #expect(throws: LLMClientError.webSearchUnavailable("deepseek-flash")) {
+            try DeepSeekResponsesClient.validatedSearchResult(
+                noSearch,
+                webSearchEnabled: true,
+                model: "deepseek-flash"
+            )
+        }
+
+        let searched = LLMCompletionResult(
+            content: #"{"answer":"current"}"#,
+            webSearchCallCount: 1
+        )
+        #expect(try DeepSeekResponsesClient.validatedSearchResult(
+            searched,
+            webSearchEnabled: true,
+            model: "deepseek-v4-pro"
+        ) == searched)
+    }
+
+    @Test
     func liveConnectionJSONAndBuiltInSearchUsingEnvironmentCredential() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PORTFOLIX_RUN_LIVE_DEEPSEEK_TEST"] == "1" else { return }
@@ -89,6 +157,8 @@ struct DeepSeekResponsesClientTests {
             maxOutputTokens: 4_096
         )
         let client = DeepSeekResponsesClient.shared
+
+        let liveModels = try await client.listModels(configuration: configuration, apiKey: apiKey)
 
         try await client.validateConnection(configuration: configuration, apiKey: apiKey)
 
@@ -106,10 +176,19 @@ struct DeepSeekResponsesClientTests {
         #expect(basicObject["status"] == "ok")
         #expect(basic.webSearchCallCount == 0)
 
+        let connectedModel = try #require(LLMProviderOption.preferredConnectedModel(in: liveModels))
+        let connectedConfiguration = AIProviderConfiguration(
+            provider: configuration.provider,
+            baseURL: configuration.baseURL,
+            model: connectedModel,
+            isEnabled: configuration.isEnabled,
+            requestTimeout: configuration.requestTimeout,
+            maxOutputTokens: configuration.maxOutputTokens
+        )
         let connected = try await client.completeJSONResult(
             systemPrompt: "Use web search. Return only a valid JSON object with answer and searched fields.",
             userPrompt: "Search the official DeepSeek documentation and identify the current production text model IDs. Set searched to true.",
-            configuration: configuration,
+            configuration: connectedConfiguration,
             apiKey: apiKey,
             webSearchEnabled: true,
             webSearchProgress: nil

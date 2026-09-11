@@ -35,7 +35,7 @@ struct LLMConfigurationSheet: View {
     @State private var model = ""
     @State private var baseURL = LLMProviderOption.deepSeek.defaultBaseURL
     @State private var apiKey = ""
-    @State private var availableModels = LLMProviderOption.deepSeekModels
+    @State private var availableModels = AIProviderConfigurationStore.availableDeepSeekModels()
     @State private var connectionStatus: ProviderConnectionStatus?
     @State private var isValidatingAPIKey = false
     @State private var isAPIKeyVisible = false
@@ -129,13 +129,10 @@ struct LLMConfigurationSheet: View {
             let configuration = store.aiConfiguration
             provider = .deepSeek
             baseURL = LLMProviderOption.deepSeek.defaultBaseURL
-            availableModels = LLMProviderOption.sanitizedDeepSeekModels(
-                LLMProviderOption.deepSeekModels
-                    + AIProviderConfigurationStore.loadCachedModels(provider: .deepSeek)
-            )
+            availableModels = AIProviderConfigurationStore.availableDeepSeekModels()
             model = availableModels.contains(configuration.model)
                 ? configuration.model
-                : LLMProviderOption.deepSeek.defaultModel
+                : AIProviderConfigurationStore.preferredDeepSeekModel(in: availableModels)
             store.refreshProviderCredentialState()
             apiKey = (try? store.readProviderAPIKey(kind: .llm)) ?? ""
             isAPIKeyVisible = false
@@ -206,7 +203,9 @@ struct LLMConfigurationSheet: View {
     }
 
     private func applyProviderDefaults(_ option: LLMProviderOption) {
-        availableModels = AIProviderConfigurationStore.loadCachedModels(provider: option)
+        availableModels = option == .deepSeek
+            ? AIProviderConfigurationStore.availableDeepSeekModels()
+            : AIProviderConfigurationStore.loadCachedModels(provider: option)
         connectionStatus = nil
         let savedConfiguration = store.aiConfiguration
         let savedBaseURL = savedConfiguration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -241,9 +240,7 @@ struct LLMConfigurationSheet: View {
                let validationState = validationStateForSave(isValidationContextChanged: isValidationContextChanged) {
                 try store.saveProviderAPIKeyValidationState(validationState, kind: .llm)
             }
-            store.aiConfiguration.provider = LLMProviderOption.deepSeek.rawValue
-            store.aiConfiguration.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            store.aiConfiguration.baseURL = LLMProviderOption.deepSeek.defaultBaseURL
+            store.selectAIModel(model)
             didAttemptSave = false
             dismiss()
         } catch {
@@ -331,7 +328,11 @@ struct LLMConfigurationSheet: View {
             let previousModel = model
             availableModels = models
             AIProviderConfigurationStore.saveCachedModels(models, provider: provider)
-            model = models.contains(previousModel) ? previousModel : (models.first ?? previousModel)
+            store.updateAvailableDeepSeekModels(models)
+            model = AIProviderConfigurationStore.preferredDeepSeekModel(
+                current: previousModel,
+                in: models
+            )
         } catch {
             // Keep the embedded or cached catalog available when refresh fails.
         }

@@ -76,4 +76,49 @@ struct ProviderConfigurationSheetTests {
 
         #expect(AIProviderConfigurationStore.loadLLM(defaults: defaults).model == model)
     }
+
+    @Test
+    func successfulServerCatalogReplacesBundledFallbackModels() throws {
+        let suiteName = "Portfolix.ProviderConfigurationSheetTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(AIProviderConfigurationStore.availableDeepSeekModels(defaults: defaults) == [
+            "deepseek-flash",
+            "deepseek-v4-pro",
+        ])
+
+        AIProviderConfigurationStore.saveCachedModels(
+            ["deepseek-next"],
+            provider: .deepSeek,
+            defaults: defaults
+        )
+
+        #expect(AIProviderConfigurationStore.availableDeepSeekModels(defaults: defaults) == ["deepseek-next"])
+    }
+
+    @Test
+    func retiredSelectionMigratesToCurrentServerModel() throws {
+        let suiteName = "Portfolix.ProviderConfigurationSheetTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        AIProviderConfigurationStore.saveCachedModels(
+            ["deepseek-flash", "deepseek-v4-pro"],
+            provider: .deepSeek,
+            defaults: defaults
+        )
+        defaults.set("deepseek-v4-flash", forKey: "portfolix.ai.llm.model")
+
+        #expect(AIProviderConfigurationStore.loadLLM(defaults: defaults).model == "deepseek-flash")
+    }
+
+    @Test
+    func connectedModeSelectsOnlyKnownSearchCapableModel() {
+        let models = ["deepseek-flash", "deepseek-v4-pro"]
+
+        #expect(!LLMProviderOption.supportsBuiltInWebSearch(model: "deepseek-flash"))
+        #expect(LLMProviderOption.supportsBuiltInWebSearch(model: "deepseek-v4-pro"))
+        #expect(LLMProviderOption.preferredConnectedModel(in: models) == "deepseek-v4-pro")
+    }
 }

@@ -162,7 +162,7 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         case .openAI:
             "gpt-4.1-mini"
         case .deepSeek:
-            "deepseek-v4-flash"
+            "deepseek-flash"
         case .anthropic, .claudeCompatible:
             "claude-3-5-sonnet-latest"
         case .googleGemini:
@@ -198,10 +198,17 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
     }
 
     static let deepSeekModels = [
-        "deepseek-v4-flash",
+        "deepseek-flash",
         "deepseek-v4-pro",
-        "deepseek-v4-flash-vision-exp",
     ]
+
+    static func supportsBuiltInWebSearch(model: String) -> Bool {
+        model == "deepseek-v4-pro"
+    }
+
+    static func preferredConnectedModel(in models: [String]) -> String? {
+        sanitizedDeepSeekModels(models).first(where: supportsBuiltInWebSearch)
+    }
 
     static func sanitizedDeepSeekModels(_ models: [String]) -> [String] {
         let allowedCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
@@ -368,11 +375,10 @@ enum AIProviderConfigurationStore {
     static func loadLLM(defaults: UserDefaults = .standard) -> AIProviderConfiguration {
         let fallback = AIProviderConfiguration.default
         let savedModel = defaults.string(forKey: llmModelKey)
-        let availableModels = LLMProviderOption.deepSeekModels
-            + loadCachedModels(provider: .deepSeek, defaults: defaults)
+        let availableModels = availableDeepSeekModels(defaults: defaults)
         let model = availableModels.contains(savedModel ?? "")
             ? (savedModel ?? fallback.model)
-            : fallback.model
+            : preferredDeepSeekModel(in: availableModels)
         return AIProviderConfiguration(
             provider: LLMProviderOption.deepSeek.rawValue,
             baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
@@ -382,11 +388,10 @@ enum AIProviderConfigurationStore {
     }
 
     static func saveLLM(_ configuration: AIProviderConfiguration, defaults: UserDefaults = .standard) {
-        let availableModels = LLMProviderOption.deepSeekModels
-            + loadCachedModels(provider: .deepSeek, defaults: defaults)
+        let availableModels = availableDeepSeekModels(defaults: defaults)
         let model = availableModels.contains(configuration.model)
             ? configuration.model
-            : LLMProviderOption.deepSeek.defaultModel
+            : preferredDeepSeekModel(in: availableModels)
         defaults.set(LLMProviderOption.deepSeek.rawValue, forKey: llmProviderKey)
         defaults.set(LLMProviderOption.deepSeek.defaultBaseURL, forKey: llmBaseURLKey)
         defaults.set(model, forKey: llmModelKey)
@@ -416,6 +421,25 @@ enum AIProviderConfigurationStore {
                 result.append(trimmed)
             }
         defaults.set(cleaned, forKey: cachedModelsKey(provider: provider))
+    }
+
+    static func availableDeepSeekModels(defaults: UserDefaults = .standard) -> [String] {
+        let cachedModels = loadCachedModels(provider: .deepSeek, defaults: defaults)
+        return cachedModels.isEmpty ? LLMProviderOption.deepSeekModels : cachedModels
+    }
+
+    static func preferredDeepSeekModel(
+        current: String? = nil,
+        in models: [String]
+    ) -> String {
+        let availableModels = LLMProviderOption.sanitizedDeepSeekModels(models)
+        if let current, availableModels.contains(current) {
+            return current
+        }
+        if availableModels.contains(LLMProviderOption.deepSeek.defaultModel) {
+            return LLMProviderOption.deepSeek.defaultModel
+        }
+        return availableModels.first ?? LLMProviderOption.deepSeek.defaultModel
     }
 
     private static func cachedModelsKey(provider: LLMProviderOption) -> String {

@@ -110,11 +110,16 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 let body = await responseBodyText(from: bytes)
                 throw Self.httpError(statusCode: httpResponse.statusCode, body: body)
             }
-            return try await parseStreamingResponse(
+            let result = try await parseStreamingResponse(
                 bytes,
                 requestStartedAt: requestStartedAt,
                 responseHeaderAt: responseHeaderAt,
                 progress: webSearchProgress
+            )
+            return try Self.validatedSearchResult(
+                result,
+                webSearchEnabled: webSearchEnabled,
+                model: configuration.model
             )
         } catch let error as LLMClientError {
             throw error
@@ -132,7 +137,8 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             input: "Hi",
             expectsJSON: false,
             webSearchEnabled: false,
-            stream: false
+            stream: false,
+            reasoningEffort: .none
         )
         do {
             let (data, response) = try await session.data(for: request)
@@ -163,14 +169,15 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         )
     }
 
-    private func makeRequest(
+    func makeRequest(
         configuration: AIProviderConfiguration,
         apiKey: String,
         instructions: String,
         input: String,
         expectsJSON: Bool,
         webSearchEnabled: Bool,
-        stream: Bool
+        stream: Bool,
+        reasoningEffort: DeepSeekReasoningEffort = .high
     ) throws -> URLRequest {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else { throw LLMClientError.missingAPIKey }
@@ -187,10 +194,10 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 instructions: instructions,
                 input: input,
                 stream: stream,
-                temperature: 0,
                 maxOutputTokens: configuration.maxOutputTokens,
+                reasoning: DeepSeekResponseReasoning(effort: reasoningEffort),
                 tools: webSearchEnabled ? [DeepSeekResponseTool(type: "web_search")] : nil,
-                toolChoice: webSearchEnabled ? "auto" : nil,
+                toolChoice: webSearchEnabled ? DeepSeekResponseToolChoice(type: "web_search") : nil,
                 text: expectsJSON ? DeepSeekResponseText(format: DeepSeekResponseTextFormat(type: "json_object")) : nil
             )
         )
@@ -359,6 +366,17 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         )
     }
 
+    static func validatedSearchResult(
+        _ result: LLMCompletionResult,
+        webSearchEnabled: Bool,
+        model: String
+    ) throws -> LLMCompletionResult {
+        guard !webSearchEnabled || result.webSearchCallCount > 0 || !result.citations.isEmpty else {
+            throw LLMClientError.webSearchUnavailable(model)
+        }
+        return result
+    }
+
     private static func responsesURL(baseURL: String) -> URL? {
         guard var components = try? LLMBaseURLValidator.validatedComponents(from: baseURL) else {
             return nil
@@ -478,20 +496,33 @@ private struct DeepSeekResponseRequest: Encodable {
     let instructions: String
     let input: String
     let stream: Bool
-    let temperature: Double
     let maxOutputTokens: Int
+    let reasoning: DeepSeekResponseReasoning
     let tools: [DeepSeekResponseTool]?
-    let toolChoice: String?
+    let toolChoice: DeepSeekResponseToolChoice?
     let text: DeepSeekResponseText?
 
     enum CodingKeys: String, CodingKey {
-        case model, instructions, input, stream, temperature, tools, text
+        case model, instructions, input, stream, reasoning, tools, text
         case maxOutputTokens = "max_output_tokens"
         case toolChoice = "tool_choice"
     }
 }
 
+enum DeepSeekReasoningEffort: String, Encodable {
+    case none
+    case high
+}
+
+private struct DeepSeekResponseReasoning: Encodable {
+    let effort: DeepSeekReasoningEffort
+}
+
 private struct DeepSeekResponseTool: Encodable {
+    let type: String
+}
+
+private struct DeepSeekResponseToolChoice: Encodable {
     let type: String
 }
 

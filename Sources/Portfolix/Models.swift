@@ -705,6 +705,7 @@ final class PortfolioStore: ObservableObject {
             AIProviderConfigurationStore.saveLLM(aiConfiguration)
         }
     }
+    @Published private(set) var availableLLMModels = AIProviderConfigurationStore.availableDeepSeekModels()
     @Published var searchConfiguration: SearchConfiguration = AIProviderConfigurationStore.loadSearch() {
         didSet {
             AIProviderConfigurationStore.saveSearch(searchConfiguration)
@@ -753,6 +754,7 @@ final class PortfolioStore: ObservableObject {
     private let positionRepository: PositionRepository?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
+    private var deepSeekModelCatalogRefreshTask: Task<Void, Never>?
     private var loginItemConfigurationTask: Task<Void, Never>?
     private var backgroundPriceUpdateObservation: BackgroundPriceUpdateObservation?
     private static let backgroundUpdatesEnabledDefaultsKey = "portfolix.backgroundUpdatesEnabled"
@@ -918,6 +920,7 @@ final class PortfolioStore: ObservableObject {
         seedAIAnalysisChatIfNeeded()
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
+        reconcileAIModelAndAnalysisMode()
         if managesSystemBackgroundUpdates {
             persistAutomaticPriceUpdateSetting()
             configureLoginItem()
@@ -1325,6 +1328,88 @@ final class PortfolioStore: ObservableObject {
 
         hasLLMAPIKey = hasLLMKey
         llmAPIKeyValidationState = hasLLMKey ? ((try? credentialStore.readValidationState(kind: .llm)) ?? .unknown) : .unknown
+    }
+
+    func refreshDeepSeekModelCatalog(client: any LLMModelListing = LLMProviderClient.shared) {
+        deepSeekModelCatalogRefreshTask?.cancel()
+        guard let apiKey = try? credentialStore.read(kind: .llm),
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        let configuration = aiConfiguration
+        deepSeekModelCatalogRefreshTask = Task { [weak self] in
+            do {
+                let models = try await client.listModels(configuration: configuration, apiKey: apiKey)
+                guard !Task.isCancelled else { return }
+                self?.updateAvailableDeepSeekModels(models)
+            } catch {
+                // A transient catalog failure must not erase the last known-good model list.
+            }
+        }
+    }
+
+    func updateAvailableDeepSeekModels(_ models: [String]) {
+        let sanitized = LLMProviderOption.sanitizedDeepSeekModels(models)
+        guard !sanitized.isEmpty else { return }
+        AIProviderConfigurationStore.saveCachedModels(sanitized, provider: .deepSeek)
+        availableLLMModels = sanitized
+        reconcileAIModelAndAnalysisMode()
+    }
+
+    func selectAIModel(_ model: String) {
+        let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard availableLLMModels.contains(normalized) else { return }
+        var configuration = aiConfiguration
+        configuration.model = normalized
+        aiConfiguration = configuration
+        if searchConfiguration.isEnabled,
+           !LLMProviderOption.supportsBuiltInWebSearch(model: normalized) {
+            var search = searchConfiguration
+            search.isEnabled = false
+            searchConfiguration = search
+        }
+    }
+
+    func selectSmartAnalysisMode(_ mode: SmartAnalysisMode) {
+        var search = searchConfiguration
+        guard mode == .connected else {
+            search.isEnabled = false
+            searchConfiguration = search
+            return
+        }
+        if !LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model),
+           let connectedModel = LLMProviderOption.preferredConnectedModel(in: availableLLMModels) {
+            var configuration = aiConfiguration
+            configuration.model = connectedModel
+            aiConfiguration = configuration
+        }
+        search.isEnabled = LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model)
+        searchConfiguration = search
+    }
+
+    private func reconcileAIModelAndAnalysisMode() {
+        let currentModel = aiConfiguration.model
+        if !availableLLMModels.contains(currentModel) {
+            var configuration = aiConfiguration
+            configuration.model = AIProviderConfigurationStore.preferredDeepSeekModel(
+                current: currentModel,
+                in: availableLLMModels
+            )
+            aiConfiguration = configuration
+        }
+        guard searchConfiguration.isEnabled,
+              !LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model) else {
+            return
+        }
+        if let connectedModel = LLMProviderOption.preferredConnectedModel(in: availableLLMModels) {
+            var configuration = aiConfiguration
+            configuration.model = connectedModel
+            aiConfiguration = configuration
+        } else {
+            var search = searchConfiguration
+            search.isEnabled = false
+            searchConfiguration = search
+        }
     }
 
     func saveProviderAPIKey(_ apiKey: String, kind: ProviderCredentialKind) throws {
