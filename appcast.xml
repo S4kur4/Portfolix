@@ -4,49 +4,31 @@
         <title>Portfolix</title>
         <item>
             <title>0.1.7</title>
-            <pubDate>Thu, 10 Sep 2026 21:13:43 +0800</pubDate>
+            <pubDate>Fri, 11 Sep 2026 21:43:48 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>17</sparkle:version>
+            <sparkle:version>18</sparkle:version>
             <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.7
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.7 (Build 18)
 
-Portfolix v0.1.7 让日常持仓维护更轻松，并首次提供安全、可控的本机 MCP 数据访问能力。
+## 修复与改进
 
-## 新功能
+- 适配 DeepSeek 最新模型列表，自动移除已下线模型，并保持基础模式与联网增强能力一致。
+- 更新 DeepSeek Responses API 与内建联网搜索的调用和结果校验逻辑。
+- 修复 App 升级后后台行情组件可能停止运行的问题。
+- 修复调度记录缺失时错误延后更新的问题；已到期的行情任务会按原计划补跑。
+- 后台行情写入完成后立即同步至前台，减少重新打开 App 后的显示延迟。
 
-- **本机语音输入**：在添加、编辑及批量更新持仓时，可按住 Fn 说话并在松开后填入内容；持仓搜索和 Portfolix Agent 输入框也支持语音输入。语音识别由 Apple 本机框架完成，录音不会发送给 DeepSeek。
-- **只读 MCP 服务器**：可按需授权本机 AI 工具读取持仓、组合历史、每日盈亏及资产价格历史。该能力默认关闭，不开放 API Key、聊天记录、任意 SQL、文件访问或写入操作。
-- **DeepSeek 模型目录更新**：打开 DeepSeek API 配置后，可使用当前凭据获取并缓存服务端可用模型列表。
+## Fixes and Improvements
 
-## 体验优化
-
-- 精简持仓明细表格，移除持仓成本价和最新价格两列，并调整默认列宽，使常用信息在默认窗口下完整显示。
-- 统一所有语音输入场景的高亮、波形粗细、速度和静音状态，修复焦点切换闪烁、识别崩溃、数字空格及波形抖动问题。
-- 后台行情更新写入本地数据后，重新打开窗口或回到 App 时会立即呈现最新结果，不再等待下一次界面轮询。
-- 修复测试模式可能覆盖正式环境后台行情开关的问题，并保持用户设定的更新频率不变。
-- 补齐持仓搜索框的语音输入提示，并统一智能分析说明的中英文标点。
-
----
-
-Portfolix v0.1.7 makes everyday holding maintenance easier and introduces secure, opt-in local MCP data access.
-
-## What's New
-
-- **On-device voice input**: Hold Fn to dictate when adding, editing, or batch-updating holdings, then release to fill the field. Voice input is also available in holding search and the Portfolix Agent composer. Recognition uses Apple's on-device frameworks, and audio is not sent to DeepSeek.
-- **Read-only MCP server**: Authorized local AI tools can read holdings, portfolio history, daily profit and loss, and asset price history. Access is off by default and excludes API keys, chat history, arbitrary SQL, file access, and all write operations.
-- **Updated DeepSeek model catalog**: The DeepSeek API configuration can retrieve and cache the models currently available to the configured credential.
-
-## Improvements
-
-- Simplified the holdings table by removing the cost-price and latest-price columns and refining default widths so essential information fits in the standard window.
-- Unified voice input highlighting, waveform thickness, speed, and silent state across the app, while fixing focus flashes, recognition crashes, spaces inside dictated numbers, and waveform jitter.
-- Market data written by the background updater now appears immediately when a window opens or the app returns to the foreground, without waiting for the next UI polling interval.
-- Prevented test mode from overwriting the production background-update preference while preserving the user's selected schedule.
-- Added the requested voice-input hint to holding search and standardized punctuation in bilingual intelligent-analysis descriptions.
+- Updated the DeepSeek model catalog integration to remove retired models and keep analysis modes aligned with model capabilities.
+- Adapted the DeepSeek Responses API and built-in web search request and validation flow.
+- Fixed an issue that could stop background price updates after an app upgrade.
+- Restored overdue schedules from their last recorded run instead of delaying them after relaunch.
+- Synchronized completed background quote updates with the foreground immediately.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.7/Portfolix-0.1.7.dmg" length="5725046" type="application/octet-stream" sparkle:edSignature="YKKY61Uk3oZsjNHCVeUnL/0kkvJn9r/wsFGpG4AwmXxzA2bVv1RdnjQyaIvRCIInN5OBE+70A1i4wfVQZrsfDQ=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.7/Portfolix-0.1.7.dmg" length="5769697" type="application/octet-stream" sparkle:edSignature="fsZIgF80RsKK2n1flAR+M1Ob18PbJY7yC1fkhWWU5IJzyE4ECd2xWJhreW3CB9f9vTfKzc9yyT6PatDc7HAhDw=="/>
         </item>
     </channel>
 </rss>
