@@ -13,6 +13,17 @@ public enum AutomaticPriceUpdateSchedule {
     public static let lastFailedCountSettingKey = "automatic_price_update_last_failed_count"
     public static let lastErrorSettingKey = "automatic_price_update_last_error"
     public static let attemptLeaseSeconds = 2 * 60
+    public static let didCompleteNotificationName = Notification.Name(
+        "app.portfolix.mac.automaticPriceUpdateDidComplete"
+    )
+
+    public static func recoveredAnchor(
+        scheduleAnchor: Date?,
+        lastRun: Date?,
+        now: Date = .now
+    ) -> Date {
+        scheduleAnchor ?? lastRun ?? now
+    }
 
     public static func nextDelaySeconds(
         frequency: String,

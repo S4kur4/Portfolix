@@ -73,6 +73,40 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func automaticPriceUpdateScheduleRecoversMissingAnchorFromLastRun() {
+        let lastRun = Date(timeIntervalSince1970: 10_000)
+        let now = lastRun.addingTimeInterval(3 * 60 * 60)
+        let recoveredAnchor = AutomaticPriceUpdateSchedule.recoveredAnchor(
+            scheduleAnchor: nil,
+            lastRun: lastRun,
+            now: now
+        )
+
+        #expect(recoveredAnchor == lastRun)
+        #expect(
+            AutomaticPriceUpdateSchedule.nextDelaySeconds(
+                frequency: "1 小时",
+                scheduleAnchor: recoveredAnchor,
+                lastRun: lastRun,
+                now: now
+            ) == 0
+        )
+    }
+
+    @Test
+    func automaticPriceUpdateScheduleStartsFromNowOnlyWithoutHistory() {
+        let now = Date(timeIntervalSince1970: 20_000)
+
+        #expect(
+            AutomaticPriceUpdateSchedule.recoveredAnchor(
+                scheduleAnchor: nil,
+                lastRun: nil,
+                now: now
+            ) == now
+        )
+    }
+
+    @Test
     func automaticPriceUpdateSchedulePreventsDuplicateClaimsDuringActiveAttempt() {
         let anchor = Date(timeIntervalSince1970: 10_000)
         let dueTime = anchor.addingTimeInterval(60 * 60)

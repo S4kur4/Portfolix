@@ -1,23 +1,50 @@
 import CSQLite
 import Foundation
+import OSLog
 import PortfolixCore
 
 @main
 struct PortfolixPriceUpdater {
+    private static let logger = Logger(
+        subsystem: "app.portfolix.mac",
+        category: "PriceUpdater"
+    )
+
     static func main() async {
         let updater = BackgroundPriceUpdater()
         let runOnceOnly = CommandLine.arguments.contains("--once")
+        logger.info("Background price updater started")
         if runOnceOnly {
             guard (try? updater.automaticUpdatesEnabled()) == true else { return }
             try? updater.recordAutomaticUpdateAttempt()
             let summary = await updater.performUpdate()
-            try? updater.recordAutomaticUpdateCompletion(summary)
+            do {
+                try updater.recordAutomaticUpdateCompletion(summary)
+            } catch {
+                logger.error("Unable to persist automatic update completion: \(error.localizedDescription, privacy: .public)")
+            }
             return
         }
 
         while !Task.isCancelled {
-            guard (try? updater.automaticUpdatesEnabled()) == true else { return }
-            let delay = (try? updater.nextUpdateDelaySeconds()) ?? 60 * 60
+            let updatesEnabled: Bool
+            do {
+                updatesEnabled = try updater.automaticUpdatesEnabled()
+            } catch {
+                logger.error("Unable to read automatic update settings; retrying: \(error.localizedDescription, privacy: .public)")
+                try? await Task.sleep(for: .seconds(5))
+                continue
+            }
+            guard updatesEnabled else { return }
+
+            let delay: Int
+            do {
+                delay = try updater.nextUpdateDelaySeconds()
+            } catch {
+                logger.error("Unable to evaluate automatic update schedule; retrying: \(error.localizedDescription, privacy: .public)")
+                try? await Task.sleep(for: .seconds(5))
+                continue
+            }
             if delay > 0 {
                 try? await Task.sleep(for: .seconds(min(delay, 30)))
                 continue
@@ -28,7 +55,14 @@ struct PortfolixPriceUpdater {
                 continue
             }
             let summary = await updater.performUpdate()
-            try? updater.recordAutomaticUpdateCompletion(summary)
+            do {
+                try updater.recordAutomaticUpdateCompletion(summary)
+                logger.info(
+                    "Automatic update completed: result=\(summary.result, privacy: .public), updated=\(summary.updatedCount), failed=\(summary.failedCount)"
+                )
+            } catch {
+                logger.error("Unable to persist automatic update completion: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }
@@ -43,6 +77,7 @@ private final class BackgroundPriceUpdater {
         var handle: OpaquePointer?
         sqlite3_open_v2(databaseURL.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
         database = handle!
+        sqlite3_busy_timeout(database, 5_000)
         try? migrateSupportTables()
     }
 
@@ -146,15 +181,19 @@ private final class BackgroundPriceUpdater {
         let frequency = try appSettingValue(for: AutomaticPriceUpdateSchedule.frequencySettingKey) ?? "1 小时"
         let dailyTimeMinutes = try appSettingValue(for: AutomaticPriceUpdateSchedule.dailyTimeSettingKey)
             .flatMap(Int.init) ?? 9 * 60
+        let lastRun = try settingDate(for: AutomaticPriceUpdateSchedule.lastRunSettingKey)
         var scheduleAnchor = try settingDate(for: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey)
         if scheduleAnchor == nil {
-            scheduleAnchor = now
+            scheduleAnchor = AutomaticPriceUpdateSchedule.recoveredAnchor(
+                scheduleAnchor: nil,
+                lastRun: lastRun,
+                now: now
+            )
             try setAppSetting(
                 key: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey,
-                value: Self.timestamp(from: now)
+                value: Self.timestamp(from: scheduleAnchor ?? now)
             )
         }
-        let lastRun = try settingDate(for: AutomaticPriceUpdateSchedule.lastRunSettingKey)
         let lastAttempt = try settingDate(for: AutomaticPriceUpdateSchedule.lastAttemptSettingKey)
         return AutomaticPriceUpdateSchedule.nextDelaySeconds(
             frequency: frequency,
@@ -203,6 +242,12 @@ private final class BackgroundPriceUpdater {
                 )
             }
             try execute("COMMIT")
+            DistributedNotificationCenter.default().postNotificationName(
+                AutomaticPriceUpdateSchedule.didCompleteNotificationName,
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
         } catch {
             try? execute("ROLLBACK")
             throw error

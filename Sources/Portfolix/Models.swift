@@ -619,6 +619,24 @@ struct PositionEditorPresentation: Identifiable {
     let position: Position?
 }
 
+private final class BackgroundPriceUpdateObservation: @unchecked Sendable {
+    private let token: NSObjectProtocol
+
+    init(handler: @escaping @Sendable () -> Void) {
+        token = DistributedNotificationCenter.default().addObserver(
+            forName: AutomaticPriceUpdateSchedule.didCompleteNotificationName,
+            object: nil,
+            queue: .main
+        ) { _ in
+            handler()
+        }
+    }
+
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(token)
+    }
+}
+
 @MainActor
 final class PortfolioStore: ObservableObject {
     private static let aiAnalysisLogger = Logger(
@@ -736,6 +754,7 @@ final class PortfolioStore: ObservableObject {
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
     private var loginItemConfigurationTask: Task<Void, Never>?
+    private var backgroundPriceUpdateObservation: BackgroundPriceUpdateObservation?
     private static let backgroundUpdatesEnabledDefaultsKey = "portfolix.backgroundUpdatesEnabled"
     private static let registeredPriceUpdaterBuildDefaultsKey = "portfolix.registeredPriceUpdaterBuild"
     private static let updateFrequencyDefaultsKey = "portfolix.automaticPriceUpdateFrequency"
@@ -902,6 +921,7 @@ final class PortfolioStore: ObservableObject {
         if managesSystemBackgroundUpdates {
             persistAutomaticPriceUpdateSetting()
             configureLoginItem()
+            observeBackgroundPriceUpdates()
         }
     }
 
@@ -2403,6 +2423,14 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
+    private func observeBackgroundPriceUpdates() {
+        backgroundPriceUpdateObservation = BackgroundPriceUpdateObservation { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.synchronizePersistedMarketDataIfNeeded()
+            }
+        }
+    }
+
     private static func marketDataFingerprint(_ positions: [Position]) -> String {
         positions
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -2940,9 +2968,18 @@ final class PortfolioStore: ObservableObject {
                 for: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey
             )
             if resetSchedule || existingAnchor == nil {
+                let lastRun = try positionRepository.appSetting(
+                    for: AutomaticPriceUpdateSchedule.lastRunSettingKey
+                ).flatMap(Self.isoDateFormatter.date(from:))
+                let recoveredAnchor = resetSchedule
+                    ? Date.now
+                    : AutomaticPriceUpdateSchedule.recoveredAnchor(
+                        scheduleAnchor: nil,
+                        lastRun: lastRun
+                    )
                 try positionRepository.setAppSetting(
                     key: AutomaticPriceUpdateSchedule.scheduleAnchorSettingKey,
-                    value: Self.isoDateFormatter.string(from: .now)
+                    value: Self.isoDateFormatter.string(from: recoveredAnchor)
                 )
             }
         } catch {
