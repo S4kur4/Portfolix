@@ -255,7 +255,7 @@ struct PositionRepositoryTests {
         )
     }
 
-    @Test
+    @Test @MainActor
     func dataPackageRoundTripsFinancialHistoryWithoutSensitiveData() throws {
         let (_, sourceDatabaseURL) = makeDatabaseURLs()
         let sourceRepository = try PositionRepository(databaseURL: sourceDatabaseURL)
@@ -422,6 +422,17 @@ struct PositionRepositoryTests {
             try destinationRepository.appSetting(for: RiskProfilePersistence.updatedAtKey)
                 == "2026-06-20T10:30:00Z"
         )
+
+        let (_, freshInstallDatabaseURL) = makeDatabaseURLs()
+        let freshInstallRepository = try PositionRepository(databaseURL: freshInstallDatabaseURL)
+        let freshInstallStore = PortfolioStore(positionRepository: freshInstallRepository)
+        #expect(freshInstallStore.dailyProfitHistory.isEmpty)
+
+        _ = try freshInstallStore.importFinancialData(preparedImport)
+
+        let importedDailyProfit = try #require(freshInstallStore.dailyProfitHistory.first)
+        #expect(freshInstallStore.dailyProfitHistory.count == 1)
+        #expect(Calendar.current.isDate(importedDailyProfit.date, inSameDayAs: secondDay))
 
         let legacyManifestURL = extractedDirectory.appendingPathComponent("manifest.json")
         let legacyManifestData = try Data(contentsOf: legacyManifestURL)

@@ -1066,6 +1066,7 @@ final class PortfolioStore: ObservableObject {
         let summary = try positionRepository.importDataPayload(preparedImport.payload)
         positions = try positionRepository.fetchPositions()
         snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+        dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         if summary.riskProfileIncluded {
             loadRiskProfileSettings(from: positionRepository)
         }
