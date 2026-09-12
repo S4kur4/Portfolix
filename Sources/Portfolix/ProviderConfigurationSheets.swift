@@ -29,7 +29,7 @@ enum LLMAPIKeyValidationProbe {
 }
 
 struct LLMConfigurationSheet: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var provider: LLMProviderOption = .deepSeek
     @State private var model = ""

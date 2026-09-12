@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Observation
 import OSLog
 import PortfolixCore
 import ServiceManagement
@@ -262,7 +263,7 @@ enum AssetCategory: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum Freshness: String {
+enum Freshness: String, Sendable {
     case updated = "已更新"
     case stale = "已过期"
     case manual = "手工价格"
@@ -284,7 +285,7 @@ enum Freshness: String {
     }
 }
 
-struct Position: Identifiable {
+struct Position: Identifiable, Sendable {
     let id: UUID
     let name: String
     let symbol: String
@@ -343,7 +344,7 @@ struct Position: Identifiable {
     }
 
     func relativeUpdateText(now: Date, language: AppLanguage = .chinese) -> String {
-        guard let date = ISO8601DateFormatter().date(from: fetchedAt) else {
+        guard let date = Self.isoDate(from: fetchedAt) else {
             return quoteTime
         }
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -385,7 +386,7 @@ struct Position: Identifiable {
     }
 
     func wasFetchedOnSameDay(as date: Date, calendar: Calendar = .current) -> Bool {
-        guard let fetchedDate = ISO8601DateFormatter().date(from: fetchedAt) else { return false }
+        guard let fetchedDate = Self.isoDate(from: fetchedAt) else { return false }
         return calendar.isDate(fetchedDate, inSameDayAs: date)
     }
 
@@ -394,7 +395,7 @@ struct Position: Identifiable {
     }
 
     private func fetchedDateText(language: AppLanguage) -> String? {
-        guard let date = ISO8601DateFormatter().date(from: fetchedAt) else { return nil }
+        guard let date = Self.isoDate(from: fetchedAt) else { return nil }
         return language == .english
             ? Self.englishPriceDateFormatter.string(from: date)
             : Self.priceDateFormatter.string(from: date)
@@ -412,36 +413,49 @@ struct Position: Identifiable {
     }
 
     private static func quoteTimeDate(from value: String) -> Date? {
-        if let date = ISO8601DateFormatter().date(from: value) {
+        if let date = isoDate(from: value) {
             return date
         }
 
-        let formats = [
-            "yyyy-MM-dd",
-            "yyyy/MM/dd",
-            "yyyyMMdd",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd'T'HH:mm:ss.SSS",
-            "yyyy-MM-dd'T'HH:mm:ss.S",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm:ss.SSS",
-            "yyyy-MM-dd HH:mm:ss.S",
-            "yyyy-MM-dd HH:mm",
-            "yyyy/MM/dd HH:mm:ss",
-            "yyyy/MM/dd HH:mm:ss.SSS",
-            "yyyy/MM/dd HH:mm:ss.S",
-            "yyyy/MM/dd HH:mm",
-        ]
-        for format in formats {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.timeZone = .current
-            formatter.dateFormat = format
+        for formatter in quoteTimeFormatters {
             if let date = formatter.date(from: value) {
                 return date
             }
         }
         return nil
+    }
+
+    private static func isoDate(from value: String) -> Date? {
+        (try? isoDateFormatWithFractionalSeconds.parse(value))
+            ?? (try? isoDateFormat.parse(value))
+    }
+
+    private static let isoDateFormat = Date.ISO8601FormatStyle()
+    private static let isoDateFormatWithFractionalSeconds = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: true
+    )
+
+    private static let quoteTimeFormatters: [DateFormatter] = [
+        "yyyy-MM-dd",
+        "yyyy/MM/dd",
+        "yyyyMMdd",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm:ss.SSS",
+        "yyyy-MM-dd'T'HH:mm:ss.S",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss.SSS",
+        "yyyy-MM-dd HH:mm:ss.S",
+        "yyyy-MM-dd HH:mm",
+        "yyyy/MM/dd HH:mm:ss",
+        "yyyy/MM/dd HH:mm:ss.SSS",
+        "yyyy/MM/dd HH:mm:ss.S",
+        "yyyy/MM/dd HH:mm",
+    ].map { format in
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = format
+        return formatter
     }
 
     private static let priceDateFormatter: DateFormatter = {
@@ -520,7 +534,7 @@ struct AllocationItem: Identifiable {
     var id: String { name }
 }
 
-struct PortfolioSnapshot: Identifiable {
+struct PortfolioSnapshot: Identifiable, Sendable {
     let id = UUID()
     let date: Date
     let totalValueCNY: Double
@@ -537,6 +551,34 @@ struct DailyProfitPoint: Identifiable, Equatable, Sendable {
     let amountCNY: Decimal
 
     var id: Date { date }
+}
+
+struct PortfolioDerivedMetrics: Equatable, Sendable {
+    static let empty = PortfolioDerivedMetrics(positions: [])
+
+    let totalValueCNY: Decimal
+    let totalCostCNY: Decimal
+    let categoryValues: [AssetCategory: Decimal]
+    let currencyValues: [DisplayCurrency: Decimal]
+
+    init(positions: [Position]) {
+        var totalValue: Decimal = 0
+        var totalCost: Decimal = 0
+        var categoryValues: [AssetCategory: Decimal] = [:]
+        var currencyValues: [DisplayCurrency: Decimal] = [:]
+
+        for position in positions {
+            totalValue += position.marketValueCNY
+            totalCost += position.totalCost / position.quoteCurrency.rateFromCNY
+            categoryValues[position.category, default: 0] += position.marketValueCNY
+            currencyValues[position.quoteCurrency, default: 0] += position.marketValueCNY
+        }
+
+        totalValueCNY = totalValue
+        totalCostCNY = totalCost
+        self.categoryValues = categoryValues
+        self.currencyValues = currencyValues
+    }
 }
 
 struct RiskConstraintEvaluation {
@@ -638,32 +680,35 @@ private final class BackgroundPriceUpdateObservation: @unchecked Sendable {
 }
 
 @MainActor
-final class PortfolioStore: ObservableObject {
+@Observable
+final class PortfolioStore {
     private static let aiAnalysisLogger = Logger(
         subsystem: "app.portfolix.mac",
         category: "AIAnalysis"
     )
 
-    @Published var selection: SidebarSection = .overview
-    @Published var displayCurrency: DisplayCurrency = .cny
-    @Published var appearanceMode: AppearanceMode = .system
-    @Published var appLanguage: AppLanguage = .chinese {
+    var selection: SidebarSection = .overview
+    var displayCurrency: DisplayCurrency = .cny
+    var appearanceMode: AppearanceMode = .system
+    var appLanguage: AppLanguage = .chinese {
         didSet {
             UserDefaults.standard.set(appLanguage.rawValue, forKey: Self.appLanguageDefaultsKey)
             persistAppSetting(key: "app_language", value: appLanguage.rawValue)
         }
     }
-    @Published var isRefreshing = false
-    @Published private(set) var refreshingPositionIDs: Set<Position.ID> = []
-    @Published var positionEditorPresentation: PositionEditorPresentation?
-    @Published var searchText = ""
-    @Published var selectedPositionID: Position.ID?
-    @Published var trendMetric: TrendMetric = .profitValue
-    @Published var trendRange: TrendRange = .month
-    @Published var riskLevel = "未配置"
-    @Published var riskProfileConfigured = false
-    @Published var riskProfileVersion = 0
-    @Published var riskProfileUpdatedAt: Date = Date() {
+    var isRefreshing = false
+    private(set) var refreshingPositionIDs: Set<Position.ID> = []
+    var positionEditorPresentation: PositionEditorPresentation?
+    var searchText = ""
+    var selectedPositionID: Position.ID?
+    var trendMetric: TrendMetric = .profitValue
+    var trendRange: TrendRange = .month {
+        didSet { rebuildVisibleSnapshots() }
+    }
+    var riskLevel = "未配置"
+    var riskProfileConfigured = false
+    var riskProfileVersion = 0
+    var riskProfileUpdatedAt: Date = Date() {
         didSet {
             UserDefaults.standard.set(riskProfileUpdatedAt, forKey: Self.riskProfileUpdatedAtDefaultsKey)
             persistAppSetting(
@@ -672,26 +717,25 @@ final class PortfolioStore: ObservableObject {
             )
         }
     }
-    @Published var relativeTimeNow = Date()
-    @Published var cryptoLimit = 15.0
-    @Published var positionLimit = 30.0
-    @Published var foreignCurrencyLimit = 50.0
-    @Published var liquidityMinimum = 10.0
-    @Published var persistenceErrorMessage: String?
-    @Published var backgroundUpdatesEnabled: Bool {
+    var cryptoLimit = 15.0
+    var positionLimit = 30.0
+    var foreignCurrencyLimit = 50.0
+    var liquidityMinimum = 10.0
+    var persistenceErrorMessage: String?
+    var backgroundUpdatesEnabled: Bool {
         didSet {
             UserDefaults.standard.set(backgroundUpdatesEnabled, forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
             configureLoginItem()
         }
     }
-    @Published var automaticPriceUpdateFrequency: AutomaticPriceUpdateFrequency = .hourly {
+    var automaticPriceUpdateFrequency: AutomaticPriceUpdateFrequency = .hourly {
         didSet {
             UserDefaults.standard.set(automaticPriceUpdateFrequency.rawValue, forKey: Self.updateFrequencyDefaultsKey)
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
         }
     }
-    @Published var automaticPriceUpdateDailyTimeMinutes = 9 * 60 {
+    var automaticPriceUpdateDailyTimeMinutes = 9 * 60 {
         didSet {
             UserDefaults.standard.set(
                 automaticPriceUpdateDailyTimeMinutes,
@@ -700,20 +744,20 @@ final class PortfolioStore: ObservableObject {
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
         }
     }
-    @Published var aiConfiguration: AIProviderConfiguration = AIProviderConfigurationStore.loadLLM() {
+    var aiConfiguration: AIProviderConfiguration = AIProviderConfigurationStore.loadLLM() {
         didSet {
             AIProviderConfigurationStore.saveLLM(aiConfiguration)
         }
     }
-    @Published private(set) var availableLLMModels = AIProviderConfigurationStore.availableDeepSeekModels()
-    @Published var searchConfiguration: SearchConfiguration = AIProviderConfigurationStore.loadSearch() {
+    private(set) var availableLLMModels = AIProviderConfigurationStore.availableDeepSeekModels()
+    var searchConfiguration: SearchConfiguration = AIProviderConfigurationStore.loadSearch() {
         didSet {
             AIProviderConfigurationStore.saveSearch(searchConfiguration)
             refreshProviderCredentialState()
         }
     }
-    @Published var hasLLMAPIKey = false
-    @Published private(set) var mcpReadAccessEnabled = false
+    var hasLLMAPIKey = false
+    private(set) var mcpReadAccessEnabled = false
 
     func setMCPReadAccessEnabled(_ enabled: Bool) {
         guard let positionRepository else {
@@ -725,38 +769,45 @@ final class PortfolioStore: ObservableObject {
             mcpReadAccessEnabled = enabled
         } catch { persistenceErrorMessage = error.localizedDescription }
     }
-    @Published var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
+    var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var hasValidLLMAPIKey: Bool {
         hasLLMAPIKey && llmAPIKeyValidationState == .valid
     }
-    @Published var aiAnalysisRun = AIAnalysisRun()
-    @Published var aiAnalysisReport: AIAnalysisReport?
-    @Published private(set) var aiAnalysisChatItems: [AIReportChatItem] = []
-    @Published private(set) var isAnsweringAIAnalysisFollowUp = false
-    @Published private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
-    @Published private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
-    private var isAIAnalysisGenerationInFlight = false
-    private var lastAIAnalysisRetentionPruneDay: Date?
-    @Published var aiChatRetentionPeriod: AIChatRetentionPeriod = .oneWeek {
+    var aiAnalysisRun = AIAnalysisRun()
+    var aiAnalysisReport: AIAnalysisReport?
+    private(set) var aiAnalysisChatItems: [AIReportChatItem] = []
+    private(set) var isAnsweringAIAnalysisFollowUp = false
+    private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
+    private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
+    @ObservationIgnored private var isAIAnalysisGenerationInFlight = false
+    @ObservationIgnored private var lastAIAnalysisRetentionPruneDay: Date?
+    var aiChatRetentionPeriod: AIChatRetentionPeriod = .oneWeek {
         didSet {
             UserDefaults.standard.set(aiChatRetentionPeriod.rawValue, forKey: Self.aiChatRetentionDefaultsKey)
             persistAppSetting(key: "ai_chat_retention", value: aiChatRetentionPeriod.rawValue)
             pruneAIAnalysisChatHistory()
         }
     }
-    @Published private var aiInvestmentProfile: AIInvestmentProfile?
-    @Published private var isGeneratingInvestmentProfile = false
-    var investmentProfileExposureCache: [AssetExposureProfile] = []
+    private var aiInvestmentProfile: AIInvestmentProfile?
+    private var isGeneratingInvestmentProfile = false
+    @ObservationIgnored var investmentProfileExposureCache: [AssetExposureProfile] = []
 
-    @Published var positions: [Position]
-    @Published var snapshotHistory: [PortfolioSnapshot]
-    @Published var dailyProfitHistory: [DailyProfitPoint]
+    var positions: [Position] {
+        didSet { derivedMetrics = PortfolioDerivedMetrics(positions: positions) }
+    }
+    var snapshotHistory: [PortfolioSnapshot] {
+        didSet { rebuildVisibleSnapshots() }
+    }
+    var dailyProfitHistory: [DailyProfitPoint]
+    private var derivedMetrics = PortfolioDerivedMetrics.empty
+    private var visibleSnapshotCache: [PortfolioSnapshot] = []
     private let positionRepository: PositionRepository?
+    private let analyticsWorker: PortfolioAnalyticsWorker?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
-    private var deepSeekModelCatalogRefreshTask: Task<Void, Never>?
-    private var loginItemConfigurationTask: Task<Void, Never>?
-    private var backgroundPriceUpdateObservation: BackgroundPriceUpdateObservation?
+    @ObservationIgnored private var deepSeekModelCatalogRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var loginItemConfigurationTask: Task<Void, Never>?
+    @ObservationIgnored private var backgroundPriceUpdateObservation: BackgroundPriceUpdateObservation?
     private static let backgroundUpdatesEnabledDefaultsKey = "portfolix.backgroundUpdatesEnabled"
     private static let registeredPriceUpdaterBuildDefaultsKey = "portfolix.registeredPriceUpdaterBuild"
     private static let updateFrequencyDefaultsKey = "portfolix.automaticPriceUpdateFrequency"
@@ -907,6 +958,9 @@ final class PortfolioStore: ObservableObject {
         snapshotHistory = loadedSnapshots
         dailyProfitHistory = loadedDailyProfitHistory
         self.positionRepository = activeRepository
+        analyticsWorker = activeRepository.map { PortfolioAnalyticsWorker(databaseURL: $0.storageURL) }
+        derivedMetrics = PortfolioDerivedMetrics(positions: positions)
+        rebuildVisibleSnapshots()
         mcpReadAccessEnabled = (try? activeRepository?.appSetting(for: MCPAccess.settingKey)) == "true"
         loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
@@ -928,11 +982,11 @@ final class PortfolioStore: ObservableObject {
         }
     }
 
-    func updateRelativeTime(now: Date = .now) {
-        relativeTimeNow = now
+    func performPeriodicMaintenance(now: Date = .now) {
         let currentDay = Calendar.current.startOfDay(for: now)
         if lastAIAnalysisRetentionPruneDay != currentDay {
             pruneAIAnalysisChatHistory(now: now)
+            rebuildVisibleSnapshots(now: now)
         }
         if backgroundUpdatesEnabled {
             synchronizePersistedMarketDataIfNeeded()
@@ -940,7 +994,7 @@ final class PortfolioStore: ObservableObject {
     }
 
     var totalValueCNY: Decimal {
-        positions.reduce(0) { $0 + $1.marketValueCNY }
+        derivedMetrics.totalValueCNY
     }
 
     var totalProfitCNY: Decimal {
@@ -948,9 +1002,7 @@ final class PortfolioStore: ObservableObject {
     }
 
     var totalCostCNY: Decimal {
-        positions.reduce(0) {
-            $0 + $1.totalCost / $1.quoteCurrency.rateFromCNY
-        }
+        derivedMetrics.totalCostCNY
     }
 
     var totalProfitRate: Decimal {
@@ -991,7 +1043,7 @@ final class PortfolioStore: ObservableObject {
             (
                 category.title(language: appLanguage),
                 category.color,
-                positions.filter { $0.category == category }.reduce(0) { $0 + $1.marketValueCNY }
+                derivedMetrics.categoryValues[category, default: 0]
             )
         }
     }
@@ -1001,7 +1053,7 @@ final class PortfolioStore: ObservableObject {
             (
                 currency.rawValue,
                 currency.color,
-                positions.filter { $0.quoteCurrency == currency }.reduce(0) { $0 + $1.marketValueCNY }
+                derivedMetrics.currencyValues[currency, default: 0]
             )
         }
     }
@@ -1015,12 +1067,17 @@ final class PortfolioStore: ObservableObject {
     }
 
     var visibleSnapshots: [PortfolioSnapshot] {
+        visibleSnapshotCache
+    }
+
+    private func rebuildVisibleSnapshots(now: Date = .now) {
         let calendar = Calendar.current
-        guard let cutoffDate = calendar.date(byAdding: .day, value: -trendRange.days, to: .now) else {
-            return snapshotHistory
+        guard let cutoffDate = calendar.date(byAdding: .day, value: -trendRange.days, to: now) else {
+            visibleSnapshotCache = snapshotHistory
+            return
         }
         let cutoff = calendar.startOfDay(for: cutoffDate)
-        return snapshotHistory.filter { $0.date >= cutoff }
+        visibleSnapshotCache = snapshotHistory.filter { $0.date >= cutoff }
     }
 
     var riskConstraintEvaluation: RiskConstraintEvaluation {
@@ -1136,13 +1193,11 @@ final class PortfolioStore: ObservableObject {
 
         if let positionRepository {
             try positionRepository.insert(position)
+            let updatedPositions = positions + [position]
+            persistCurrentSnapshot(using: updatedPositions)
             positions = try positionRepository.fetchPositions()
         } else {
             positions.append(position)
-        }
-        persistCurrentSnapshot()
-        if let positionRepository {
-            positions = try positionRepository.fetchPositions()
         }
     }
 
@@ -1187,7 +1242,7 @@ final class PortfolioStore: ObservableObject {
             quoteCurrency: quoteCurrency,
             source: resolvedSource
         )
-        let fetchedAt = ISO8601DateFormatter().string(from: .now)
+        let fetchedAt = Self.isoDateFormatter.string(from: .now)
 
         let updatedPosition = Position(
             id: current.id,
@@ -1209,13 +1264,12 @@ final class PortfolioStore: ObservableObject {
 
         if let positionRepository {
             try positionRepository.update(updatedPosition)
+            var updatedPositions = positions
+            updatedPositions[index] = updatedPosition
+            persistCurrentSnapshot(using: updatedPositions)
             positions = try positionRepository.fetchPositions()
         } else {
             positions[index] = updatedPosition
-        }
-        persistCurrentSnapshot()
-        if let positionRepository {
-            positions = try positionRepository.fetchPositions()
         }
     }
 
@@ -1269,16 +1323,14 @@ final class PortfolioStore: ObservableObject {
         }
 
         guard !updatedPositions.isEmpty else { return }
+        let replacements = Dictionary(uniqueKeysWithValues: updatedPositions.map { ($0.id, $0) })
         if let positionRepository {
             try positionRepository.updateBalances(updatedPositions)
+            let mergedPositions = positions.map { replacements[$0.id] ?? $0 }
+            persistCurrentSnapshot(using: mergedPositions)
             positions = try positionRepository.fetchPositions()
         } else {
-            let replacements = Dictionary(uniqueKeysWithValues: updatedPositions.map { ($0.id, $0) })
             positions = positions.map { replacements[$0.id] ?? $0 }
-        }
-        persistCurrentSnapshot()
-        if let positionRepository {
-            positions = try positionRepository.fetchPositions()
         }
     }
 
@@ -1287,10 +1339,9 @@ final class PortfolioStore: ObservableObject {
         var trend = current.weeklyTrend
         guard !trend.isEmpty else { return [latest] }
 
-        let formatter = ISO8601DateFormatter()
         let calendar = Calendar.current
-        let oldFetchedAt = formatter.date(from: current.fetchedAt)
-        let newFetchedAt = formatter.date(from: fetchedAt) ?? .now
+        let oldFetchedAt = Self.isoDateFormatter.date(from: current.fetchedAt)
+        let newFetchedAt = Self.isoDateFormatter.date(from: fetchedAt) ?? .now
         if let oldFetchedAt, calendar.isDate(oldFetchedAt, inSameDayAs: newFetchedAt) {
             trend[trend.count - 1] = latest
             return trend
@@ -1549,7 +1600,7 @@ final class PortfolioStore: ObservableObject {
         refreshedCount: Int
     ) {
         await prepareMarketDataForAIAnalysis()
-        let positionPerformance = loadAIPositionPerformance(asOf: Date())
+        let positionPerformance = await loadAIPositionPerformance(asOf: Date())
         return (
             positions: positions,
             context: makeAIStoreContext(positionPerformance: positionPerformance),
@@ -1593,8 +1644,8 @@ final class PortfolioStore: ObservableObject {
         }
 
         do {
-            let artifacts = try positionRepository?.fetchLatestAIAnalysisArtifacts() ?? nil
-            let followUpContext = makeAIFollowUpPortfolioContext(asOf: Date())
+            let artifacts = try await analyticsWorker?.fetchLatestAIAnalysisArtifacts() ?? nil
+            let followUpContext = await makeAIFollowUpPortfolioContext(asOf: Date())
             let result = try await aiAgent.answerFollowUp(
                 question: question,
                 report: report,
@@ -1754,7 +1805,7 @@ final class PortfolioStore: ObservableObject {
                 .marketDataLoaded(total: positions.count),
                 startedAt: startedAt
             )
-            let positionPerformance = loadAIPositionPerformance(asOf: Date())
+            let positionPerformance = await loadAIPositionPerformance(asOf: Date())
             analysisContext = makeAIStoreContext(positionPerformance: positionPerformance)
             let previousReport = aiAnalysisReport
             let result = try await withAIAnalysisGenerationTimeout(
@@ -2646,6 +2697,10 @@ final class PortfolioStore: ObservableObject {
 
         isRefreshing = true
         defer { isRefreshing = false }
+        let performanceInterval = PortfolixPerformance.begin("QuoteRefresh")
+        defer {
+            PortfolixPerformance.end("QuoteRefresh", identifier: performanceInterval)
+        }
 
         let currentPositions = positions
         let quoteRequests = currentPositions.enumerated().compactMap { index, position -> (Int, Position.ID, AssetLookupCandidate)? in
@@ -2683,23 +2738,49 @@ final class PortfolioStore: ObservableObject {
             return results
         }
 
-        var refreshedCount = 0
+        var replacements: [Position.ID: Position] = [:]
         for (_, positionID, resolved) in resolutions.sorted(by: { $0.0 < $1.0 }) {
             guard let resolved,
                   let currentPosition = positions.first(where: { $0.id == positionID }) else { continue }
             do {
-                if try applyResolvedQuote(resolved, to: currentPosition) {
-                    refreshedCount += 1
+                if let updatedPosition = try position(applying: resolved, to: currentPosition) {
+                    replacements[positionID] = updatedPosition
                 }
             } catch {
                 continue
             }
         }
-        persistCurrentSnapshot()
+
+        let updatedPositions = currentPositions.compactMap { replacements[$0.id] }
+        let mergedPositions = positions.map { replacements[$0.id] ?? $0 }
+        do {
+            if let analyticsWorker,
+               let persistedState = try await analyticsWorker.persistQuoteRefresh(
+                   updatedPositions: updatedPositions,
+                   snapshotPositions: mergedPositions
+               ) {
+                positions = persistedState.positions
+                snapshotHistory = persistedState.snapshots
+                dailyProfitHistory = persistedState.dailyProfitHistory
+            } else if let positionRepository {
+                try positionRepository.applyQuoteRefresh(
+                    updatedPositions: updatedPositions,
+                    snapshotPositions: mergedPositions
+                )
+                positions = try positionRepository.fetchPositions()
+                snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+                dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+            } else if !replacements.isEmpty {
+                positions = mergedPositions
+            }
+        } catch {
+            persistenceErrorMessage = error.localizedDescription
+            return 0
+        }
         if refreshInvestmentProfile {
             refreshInvestmentProfileIfNeeded()
         }
-        return refreshedCount
+        return replacements.count
     }
 
     private func refreshLatestPrice(for positionID: Position.ID) async {
@@ -2708,45 +2789,87 @@ final class PortfolioStore: ObservableObject {
         defer { refreshingPositionIDs.remove(positionID) }
 
         do {
-            _ = try await applyLatestQuote(for: position)
-            persistCurrentSnapshot()
+            if let updatedPosition = try await latestPositionApplyingQuote(for: position) {
+                let updatedPositions = positions.map {
+                    $0.id == updatedPosition.id ? updatedPosition : $0
+                }
+                if let positionRepository {
+                    try positionRepository.update(updatedPosition)
+                    persistCurrentSnapshot(using: updatedPositions)
+                    positions = try positionRepository.fetchPositions()
+                } else {
+                    positions = updatedPositions
+                }
+            } else {
+                persistCurrentSnapshot()
+            }
             refreshInvestmentProfileIfNeeded(force: true)
         } catch {
             persistenceErrorMessage = "更新 \(position.name) 失败：\(error.localizedDescription)"
         }
     }
 
-    @discardableResult
-    private func applyLatestQuote(for position: Position) async throws -> Bool {
+    private func latestPositionApplyingQuote(for position: Position) async throws -> Position? {
         guard let resolved = try await latestQuote(for: position), resolved.latestPrice != nil else {
-            return false
+            return nil
         }
-        return try applyResolvedQuote(resolved, to: position)
+        return try self.position(applying: resolved, to: position)
     }
 
-    @discardableResult
-    private func applyResolvedQuote(_ resolved: AssetLookupCandidate, to position: Position) throws -> Bool {
-        guard let latestPrice = resolved.latestPrice else { return false }
-        try updatePosition(
-            id: position.id,
-            name: resolved.name,
-            symbol: resolved.symbol,
+    private func position(applying resolved: AssetLookupCandidate, to current: Position) throws -> Position? {
+        guard let latestPrice = resolved.latestPrice else { return nil }
+        let normalizedName = resolved.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSymbol = resolved.symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        try PositionInputValidator.validate(
+            name: normalizedName,
+            symbol: normalizedSymbol,
+            quantity: current.quantity,
+            averageCost: current.averageCost,
+            latestPrice: latestPrice
+        )
+        guard !containsPosition(symbol: normalizedSymbol, category: resolved.category, excluding: current.id) else {
+            throw PositionValidationError.duplicateAsset
+        }
+        let resolvedSource = normalizedQuoteSource(resolved.upstreamSource, category: resolved.category)
+        try PositionInputValidator.validateProviderIdentity(
             category: resolved.category,
-            quantity: position.quantity,
-            averageCost: position.averageCost,
             quoteCurrency: resolved.quoteCurrency,
+            source: resolvedSource
+        )
+        let fetchedAt = Self.isoDateFormatter.string(from: .now)
+        let marketValueCNY = calculateMarketValueCNY(
+            category: resolved.category,
+            quantity: current.quantity,
             latestPrice: latestPrice,
-            source: resolved.upstreamSource,
+            quoteCurrency: resolved.quoteCurrency
+        )
+        let profitRate = current.averageCost == 0
+            ? Decimal.zero
+            : (latestPrice - current.averageCost) / current.averageCost * 100
+
+        return Position(
+            id: current.id,
+            name: normalizedName,
+            symbol: normalizedSymbol,
+            category: resolved.category,
+            quoteCurrency: resolved.quoteCurrency,
+            quantity: current.quantity,
+            averageCost: current.averageCost,
+            latestPrice: latestPrice,
+            marketValueCNY: marketValueCNY,
+            profitRate: profitRate,
+            weeklyTrend: updatedWeeklyTrend(current: current, latestPrice: latestPrice, fetchedAt: fetchedAt),
+            source: resolvedSource,
             quoteTime: resolved.quoteTime ?? "刚刚",
+            fetchedAt: fetchedAt,
             freshness: .updated
         )
-        return true
     }
 
-    private func makeAIFollowUpPortfolioContext(asOf date: Date) -> AIFollowUpPortfolioContext {
+    private func makeAIFollowUpPortfolioContext(asOf date: Date) async -> AIFollowUpPortfolioContext {
         let generatedAt = Self.isoDateFormatter.string(from: date)
         let snapshotDate = Self.aiSnapshotDayFormatter.string(from: date)
-        let positionPerformance = loadAIPositionPerformance(asOf: date)
+        let positionPerformance = await loadAIPositionPerformance(asOf: date)
         let totalValue = totalValueCNY
         let totalValueForAllocation = max(totalValue.doubleValue, 0.001)
         let portfolioTodayProfit = todayProfitCNY(asOf: date)
@@ -2844,91 +2967,9 @@ final class PortfolioStore: ObservableObject {
         return AIPositionPerformanceContext(oneWeek: window(days: 7), oneMonth: window(days: 30))
     }
 
-    private func loadAIPositionPerformance(asOf date: Date) -> [Position.ID: AIPositionPerformanceContext] {
-        guard let positionRepository else { return [:] }
-        var result: [Position.ID: AIPositionPerformanceContext] = [:]
-        for position in positions {
-            let snapshots = (try? positionRepository.fetchAssetPriceSnapshots(
-                positionID: position.id,
-                lookbackDays: 45,
-                through: date
-            )) ?? []
-            result[position.id] = AIPositionPerformanceContext(
-                oneWeek: makeAIPerformanceWindow(
-                    position: position,
-                    snapshots: snapshots,
-                    periodDays: 7,
-                    maximumBaselineLagDays: 7,
-                    asOf: date
-                ),
-                oneMonth: makeAIPerformanceWindow(
-                    position: position,
-                    snapshots: snapshots,
-                    periodDays: 30,
-                    maximumBaselineLagDays: 10,
-                    asOf: date
-                )
-            )
-        }
-        return result
-    }
-
-    private func makeAIPerformanceWindow(
-        position: Position,
-        snapshots: [AssetPriceSnapshotPoint],
-        periodDays: Int,
-        maximumBaselineLagDays: Int,
-        asOf date: Date
-    ) -> AIPerformanceWindowContext {
-        let calendar = Calendar.current
-        let targetDate = calendar.date(byAdding: .day, value: -periodDays, to: date) ?? date
-        let baseline = snapshots.last { $0.date <= targetDate }
-        let endDate = Self.aiSnapshotDayFormatter.string(from: date)
-        let basis = "price_change_times_current_quantity_excludes_trades_fees_fx"
-        guard let baseline else {
-            return AIPerformanceWindowContext(
-                status: "insufficient_history",
-                periodDays: periodDays,
-                startDate: nil,
-                endDate: endDate,
-                startPrice: nil,
-                endPrice: Self.aiDecimalString(position.latestPrice),
-                profitAmountQuote: nil,
-                returnRatePct: nil,
-                observationDays: nil,
-                calculationBasis: basis
-            )
-        }
-        let targetLag = calendar.dateComponents([.day], from: baseline.date, to: targetDate).day ?? Int.max
-        let observationDays = calendar.dateComponents([.day], from: baseline.date, to: date).day ?? periodDays
-        guard targetLag <= maximumBaselineLagDays, baseline.latestPrice != 0 else {
-            return AIPerformanceWindowContext(
-                status: "insufficient_history",
-                periodDays: periodDays,
-                startDate: Self.aiSnapshotDayFormatter.string(from: baseline.date),
-                endDate: endDate,
-                startPrice: Self.aiDecimalString(baseline.latestPrice),
-                endPrice: Self.aiDecimalString(position.latestPrice),
-                profitAmountQuote: nil,
-                returnRatePct: nil,
-                observationDays: observationDays,
-                calculationBasis: basis
-            )
-        }
-        let profit = (position.latestPrice - baseline.latestPrice) * position.quantity
-        let returnRate = (position.latestPrice - baseline.latestPrice) / baseline.latestPrice * 100
-        return AIPerformanceWindowContext(
-            status: "available",
-            periodDays: periodDays,
-            startDate: Self.aiSnapshotDayFormatter.string(from: baseline.date),
-            endDate: endDate,
-            startPrice: Self.aiDecimalString(baseline.latestPrice),
-            endPrice: Self.aiDecimalString(position.latestPrice),
-            profitAmountQuote: Self.aiDecimalString(profit),
-            returnRatePct: returnRate.doubleValue,
-            observationDays: observationDays,
-            calculationBasis: basis
-        )
+    private func loadAIPositionPerformance(asOf date: Date) async -> [Position.ID: AIPositionPerformanceContext] {
+        guard let analyticsWorker else { return [:] }
+        return await analyticsWorker.loadPositionPerformance(positions: positions, asOf: date)
     }
 
     private static func aiDecimalString(_ value: Decimal) -> String {
@@ -2961,10 +3002,10 @@ final class PortfolioStore: ObservableObject {
         )
     }
 
-    private func persistCurrentSnapshot() {
+    private func persistCurrentSnapshot(using snapshotPositions: [Position]? = nil) {
         guard let positionRepository else { return }
         do {
-            try positionRepository.replaceDailySnapshots(positions: positions)
+            try positionRepository.replaceDailySnapshots(positions: snapshotPositions ?? positions)
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         } catch {

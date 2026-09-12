@@ -27,6 +27,8 @@ final class PositionRepository {
     private let databaseURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+
+    var storageURL: URL { databaseURL }
     private let aiArtifactEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -404,6 +406,31 @@ final class PositionRepository {
         }
     }
 
+    func update(_ positions: [Position]) throws {
+        guard !positions.isEmpty else { return }
+        try positions.forEach(PositionInputValidator.validate)
+        try transaction {
+            for position in positions {
+                try save(position, operation: "update")
+            }
+        }
+    }
+
+    func applyQuoteRefresh(
+        updatedPositions: [Position],
+        snapshotPositions: [Position],
+        snapshotDate: Date = .now
+    ) throws {
+        try updatedPositions.forEach(PositionInputValidator.validate)
+        try snapshotPositions.forEach(PositionInputValidator.validate)
+        try transaction {
+            for position in updatedPositions {
+                try save(position, operation: "update")
+            }
+            try writeDailySnapshots(positions: snapshotPositions, snapshotDate: snapshotDate)
+        }
+    }
+
     func updateBalances(_ positions: [Position]) throws {
         guard !positions.isEmpty else { return }
         for position in positions {
@@ -489,43 +516,66 @@ final class PositionRepository {
         lookbackDays: Int = 45,
         through date: Date = .now
     ) throws -> [AssetPriceSnapshotPoint] {
+        try fetchAssetPriceSnapshots(
+            positionIDs: [positionID],
+            lookbackDays: lookbackDays,
+            through: date
+        )[positionID] ?? []
+    }
+
+    func fetchAssetPriceSnapshots(
+        positionIDs: [Position.ID],
+        lookbackDays: Int = 45,
+        through date: Date = .now
+    ) throws -> [Position.ID: [AssetPriceSnapshotPoint]] {
+        let uniqueIDs = Array(Set(positionIDs))
+        guard !uniqueIDs.isEmpty else { return [:] }
         let boundedLookback = max(1, min(lookbackDays, 365))
         let startDate = Calendar.current.date(byAdding: .day, value: -boundedLookback, to: date) ?? date
-        let statement = try prepare(
-            """
-            SELECT snapshot_date, latest_price, quantity, market_value_cny
-            FROM asset_price_snapshots
-            WHERE asset_id = ?
-              AND snapshot_date >= ?
-              AND snapshot_date <= ?
-            ORDER BY snapshot_date ASC
-            """
-        )
-        defer { sqlite3_finalize(statement) }
-        try bind(positionID.uuidString, to: 1, in: statement)
-        try bind(Self.dayString(from: startDate), to: 2, in: statement)
-        try bind(Self.dayString(from: date), to: 3, in: statement)
+        var result: [Position.ID: [AssetPriceSnapshotPoint]] = [:]
 
-        var snapshots: [AssetPriceSnapshotPoint] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard
-                let snapshotDate = Self.date(fromDayString: text(at: 0, in: statement)),
-                let latestPrice = Decimal(string: text(at: 1, in: statement)),
-                let quantity = Decimal(string: text(at: 2, in: statement)),
-                let marketValueCNY = Decimal(string: text(at: 3, in: statement))
-            else {
-                throw PositionRepositoryError.invalidStoredData("无法解析资产历史价格快照")
-            }
-            snapshots.append(
-                AssetPriceSnapshotPoint(
-                    date: snapshotDate,
-                    latestPrice: latestPrice,
-                    quantity: quantity,
-                    marketValueCNY: marketValueCNY
-                )
+        for chunkStart in stride(from: 0, to: uniqueIDs.count, by: 400) {
+            let chunkEnd = min(chunkStart + 400, uniqueIDs.count)
+            let ids = Array(uniqueIDs[chunkStart..<chunkEnd])
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+            let statement = try prepare(
+                """
+                SELECT asset_id, snapshot_date, latest_price, quantity, market_value_cny
+                FROM asset_price_snapshots
+                WHERE asset_id IN (\(placeholders))
+                  AND snapshot_date >= ?
+                  AND snapshot_date <= ?
+                ORDER BY asset_id ASC, snapshot_date ASC
+                """
             )
+            defer { sqlite3_finalize(statement) }
+            for (offset, id) in ids.enumerated() {
+                try bind(id.uuidString, to: Int32(offset + 1), in: statement)
+            }
+            try bind(Self.dayString(from: startDate), to: Int32(ids.count + 1), in: statement)
+            try bind(Self.dayString(from: date), to: Int32(ids.count + 2), in: statement)
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard
+                    let positionID = UUID(uuidString: text(at: 0, in: statement)),
+                    let snapshotDate = Self.date(fromDayString: text(at: 1, in: statement)),
+                    let latestPrice = Decimal(string: text(at: 2, in: statement)),
+                    let quantity = Decimal(string: text(at: 3, in: statement)),
+                    let marketValueCNY = Decimal(string: text(at: 4, in: statement))
+                else {
+                    throw PositionRepositoryError.invalidStoredData("无法解析资产历史价格快照")
+                }
+                result[positionID, default: []].append(
+                    AssetPriceSnapshotPoint(
+                        date: snapshotDate,
+                        latestPrice: latestPrice,
+                        quantity: quantity,
+                        marketValueCNY: marketValueCNY
+                    )
+                )
+            }
         }
-        return snapshots
+        return result
     }
 
     func fetchDailyProfitPoints(
@@ -1013,6 +1063,12 @@ final class PositionRepository {
     }
 
     func replaceDailySnapshots(positions: [Position], snapshotDate: Date = .now) throws {
+        try transaction {
+            try writeDailySnapshots(positions: positions, snapshotDate: snapshotDate)
+        }
+    }
+
+    private func writeDailySnapshots(positions: [Position], snapshotDate: Date) throws {
         let day = Self.dayString(from: snapshotDate)
         let cutoff = Self.dayString(
             from: Calendar.current.date(byAdding: .day, value: -365, to: snapshotDate) ?? snapshotDate
@@ -1025,30 +1081,30 @@ final class PositionRepository {
         let totalProfit = totalValue - totalCost
         let profitRate = totalCost == 0 ? Decimal.zero : totalProfit / totalCost * 100
 
-        try transaction {
-            let portfolioStatement = try prepare(
-                """
-                INSERT INTO portfolio_snapshots (
-                    snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(snapshot_date) DO UPDATE SET
-                    total_value_cny = excluded.total_value_cny,
-                    total_cost_cny = excluded.total_cost_cny,
-                    total_profit_cny = excluded.total_profit_cny,
-                    profit_rate = excluded.profit_rate,
-                    updated_at = excluded.updated_at
-                """
-            )
-            defer { sqlite3_finalize(portfolioStatement) }
-            try bind(day, to: 1, in: portfolioStatement)
-            try bind(Self.decimalString(totalValue), to: 2, in: portfolioStatement)
-            try bind(Self.decimalString(totalCost), to: 3, in: portfolioStatement)
-            try bind(Self.decimalString(totalProfit), to: 4, in: portfolioStatement)
-            try bind(Self.decimalString(profitRate), to: 5, in: portfolioStatement)
-            try bind(now, to: 6, in: portfolioStatement)
-            try stepDone(portfolioStatement)
+        let portfolioStatement = try prepare(
+            """
+            INSERT INTO portfolio_snapshots (
+                snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_date) DO UPDATE SET
+                total_value_cny = excluded.total_value_cny,
+                total_cost_cny = excluded.total_cost_cny,
+                total_profit_cny = excluded.total_profit_cny,
+                profit_rate = excluded.profit_rate,
+                updated_at = excluded.updated_at
+            """
+        )
+        defer { sqlite3_finalize(portfolioStatement) }
+        try bind(day, to: 1, in: portfolioStatement)
+        try bind(Self.decimalString(totalValue), to: 2, in: portfolioStatement)
+        try bind(Self.decimalString(totalCost), to: 3, in: portfolioStatement)
+        try bind(Self.decimalString(totalProfit), to: 4, in: portfolioStatement)
+        try bind(Self.decimalString(profitRate), to: 5, in: portfolioStatement)
+        try bind(now, to: 6, in: portfolioStatement)
+        try stepDone(portfolioStatement)
 
-            for position in positions {
+        for position in positions {
+            try autoreleasepool {
                 let statement = try prepare(
                     """
                     INSERT INTO asset_price_snapshots (
@@ -1089,9 +1145,9 @@ final class PositionRepository {
                 try bind(now, to: 15, in: statement)
                 try stepDone(statement)
             }
-
-            try pruneSnapshots(olderThan: cutoff)
         }
+
+        try pruneSnapshots(olderThan: cutoff)
     }
 
     private func deletePosition(id positionID: Position.ID) throws {

@@ -33,7 +33,7 @@ private struct AssetLookupProviderResult: Sendable {
 }
 
 struct PositionEditorSheet: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let presentation: PositionEditorPresentation
     @State private var name: String
@@ -306,9 +306,11 @@ struct PositionEditorSheet: View {
                         .lineLimit(1)
                 }
 
-                if let priceMetadataText {
+                if hasPriceMetadata {
                     LabeledContent(sheetText("价格日期", "Price Date")) {
-                        Text(priceMetadataText)
+                        RelativeTimeText { now in
+                            priceMetadataText(now: now) ?? ""
+                        }
                             .foregroundStyle(PortfolixTheme.secondaryText)
                             .lineLimit(1)
                     }
@@ -957,9 +959,13 @@ private extension PositionEditorSheet {
         selectedQuoteTime = candidate.quoteTime
     }
 
-    var priceMetadataText: String? {
+    var hasPriceMetadata: Bool {
+        priceMetadataText(now: .now) != nil
+    }
+
+    func priceMetadataText(now: Date) -> String? {
         if let position = presentation.position, selectedAssetCandidate == nil {
-            return "\(position.priceDateText(language: language)) · \(position.relativeUpdateText(now: store.relativeTimeNow, language: language))"
+            return "\(position.priceDateText(language: language)) · \(position.relativeUpdateText(now: now, language: language))"
         }
         guard let selectedAssetCandidate else {
             return isManualAssetEntry ? sheetText("手工价格", "Manual price") : nil

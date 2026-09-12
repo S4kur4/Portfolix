@@ -4,13 +4,13 @@ import SwiftUI
 @main
 struct PortfolixApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = PortfolioStore()
+    @State private var store = PortfolioStore()
     @StateObject private var sparkleUpdater = PortfolixSparkleUpdater()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(store)
+                .environment(store)
                 .environmentObject(sparkleUpdater)
                 .frame(minWidth: 1180, minHeight: 760)
         }
@@ -58,11 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var sidebarWidth: CGFloat = 218
-    private let relativeTimeTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    private let periodicMaintenanceTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        @Bindable var store = store
+
         HStack(spacing: 0) {
             SidebarView()
                 .frame(width: sidebarWidth)
@@ -86,7 +88,7 @@ struct RootView: View {
         .tint(PortfolixTheme.violet)
         .sheet(item: $store.positionEditorPresentation) { presentation in
             PositionEditorSheet(presentation: presentation)
-                .environmentObject(store)
+                .environment(store)
         }
         .alert("运行提示", isPresented: persistenceErrorAlertPresented) {
             Button("好", role: .cancel) {
@@ -102,8 +104,8 @@ struct RootView: View {
             guard phase == .active else { return }
             store.synchronizePersistedMarketDataIfNeeded()
         }
-        .onReceive(relativeTimeTimer) { now in
-            store.updateRelativeTime(now: now)
+        .onReceive(periodicMaintenanceTimer) { now in
+            store.performPeriodicMaintenance(now: now)
         }
     }
 

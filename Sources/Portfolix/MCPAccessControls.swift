@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MCPAccessControls: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var confirmsAccess = false
 
     var body: some View {

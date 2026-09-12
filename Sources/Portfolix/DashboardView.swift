@@ -2,7 +2,7 @@ import Charts
 import SwiftUI
 
 struct DashboardView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
 
     var body: some View {
         ScrollView {
@@ -112,7 +112,7 @@ private struct GoldenRatioRowLayout: Layout {
 }
 
 private struct DashboardHeader: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
 
     var body: some View {
         PageHeader(title: localizedText("资产总览", "Overview", language: store.appLanguage)) {
@@ -127,9 +127,11 @@ private struct DashboardHeader: View {
 }
 
 private struct PortfolioHeroCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
 
     var body: some View {
+        @Bindable var store = store
+
         Panel(padding: 0) {
             ZStack {
                 PortfolioValueYearCurveBackground(snapshots: yearToDateSnapshots)
@@ -174,8 +176,15 @@ private struct PortfolioHeroCard: View {
 
                     HStack(spacing: PortfolixSpacing.sm) {
                         Spacer(minLength: 0)
-                        Text(store.isRefreshing ? localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage) : updateSummary)
+                        if store.isRefreshing {
+                            Text(localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage))
+                                .lineLimit(1)
+                        } else {
+                            RelativeTimeText { now in
+                                updateSummary(now: now)
+                            }
                             .lineLimit(1)
+                        }
                         PriceRefreshButton()
                     }
                     .font(.system(size: 11))
@@ -196,11 +205,11 @@ private struct PortfolioHeroCard: View {
         return store.snapshotHistory.filter { $0.date >= startOfYear }
     }
 
-    private var updateSummary: String {
+    private func updateSummary(now: Date) -> String {
         guard let latestPosition = store.positions.max(by: { fetchedDate(for: $0) < fetchedDate(for: $1) }) else {
             return localizedText("尚未添加持仓", "No holdings yet", language: store.appLanguage)
         }
-        return latestPosition.relativeUpdateText(now: store.relativeTimeNow, language: store.appLanguage)
+        return latestPosition.relativeUpdateText(now: now, language: store.appLanguage)
     }
 
     private var todayProfitText: String {
@@ -397,7 +406,7 @@ private enum DashboardChartStyle {
 }
 
 private struct PriceRefreshButton: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var isHovering = false
 
     var body: some View {
@@ -429,7 +438,7 @@ private struct PriceRefreshButton: View {
 }
 
 private struct PerformanceTrendCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var highlightedSnapshotID: PortfolioSnapshot.ID?
 
     private var snapshots: [PortfolioSnapshot] {
@@ -513,6 +522,8 @@ private struct PerformanceTrendCard: View {
     }
 
     var body: some View {
+        @Bindable var store = store
+
         Panel(padding: PortfolixSpacing.lg) {
             VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
                 HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
@@ -787,7 +798,7 @@ private struct PerformanceTrendCard: View {
 }
 
 private struct AssetAllocationCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     let items: [AllocationItem]
     @State private var highlightedItemID: AllocationItem.ID?
 
@@ -822,7 +833,7 @@ private struct AssetAllocationCard: View {
 }
 
 private struct CurrencyDistributionCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     let items: [AllocationItem]
     @State private var highlightedItemID: AllocationItem.ID?
 
@@ -857,7 +868,7 @@ private struct CurrencyDistributionCard: View {
 }
 
 private struct AssetMixBarCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var highlightedItemID: PositionShareItem.ID?
 
     private var items: [PositionShareItem] {
@@ -1101,7 +1112,7 @@ private struct DistributionLegendRow: View {
 }
 
 private struct RecentPositionsCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @AppStorage("dashboard_primary_positions_limit")
     private var displayLimitRawValue = PrimaryPositionDisplayLimit.top10Percent.rawValue
     @State private var sortField: PrimaryPositionSortField = .marketValue
@@ -1336,7 +1347,7 @@ private struct DashboardGlassCapsuleLabel: View {
 }
 
 private struct PositionHeaderRow: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @Binding var sortField: PrimaryPositionSortField
     @Binding var sortDirection: PrimaryPositionSortDirection
 
@@ -1419,7 +1430,7 @@ private struct SortablePositionHeader: View {
 }
 
 private struct CompactPositionRow: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     let position: Position
 
     var body: some View {
@@ -1493,7 +1504,9 @@ private struct CompactPositionRow: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(PortfolixTheme.primaryText)
                     .lineLimit(1)
-                Text(position.relativeUpdateText(now: store.relativeTimeNow, language: store.appLanguage))
+                RelativeTimeText { now in
+                    position.relativeUpdateText(now: now, language: store.appLanguage)
+                }
                     .font(.system(size: 9))
                     .foregroundStyle(PortfolixTheme.tertiaryText)
                     .lineLimit(1)
@@ -1519,7 +1532,7 @@ private extension View {
 }
 
 private struct PositionSparkline: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     let values: [Double]
 
     private var points: [(offset: Int, value: Double)] {
@@ -1599,7 +1612,7 @@ private struct PositionSparkline: View {
 }
 
 private struct InvestmentProfileCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
 
     private var dimensions: [InvestmentProfileDimension] {
         store.investmentProfileDimensions
@@ -2024,7 +2037,7 @@ private enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
 }
 
 private struct DailyProfitCard: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var displayMode: DailyProfitDisplayMode = .calendar
     @State private var selectedMonth = Calendar.current.dateInterval(of: .month, for: .now)?.start ?? .now
     @State private var highlightedDate: Date?

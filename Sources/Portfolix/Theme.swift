@@ -271,6 +271,17 @@ struct CardMetaLabel: View {
     }
 }
 
+struct RelativeTimeText: View {
+    var refreshInterval: TimeInterval = 30
+    let value: (Date) -> String
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: refreshInterval)) { context in
+            Text(value(context.date))
+        }
+    }
+}
+
 struct StatusBadge: View {
     let freshness: Freshness
     var isSelected = false

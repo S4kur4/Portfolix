@@ -596,7 +596,7 @@ struct AIAnalysisAgentResult: Equatable {
     let artifacts: AIAnalysisArtifactBundle
 }
 
-struct AIAnalysisArtifactBundle: Codable, Equatable {
+struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
     let inputJSON: String
     let toolResultsJSON: String
     let toolPlanJSON: String

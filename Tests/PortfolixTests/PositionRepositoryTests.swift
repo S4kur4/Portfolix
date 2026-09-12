@@ -919,6 +919,76 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func repositoryBatchUpdatePersistsMultipleQuotesTogether() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let first = makePosition(symbol: "QUOTE-A", quantity: 10, averageCost: 10, latestPrice: 11)
+        let second = makePosition(symbol: "QUOTE-B", quantity: 20, averageCost: 20, latestPrice: 21)
+        try repository.insert(first)
+        try repository.insert(second)
+
+        let updatedFirst = makePosition(
+            id: first.id,
+            symbol: first.symbol,
+            quantity: first.quantity,
+            averageCost: first.averageCost,
+            latestPrice: 12,
+            source: "东方财富",
+            quoteTime: "2026-09-12",
+            freshness: .updated
+        )
+        let updatedSecond = makePosition(
+            id: second.id,
+            symbol: second.symbol,
+            quantity: second.quantity,
+            averageCost: second.averageCost,
+            latestPrice: 22,
+            source: "东方财富",
+            quoteTime: "2026-09-12",
+            freshness: .updated
+        )
+
+        let snapshotDate = try #require(Calendar.current.date(from: DateComponents(
+            year: 2026,
+            month: 9,
+            day: 12,
+            hour: 12
+        )))
+        try repository.applyQuoteRefresh(
+            updatedPositions: [updatedFirst, updatedSecond],
+            snapshotPositions: [updatedFirst, updatedSecond],
+            snapshotDate: snapshotDate
+        )
+
+        let persisted = try repository.fetchPositions()
+        #expect(persisted.first { $0.id == first.id }?.latestPrice == 12)
+        #expect(persisted.first { $0.id == second.id }?.latestPrice == 22)
+        #expect(persisted.allSatisfy { $0.freshness == .updated })
+        let snapshot = try #require(repository.fetchPortfolioSnapshots().last)
+        #expect(snapshot.totalValueCNY == 560)
+    }
+
+    @Test
+    func derivedMetricsAggregateLargePortfoliosWithoutRepeatedFiltering() {
+        let positions = (0..<100).map { index in
+            makePosition(
+                name: "Metric \(index)",
+                symbol: "METRIC-\(index)",
+                quantity: 2,
+                averageCost: 5,
+                latestPrice: 10
+            )
+        }
+
+        let metrics = PortfolioDerivedMetrics(positions: positions)
+
+        #expect(metrics.totalValueCNY == 2_000)
+        #expect(metrics.totalCostCNY == 1_000)
+        #expect(metrics.categoryValues[.cnStock] == 2_000)
+        #expect(metrics.currencyValues[.cny] == 2_000)
+    }
+
+    @Test
     func repositoryRoundTripsEveryAssetCategoryAndNumericScale() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)
@@ -1010,6 +1080,74 @@ struct PositionRepositoryTests {
 
         #expect(points.map(\.date) == [secondDay, thirdDay, fourthDay])
         #expect(points.map(\.amountCNY) == [100, 0, -40])
+    }
+
+    @Test
+    func repositoryFetchesAssetHistoryForMultiplePositionsInOneBatch() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let firstID = UUID()
+        let secondID = UUID()
+        let snapshotDate = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 12)))
+        try repository.replaceDailySnapshots(
+            positions: [
+                makePosition(id: firstID, symbol: "HISTORY-A", quantity: 10, averageCost: 10, latestPrice: 12),
+                makePosition(id: secondID, symbol: "HISTORY-B", quantity: 20, averageCost: 20, latestPrice: 22),
+            ],
+            snapshotDate: snapshotDate
+        )
+
+        let snapshots = try repository.fetchAssetPriceSnapshots(
+            positionIDs: [firstID, secondID],
+            lookbackDays: 45,
+            through: snapshotDate
+        )
+
+        #expect(snapshots[firstID]?.map(\.latestPrice) == [12])
+        #expect(snapshots[secondID]?.map(\.latestPrice) == [22])
+    }
+
+    @Test
+    func analyticsWorkerBuildsContextForOneHundredPositionsOffMainActor() async throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let calendar = Calendar.current
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 9,
+            day: 12,
+            hour: 12
+        )))
+        let baselineDate = try #require(calendar.date(byAdding: .day, value: -7, to: now))
+        let identifiers = (0..<100).map { _ in UUID() }
+        let baselinePositions = identifiers.enumerated().map { index, id in
+            makePosition(
+                id: id,
+                name: "History \(index)",
+                symbol: "HISTORY-\(index)",
+                quantity: 10,
+                averageCost: 90,
+                latestPrice: 100
+            )
+        }
+        let currentPositions = identifiers.enumerated().map { index, id in
+            makePosition(
+                id: id,
+                name: "History \(index)",
+                symbol: "HISTORY-\(index)",
+                quantity: 10,
+                averageCost: 90,
+                latestPrice: 110
+            )
+        }
+        try repository.replaceDailySnapshots(positions: baselinePositions, snapshotDate: baselineDate)
+        try repository.replaceDailySnapshots(positions: currentPositions, snapshotDate: now)
+
+        let worker = PortfolioAnalyticsWorker(databaseURL: databaseURL)
+        let performance = await worker.loadPositionPerformance(positions: currentPositions, asOf: now)
+
+        #expect(performance.count == 100)
+        #expect(performance.values.allSatisfy { $0.oneWeek.status == "available" })
     }
 
     @Test

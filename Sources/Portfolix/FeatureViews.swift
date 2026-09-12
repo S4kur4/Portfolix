@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct PositionsView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var pendingDeletionID: Position.ID?
     @State private var selectedBatchPositionIDs: Set<Position.ID> = []
     @State private var isBatchDeletionConfirmationPresented = false
@@ -11,6 +11,8 @@ struct PositionsView: View {
     @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
+        @Bindable var store = store
+
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             PageHeader(title: localizedText("持仓明细", "Holdings", language: store.appLanguage)) {
                 HStack(spacing: PortfolixSpacing.sm) {
@@ -149,7 +151,7 @@ struct PositionsView: View {
         }
         .sheet(isPresented: $isPositionUpdatePresented) {
             BatchPositionUpdateSheet(positions: store.positions)
-                .environmentObject(store)
+                .environment(store)
         }
         .onChange(of: store.positions.map(\.id)) { _, positionIDs in
             selectedBatchPositionIDs.formIntersection(positionIDs)
@@ -204,7 +206,7 @@ struct PositionsView: View {
     }
 
     private var positionsTable: some View {
-        Table(store.filteredPositions, selection: $store.selectedPositionID) {
+        Table(store.filteredPositions, selection: selectedPositionBinding) {
             TableColumn("") { position in
                 Toggle("", isOn: batchSelectionBinding(for: position.id))
                     .labelsHidden()
@@ -281,7 +283,9 @@ struct PositionsView: View {
                         Text(localizedQuoteSource(position.source, language: store.appLanguage))
                             .foregroundStyle(primaryRowColor(for: position))
                             .lineLimit(1)
-                        Text("\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: store.relativeTimeNow, language: store.appLanguage))")
+                        RelativeTimeText { now in
+                            "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: now, language: store.appLanguage))"
+                        }
                             .font(.system(size: 10))
                             .foregroundStyle(secondaryRowColor(for: position))
                             .lineLimit(1)
@@ -336,6 +340,13 @@ struct PositionsView: View {
         }
     }
 
+    private var selectedPositionBinding: Binding<Position.ID?> {
+        Binding(
+            get: { store.selectedPositionID },
+            set: { store.selectedPositionID = $0 }
+        )
+    }
+
     private func canRefresh(_ position: Position) -> Bool {
         position.category != .cash
     }
@@ -387,7 +398,7 @@ struct PositionsView: View {
 }
 
 struct AIReportView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var composerResetID = UUID()
     @State private var isClearHistoryConfirmationPresented = false
     @State private var clearHistoryErrorMessage: String?
@@ -514,30 +525,7 @@ struct AIReportView: View {
 }
 
 private enum AIReportChatRenderPolicy {
-    static let initialItemLimit = 32
-    static let loadBatchSize = 32
-    static let scrollThreshold: CGFloat = 280
-    static let scrollDeltaThreshold: CGFloat = 1.5
     static let timestampWidth: CGFloat = 40
-}
-
-private struct AIReportChatScrollMetrics: Equatable {
-    let offsetY: CGFloat
-    let contentHeight: CGFloat
-    let visibleHeight: CGFloat
-
-    var isScrollable: Bool {
-        contentHeight > visibleHeight + AIReportChatRenderPolicy.scrollThreshold
-    }
-
-    var isNearTop: Bool {
-        offsetY <= AIReportChatRenderPolicy.scrollThreshold
-    }
-
-    var isNearBottom: Bool {
-        let bottomOffset = max(0, contentHeight - visibleHeight)
-        return bottomOffset - offsetY <= AIReportChatRenderPolicy.scrollThreshold
-    }
 }
 
 private struct AIReportChatSurface: View {
@@ -559,11 +547,11 @@ private struct AIReportChatSurface: View {
     let clearHistory: () -> Void
     let generate: () -> Void
     let sendFollowUp: (String) -> Void
-    @State private var renderedItemLimit = AIReportChatRenderPolicy.initialItemLimit
-    @State private var isExpandingHistory = false
     @State private var pendingScrollTask: Task<Void, Never>?
 
     var body: some View {
+        let indexedItems = Array(items.enumerated())
+
         Panel(padding: 0) {
             VStack(spacing: 0) {
                 AIReportChatHeader(
@@ -583,9 +571,6 @@ private struct AIReportChatSurface: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
-                            Color.clear
-                                .frame(height: 1)
-                                .id("chat-window-top")
 
                             if items.isEmpty && !isRunning {
                                 AIReportAgentBubble {
@@ -598,31 +583,17 @@ private struct AIReportChatSurface: View {
                                         )
                                     }
                                 }
-                                .id("welcome")
                             }
 
-                            if hiddenOlderItemCount > 0 {
-                                AIReportChatWindowBoundary(
-                                    count: hiddenOlderItemCount,
-                                    direction: .older,
-                                    language: language
-                                ) {
-                                    expandHistory(proxy: proxy)
-                                }
-                                .id("chat-window-top-boundary")
-                            }
-
-                            ForEach(Array(renderedItems.enumerated()), id: \.element.id) { index, item in
+                            ForEach(indexedItems, id: \.element.id) { index, item in
                                 VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                                    if shouldShowDateSeparator(for: item, at: index, items: renderedItems) {
+                                    if shouldShowDateSeparator(for: item, at: index, items: items) {
                                         AIReportChatDateSeparator(date: item.createdAt, language: language)
-                                            .id("\(item.id.uuidString)-date")
                                     }
 
                                     switch item.content {
                                     case let .user(text):
                                         AIReportUserBubble(text: text, createdAt: item.createdAt, language: language)
-                                            .id(item.id)
                                     case let .report(report, reportRun):
                                         AIReportAgentBubble {
                                             AIReportChatReport(
@@ -631,7 +602,6 @@ private struct AIReportChatSurface: View {
                                                 language: language
                                             )
                                         }
-                                        .id(item.id)
                                     case let .assistant(text):
                                         AIReportAgentBubble {
                                             AIReportFollowUpMessage(
@@ -641,7 +611,6 @@ private struct AIReportChatSurface: View {
                                                 showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text)
                                             )
                                         }
-                                        .id(item.id)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -657,7 +626,6 @@ private struct AIReportChatSurface: View {
                                         )
                                     }
                                 }
-                                .id("analysis-progress")
                             } else if isSendingFollowUp {
                                 AIReportAgentBubble {
                                     AIReportUntimestampedAgentRow {
@@ -668,7 +636,6 @@ private struct AIReportChatSurface: View {
                                         )
                                     }
                                 }
-                                .id("follow-up-progress")
                             } else if shouldShowStatusMessage {
                                 AIReportAgentBubble {
                                     AIReportUntimestampedAgentRow {
@@ -681,7 +648,6 @@ private struct AIReportChatSurface: View {
                                         )
                                     }
                                 }
-                                .id("analysis-status")
                             }
 
                             Color.clear
@@ -692,29 +658,12 @@ private struct AIReportChatSurface: View {
                         .padding(.top, PortfolixSpacing.lg)
                         .padding(.bottom, PortfolixSpacing.md)
                     }
-                    .onScrollGeometryChange(for: AIReportChatScrollMetrics.self) { geometry in
-                        AIReportChatScrollMetrics(
-                            offsetY: geometry.visibleRect.minY,
-                            contentHeight: geometry.contentSize.height,
-                            visibleHeight: geometry.visibleRect.height
-                        )
-                    } action: { oldValue, newValue in
-                        handleScrollMetricsChange(oldValue, newValue, proxy: proxy)
-                    }
                     .scrollIndicators(.hidden)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .onAppear {
-                        resetRenderedItemLimit()
                         scheduleScrollToBottom(proxy, animated: false, delay: 0.08)
                     }
-                    .onChange(of: items.last?.id) { _, _ in
-                        resetRenderedItemLimit()
-                        scheduleScrollToBottom(proxy, animated: false)
-                    }
-                    .onChange(of: isRunning) { _, _ in
-                        scheduleScrollToBottom(proxy, animated: false)
-                    }
-                    .onChange(of: isSendingFollowUp) { _, _ in
+                    .onChange(of: items.count) { _, _ in
                         scheduleScrollToBottom(proxy, animated: false)
                     }
                     .onDisappear {
@@ -739,49 +688,6 @@ private struct AIReportChatSurface: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func handleScrollMetricsChange(
-        _ oldValue: AIReportChatScrollMetrics,
-        _ newValue: AIReportChatScrollMetrics,
-        proxy: ScrollViewProxy
-    ) {
-        guard newValue.isScrollable, !isExpandingHistory else { return }
-        let delta = newValue.offsetY - oldValue.offsetY
-        if delta < -AIReportChatRenderPolicy.scrollDeltaThreshold,
-           newValue.isNearTop,
-           canLoadOlderItems {
-            expandHistory(proxy: proxy)
-        }
-    }
-
-    private func expandHistory(proxy: ScrollViewProxy) {
-        guard canLoadOlderItems, !isExpandingHistory else { return }
-        let anchorID = renderedItems.first?.id
-
-        withTransaction(Transaction(animation: nil)) {
-            isExpandingHistory = true
-            renderedItemLimit = min(
-                orderedItems.count,
-                renderedItemLimit + AIReportChatRenderPolicy.loadBatchSize
-            )
-        }
-
-        Task { @MainActor in
-            await Task.yield()
-            if let anchorID {
-                withTransaction(Transaction(animation: nil)) {
-                    proxy.scrollTo(anchorID, anchor: .top)
-                }
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            isExpandingHistory = false
-        }
-    }
-
-    private func resetRenderedItemLimit() {
-        renderedItemLimit = min(orderedItems.count, AIReportChatRenderPolicy.initialItemLimit)
     }
 
     private func shouldShowDateSeparator(for item: AIReportChatItem, at index: Int, items: [AIReportChatItem]) -> Bool {
@@ -824,24 +730,6 @@ private struct AIReportChatSurface: View {
         }
     }
 
-    private var renderedItems: [AIReportChatItem] {
-        let items = orderedItems
-        guard !items.isEmpty else { return [] }
-        return Array(items.suffix(renderedItemLimit))
-    }
-
-    private var orderedItems: [AIReportChatItem] {
-        items
-    }
-
-    private var canLoadOlderItems: Bool {
-        renderedItemLimit < orderedItems.count
-    }
-
-    private var hiddenOlderItemCount: Int {
-        max(0, orderedItems.count - renderedItems.count)
-    }
-
     private var shouldShowStatusMessage: Bool {
         switch run.status {
         case .idle, .completed:
@@ -857,7 +745,7 @@ private struct AIReportChatSurface: View {
 
     private func lastAssistantMessageMatches(_ message: String) -> Bool {
         guard
-            let lastItem = orderedItems.last,
+            let lastItem = items.last,
             case let .assistant(text) = lastItem.content
         else {
             return false
@@ -874,45 +762,6 @@ private struct AIReportChatSurface: View {
         llmReadiness == .ready
     }
 
-}
-
-private enum AIReportChatWindowDirection {
-    case older
-    case newer
-}
-
-private struct AIReportChatWindowBoundary: View {
-    let count: Int
-    let direction: AIReportChatWindowDirection
-    let language: AppLanguage
-    let action: () -> Void
-
-    var body: some View {
-        HStack(spacing: PortfolixSpacing.sm) {
-            Image(systemName: direction == .older ? "chevron.up.circle" : "chevron.down.circle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.tertiaryText)
-            Text(title)
-            .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
-            .lineLimit(1)
-            Spacer()
-        }
-        .padding(.horizontal, PortfolixSpacing.md)
-        .padding(.vertical, PortfolixSpacing.sm)
-        .background(PortfolixTheme.panelSoft.opacity(0.64), in: Capsule())
-        .contentShape(Capsule())
-        .onTapGesture(perform: action)
-    }
-
-    private var title: String {
-        switch direction {
-        case .older:
-            localizedText("较早 \(count) 条", "\(count) older", language: language)
-        case .newer:
-            localizedText("较新 \(count) 条", "\(count) newer", language: language)
-        }
-    }
 }
 
 private struct AIReportChatHeader: View {
@@ -1895,6 +1744,7 @@ private struct AIReportChatComposer: View {
     let generate: () -> Void
     let sendFollowUp: (String) -> Void
     @State private var draftMessage = ""
+    @State private var isSubmitting = false
     @StateObject private var voiceRecorder = HoldingVoiceRecorder()
     @FocusState private var isComposerFocused: Bool
 
@@ -1909,9 +1759,9 @@ private struct AIReportChatComposer: View {
                         .lineLimit(1)
                         .focused($isComposerFocused)
                         .opacity(isVoiceActive ? 0 : 1)
-                        .disabled(isVoiceActive)
+                        .allowsHitTesting(!isVoiceActive)
                         .onSubmit {
-                            submitFollowUp()
+                            queueFollowUpSubmission()
                         }
 
                     if isVoiceActive {
@@ -1922,7 +1772,7 @@ private struct AIReportChatComposer: View {
                 }
 
                 Button {
-                    isComposerFocused = true
+                    isComposerFocused = false
                     voiceRecorder.toggle()
                 } label: {
                     Image(systemName: isVoiceActive ? "stop.fill" : "mic.fill")
@@ -1964,7 +1814,7 @@ private struct AIReportChatComposer: View {
                 isEnabled: canSubmitFollowUp,
                 help: localizedText("基于上一份报告追问", "Ask about the latest report", language: language)
             ) {
-                submitFollowUp()
+                queueFollowUpSubmission()
             }
         }
         .padding(.horizontal, PortfolixSpacing.lg)
@@ -1992,7 +1842,9 @@ private struct AIReportChatComposer: View {
     }
 
     private var canSubmitFollowUp: Bool {
-        canSendFollowUp && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        canSendFollowUp
+            && !isSubmitting
+            && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var isVoiceActive: Bool {
@@ -2012,14 +1864,26 @@ private struct AIReportChatComposer: View {
             numeric: false,
             english: language == .english,
             shortcut: .f1
-        ) { draftMessage = $0 }
+        ) { value in
+            isComposerFocused = false
+            draftMessage = value
+        }
     }
 
-    private func submitFollowUp() {
+    private func queueFollowUpSubmission() {
         let question = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSendFollowUp, !question.isEmpty else { return }
+        guard canSendFollowUp, !isSubmitting, !question.isEmpty else { return }
+
+        // Let AppKit finish the current text-input command before the chat tree changes.
+        isSubmitting = true
+        isComposerFocused = false
         draftMessage = ""
-        sendFollowUp(question)
+        Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            isSubmitting = false
+            sendFollowUp(question)
+        }
     }
 }
 
@@ -2807,34 +2671,42 @@ private func relativeText(_ date: Date, language: AppLanguage) -> String {
 }
 
 private func chatTimestampText(_ date: Date, language _: AppLanguage) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "HH:mm"
-    return formatter.string(from: date)
+    AIReportChatDateFormatters.timestamp.string(from: date)
 }
 
 private func chatDateText(_ date: Date, language: AppLanguage) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = language == .english ? Locale(identifier: "en_US_POSIX") : Locale(identifier: "zh_CN")
-    formatter.dateFormat = language == .english ? "MMM d" : "M月d日"
+    let formatter = language == .english
+        ? AIReportChatDateFormatters.englishDate
+        : AIReportChatDateFormatters.chineseDate
     return formatter.string(from: date)
 }
 
 private func diagnosticTimestampText(_ date: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd HH:mm"
-    return formatter.string(from: date)
+    AIReportChatDateFormatters.diagnosticTimestamp.string(from: date)
+}
+
+private enum AIReportChatDateFormatters {
+    static let timestamp = make("HH:mm", locale: "en_US_POSIX")
+    static let englishDate = make("MMM d", locale: "en_US_POSIX")
+    static let chineseDate = make("M月d日", locale: "zh_CN")
+    static let diagnosticTimestamp = make("yyyy-MM-dd HH:mm", locale: "en_US_POSIX")
+
+    private static func make(_ format: String, locale: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: locale)
+        formatter.dateFormat = format
+        return formatter
+    }
 }
 
 struct RiskProfileView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var isQuestionnairePresented = false
 
     var body: some View {
+        @Bindable var store = store
+
         ScrollView {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 PageHeader(title: localizedText("风险偏好", "Risk Profile", language: store.appLanguage)) {
@@ -2856,7 +2728,9 @@ struct RiskProfileView: View {
                         level: store.riskProfileConfigured ? localizedRiskLevel : localizedText("未配置", "Not configured", language: store.appLanguage),
                         tolerance: localizedRiskTolerance,
                         description: localizedRiskDescription,
-                        versionLabel: riskProfileVersionLabel,
+                        isConfigured: store.riskProfileConfigured,
+                        version: store.riskProfileVersion,
+                        updatedAt: store.riskProfileUpdatedAt,
                         language: store.appLanguage
                     )
 
@@ -2922,7 +2796,9 @@ struct RiskProfileView: View {
 
                 RiskMaintenanceCard(
                     status: reviewStatus,
-                    versionLabel: riskProfileVersionLabel,
+                    isConfigured: store.riskProfileConfigured,
+                    version: store.riskProfileVersion,
+                    updatedAt: store.riskProfileUpdatedAt,
                     language: store.appLanguage
                 )
             }
@@ -2931,18 +2807,8 @@ struct RiskProfileView: View {
         .scrollIndicators(.hidden)
         .sheet(isPresented: $isQuestionnairePresented) {
             RiskQuestionnaireSheet()
-                .environmentObject(store)
+                .environment(store)
         }
-    }
-
-    private var riskProfileVersionLabel: String {
-        guard store.riskProfileConfigured else {
-            return localizedText("等待首次评估", "Not assessed yet", language: store.appLanguage)
-        }
-        let updatedText = store.riskProfileUpdatedText(now: store.relativeTimeNow, language: store.appLanguage)
-        return store.appLanguage == .english
-            ? "Version v\(store.riskProfileVersion) · \(updatedText)"
-            : "版本 v\(store.riskProfileVersion) · \(updatedText)"
     }
 
     private var localizedRiskLevel: String {
@@ -3094,7 +2960,9 @@ private struct RiskProfileSummaryCard: View {
     let level: String
     let tolerance: String
     let description: String
-    let versionLabel: String
+    let isConfigured: Bool
+    let version: Int
+    let updatedAt: Date
     let language: AppLanguage
 
     var body: some View {
@@ -3130,7 +2998,18 @@ private struct RiskProfileSummaryCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
-                CardMetaLabel(title: versionLabel, symbol: "clock")
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    CardMetaLabel(
+                        title: riskProfileVersionLabel(
+                            isConfigured: isConfigured,
+                            version: version,
+                            updatedAt: updatedAt,
+                            now: context.date,
+                            language: language
+                        ),
+                        symbol: "clock"
+                    )
+                }
             }
             .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
         }
@@ -3279,7 +3158,9 @@ private struct RiskConstraintSliderRow: View {
 
 private struct RiskMaintenanceCard: View {
     let status: RiskReviewStatus
-    let versionLabel: String
+    let isConfigured: Bool
+    let version: Int
+    let updatedAt: Date
     let language: AppLanguage
 
     var body: some View {
@@ -3293,10 +3174,49 @@ private struct RiskMaintenanceCard: View {
             }
             SettingsDivider()
             SettingsRow(title: localizedText("档案版本", "Version", language: language)) {
-                RiskSettingValue(versionLabel)
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    RiskSettingValue(
+                        riskProfileVersionLabel(
+                            isConfigured: isConfigured,
+                            version: version,
+                            updatedAt: updatedAt,
+                            now: context.date,
+                            language: language
+                        )
+                    )
+                }
             }
         }
     }
+}
+
+private func riskProfileVersionLabel(
+    isConfigured: Bool,
+    version: Int,
+    updatedAt: Date,
+    now: Date,
+    language: AppLanguage
+) -> String {
+    guard isConfigured else {
+        return localizedText("等待首次评估", "Not assessed yet", language: language)
+    }
+    let seconds = max(0, Int(now.timeIntervalSince(updatedAt)))
+    let updatedText: String
+    if seconds < 60 {
+        updatedText = localizedText("刚刚更新", "Just updated", language: language)
+    } else if seconds < 3_600 {
+        let minutes = seconds / 60
+        updatedText = language == .english ? "\(minutes)m ago" : "\(minutes) 分钟前更新"
+    } else if seconds < 86_400 {
+        let hours = seconds / 3_600
+        updatedText = language == .english ? "\(hours)h ago" : "\(hours) 小时前更新"
+    } else {
+        let days = seconds / 86_400
+        updatedText = language == .english ? "\(days)d ago" : "\(days) 天前更新"
+    }
+    return language == .english
+        ? "Version v\(version) · \(updatedText)"
+        : "版本 v\(version) · \(updatedText)"
 }
 
 private struct RiskStatusValue: View {
@@ -3369,7 +3289,7 @@ private func percentText(_ value: Double) -> String {
 }
 
 struct SettingsView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var configurationSheet: SettingsConfigurationSheet?
     @State private var preparedDataImport: PreparedPortfolixDataImport?
     @State private var isImportConfirmationPresented = false
@@ -3380,6 +3300,8 @@ struct SettingsView: View {
     @State private var importStatusResetTask: Task<Void, Never>?
 
     var body: some View {
+        @Bindable var store = store
+
         ScrollView {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 PageHeader(title: settingsText("系统设置", "Settings"))
@@ -3549,7 +3471,7 @@ struct SettingsView: View {
             switch sheet {
             case .llm:
                 LLMConfigurationSheet()
-                    .environmentObject(store)
+                    .environment(store)
             }
         }
         .alert(

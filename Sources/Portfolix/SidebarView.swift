@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SidebarView: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @State private var displayedSelection: SidebarSection = .overview
 
     var body: some View {
@@ -52,7 +52,7 @@ struct SidebarView: View {
 }
 
 private struct SidebarVersion: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @EnvironmentObject private var sparkleUpdater: PortfolixSparkleUpdater
 
     private var version: String {

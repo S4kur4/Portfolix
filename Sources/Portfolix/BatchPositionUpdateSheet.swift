@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct BatchPositionUpdateSheet: View {
-    @EnvironmentObject private var store: PortfolioStore
+    @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     @State private var drafts: [PositionUpdateDraft]
