@@ -763,14 +763,14 @@ final class PortfolioStore: ObservableObject {
     private static let dailyUpdateTimeDefaultsKey = "portfolix.automaticPriceUpdateDailyTimeMinutes"
     private static let appLanguageDefaultsKey = "portfolix.appLanguage"
     private static let riskProfileUpdatedAtDefaultsKey = "portfolix.riskProfileUpdatedAt"
-    private static let riskLevelSettingKey = "risk_profile_level"
-    private static let riskProfileConfiguredSettingKey = "risk_profile_configured"
-    private static let riskProfileVersionSettingKey = "risk_profile_version"
-    private static let riskPositionLimitSettingKey = "risk_position_limit"
-    private static let riskCryptoLimitSettingKey = "risk_crypto_limit"
-    private static let riskForeignCurrencyLimitSettingKey = "risk_foreign_currency_limit"
-    private static let riskLiquidityMinimumSettingKey = "risk_liquidity_minimum"
-    private static let riskProfileUpdatedAtSettingKey = "risk_profile_updated_at"
+    private static let riskLevelSettingKey = RiskProfilePersistence.levelKey
+    private static let riskProfileConfiguredSettingKey = RiskProfilePersistence.configuredKey
+    private static let riskProfileVersionSettingKey = RiskProfilePersistence.versionKey
+    private static let riskPositionLimitSettingKey = RiskProfilePersistence.positionLimitKey
+    private static let riskCryptoLimitSettingKey = RiskProfilePersistence.cryptoLimitKey
+    private static let riskForeignCurrencyLimitSettingKey = RiskProfilePersistence.foreignCurrencyLimitKey
+    private static let riskLiquidityMinimumSettingKey = RiskProfilePersistence.liquidityMinimumKey
+    private static let riskProfileUpdatedAtSettingKey = RiskProfilePersistence.updatedAtKey
     private static let latestAIReportDefaultsKey = "portfolix.ai.latestReport"
     private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
@@ -1041,7 +1041,17 @@ final class PortfolioStore: ObservableObject {
         guard let positionRepository else {
             throw PositionRepositoryError.database("当前未连接到可用的本地数据库")
         }
-        let payload = try positionRepository.exportDataPayload()
+        let riskProfile = PortfolixDataPackage.RiskProfile(
+            configured: riskProfileConfigured,
+            level: riskLevel,
+            version: riskProfileVersion,
+            positionLimit: Self.stableSettingNumber(positionLimit),
+            cryptoLimit: Self.stableSettingNumber(cryptoLimit),
+            foreignCurrencyLimit: Self.stableSettingNumber(foreignCurrencyLimit),
+            liquidityMinimum: Self.stableSettingNumber(liquidityMinimum),
+            updatedAt: Self.isoDateFormatter.string(from: riskProfileUpdatedAt)
+        )
+        let payload = try positionRepository.exportDataPayload(riskProfile: riskProfile)
         return try PortfolixDataPackageService.write(payload: payload, to: url)
     }
 
@@ -1056,6 +1066,9 @@ final class PortfolioStore: ObservableObject {
         let summary = try positionRepository.importDataPayload(preparedImport.payload)
         positions = try positionRepository.fetchPositions()
         snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+        if summary.riskProfileIncluded {
+            loadRiskProfileSettings(from: positionRepository)
+        }
         return summary
     }
 

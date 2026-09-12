@@ -3512,8 +3512,8 @@ struct SettingsView: View {
                     SettingsRow(
                         title: settingsText("数据导出", "Data Export"),
                         helpText: settingsText(
-                            "将持仓组合明细、每日收益和资产每日价格导出为结构化数据包，不包含智能分析数据和App设置信息。",
-                            "Exports portfolio holding details, daily returns, and daily asset prices as a structured data package. Smart analysis data and app settings are not included."
+                            "将持仓、历史收益、资产价格和风险偏好导出为结构化数据包，不包含智能分析数据、API Key 和设备相关设置。",
+                            "Exports holdings, return history, asset prices, and risk preferences as a structured data package. Smart analysis data, API keys, and device-specific settings are excluded."
                         ),
                         helpPlacement: .trailing
                     ) {
@@ -3670,16 +3670,22 @@ struct SettingsView: View {
 
     private func importConfirmationMessage(_ summary: PortfolixDataTransferSummary) -> String {
         let counts = transferSummary(summary)
+        let riskProfileNotice = summary.riskProfileIncluded
+            ? settingsText("风险偏好将替换为备份中的设置。", "Risk preferences will be replaced with the settings in this backup.")
+            : settingsText("此旧版备份不包含风险偏好，当前设置将保留。", "This legacy backup does not include risk preferences, so the current settings will be preserved.")
         return settingsText(
-            "\(counts)\n\n同一资产或同一天的现有记录将被更新，其他现有数据不会删除。",
-            "\(counts)\n\nExisting records for the same asset or date will be updated. Other existing data will not be deleted."
+            "\(counts)\n\n\(riskProfileNotice)同一资产或同一天的现有记录将被更新，其他现有数据不会删除。",
+            "\(counts)\n\n\(riskProfileNotice) Existing records for the same asset or date will be updated. Other existing data will not be deleted."
         )
     }
 
     private func transferSummary(_ summary: PortfolixDataTransferSummary) -> String {
-        settingsText(
-            "持仓 \(summary.holdingCount) 条，组合历史 \(summary.portfolioSnapshotCount) 条，资产价格 \(summary.assetPriceSnapshotCount) 条。",
-            "\(summary.holdingCount) holdings, \(summary.portfolioSnapshotCount) portfolio history records, and \(summary.assetPriceSnapshotCount) asset price records."
+        let riskProfileText = summary.riskProfileIncluded
+            ? settingsText("，风险偏好 1 份", ", and 1 risk profile")
+            : ""
+        return settingsText(
+            "持仓 \(summary.holdingCount) 条，组合历史 \(summary.portfolioSnapshotCount) 条，资产价格 \(summary.assetPriceSnapshotCount) 条\(riskProfileText)。",
+            "\(summary.holdingCount) holdings, \(summary.portfolioSnapshotCount) portfolio history records, \(summary.assetPriceSnapshotCount) asset price records\(riskProfileText)."
         )
     }
 

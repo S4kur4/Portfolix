@@ -131,7 +131,9 @@ final class PositionRepository {
         return positions
     }
 
-    func exportDataPayload() throws -> PortfolixDataPackage.Payload {
+    func exportDataPayload(
+        riskProfile: PortfolixDataPackage.RiskProfile? = nil
+    ) throws -> PortfolixDataPackage.Payload {
         let holdingStatement = try prepare(
             """
             SELECT
@@ -249,9 +251,10 @@ final class PositionRepository {
         let payload = PortfolixDataPackage.Payload(
             holdings: holdings,
             portfolioSnapshots: portfolioSnapshots,
-            assetPriceSnapshots: assetPriceSnapshots
+            assetPriceSnapshots: assetPriceSnapshots,
+            riskProfile: try riskProfile ?? storedRiskProfile()
         )
-        try PortfolixDataPackageService.validate(payload: payload)
+        try PortfolixDataPackageService.validate(payload: payload, requiresRiskProfile: true)
         return payload
     }
 
@@ -357,12 +360,33 @@ final class PositionRepository {
                 try bind(snapshot.updatedAt, to: 15, in: statement)
                 try stepDone(statement)
             }
+
+            if let riskProfile = payload.riskProfile {
+                try setAppSetting(
+                    key: RiskProfilePersistence.configuredKey,
+                    value: riskProfile.configured ? "true" : "false"
+                )
+                try setAppSetting(key: RiskProfilePersistence.levelKey, value: riskProfile.level)
+                try setAppSetting(key: RiskProfilePersistence.versionKey, value: String(riskProfile.version))
+                try setAppSetting(key: RiskProfilePersistence.positionLimitKey, value: riskProfile.positionLimit)
+                try setAppSetting(key: RiskProfilePersistence.cryptoLimitKey, value: riskProfile.cryptoLimit)
+                try setAppSetting(
+                    key: RiskProfilePersistence.foreignCurrencyLimitKey,
+                    value: riskProfile.foreignCurrencyLimit
+                )
+                try setAppSetting(
+                    key: RiskProfilePersistence.liquidityMinimumKey,
+                    value: riskProfile.liquidityMinimum
+                )
+                try setAppSetting(key: RiskProfilePersistence.updatedAtKey, value: riskProfile.updatedAt)
+            }
         }
 
         return PortfolixDataTransferSummary(
             holdingCount: payload.holdings.count,
             portfolioSnapshotCount: payload.portfolioSnapshots.count,
-            assetPriceSnapshotCount: payload.assetPriceSnapshots.count
+            assetPriceSnapshotCount: payload.assetPriceSnapshots.count,
+            riskProfileIncluded: payload.riskProfile != nil
         )
     }
 
@@ -583,6 +607,27 @@ final class PositionRepository {
             return nil
         }
         return text(at: 0, in: statement)
+    }
+
+    private func storedRiskProfile() throws -> PortfolixDataPackage.RiskProfile {
+        let configured = try appSetting(for: RiskProfilePersistence.configuredKey) == "true"
+        let level = try appSetting(for: RiskProfilePersistence.levelKey) ?? "未配置"
+        let version = try appSetting(for: RiskProfilePersistence.versionKey).flatMap(Int.init) ?? 0
+        let positionLimit = try appSetting(for: RiskProfilePersistence.positionLimitKey) ?? "30"
+        let cryptoLimit = try appSetting(for: RiskProfilePersistence.cryptoLimitKey) ?? "15"
+        let foreignCurrencyLimit = try appSetting(for: RiskProfilePersistence.foreignCurrencyLimitKey) ?? "50"
+        let liquidityMinimum = try appSetting(for: RiskProfilePersistence.liquidityMinimumKey) ?? "10"
+        let updatedAt = try appSetting(for: RiskProfilePersistence.updatedAtKey) ?? Self.timestamp()
+        return PortfolixDataPackage.RiskProfile(
+            configured: configured,
+            level: level,
+            version: version,
+            positionLimit: positionLimit,
+            cryptoLimit: cryptoLimit,
+            foreignCurrencyLimit: foreignCurrencyLimit,
+            liquidityMinimum: liquidityMinimum,
+            updatedAt: updatedAt
+        )
     }
 
     func deleteAppSetting(key: String) throws {

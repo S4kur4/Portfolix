@@ -310,6 +310,21 @@ struct PositionRepositoryTests {
         let credentialStore = DatabaseProviderCredentialStore(repository: sourceRepository)
         try credentialStore.save("export-must-not-contain-this-secret", kind: .llm)
         try sourceRepository.upsertAIAnalysisChatItem(.user("export-must-not-contain-this-chat"))
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.configuredKey, value: "true")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.levelKey, value: "稳健平衡")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.versionKey, value: "7")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.positionLimitKey, value: "28")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.cryptoLimitKey, value: "12")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.foreignCurrencyLimitKey, value: "45")
+        try sourceRepository.setAppSetting(key: RiskProfilePersistence.liquidityMinimumKey, value: "15")
+        try sourceRepository.setAppSetting(
+            key: RiskProfilePersistence.updatedAtKey,
+            value: "2026-06-20T10:30:00Z"
+        )
+        try sourceRepository.setAppSetting(
+            key: AutomaticPriceUpdateSchedule.frequencySettingKey,
+            value: "export-must-not-contain-this-device-setting"
+        )
 
         let exportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PortfolixDataExportTests-\(UUID().uuidString)", isDirectory: true)
@@ -321,7 +336,8 @@ struct PositionRepositoryTests {
         #expect(exportSummary == PortfolixDataTransferSummary(
             holdingCount: 2,
             portfolioSnapshotCount: 2,
-            assetPriceSnapshotCount: 4
+            assetPriceSnapshotCount: 4,
+            riskProfileIncluded: true
         ))
         #expect(try permissions(at: exportURL) == 0o600)
         let extractedDirectory = exportDirectory.appendingPathComponent("extracted", isDirectory: true)
@@ -336,6 +352,7 @@ struct PositionRepositoryTests {
             "holdings.json",
             "daily_returns.json",
             "daily_asset_prices.json",
+            "risk_profile.json",
         ]))
         let exportedText = try extractedNames
             .map { try String(contentsOf: extractedDirectory.appendingPathComponent($0), encoding: .utf8) }
@@ -344,9 +361,12 @@ struct PositionRepositoryTests {
         #expect(!exportedText.contains("export-must-not-contain-this-chat"))
         #expect(!exportedText.contains("provider_credential"))
         #expect(!exportedText.contains("ai_analysis_chat_messages"))
+        #expect(!exportedText.contains("export-must-not-contain-this-device-setting"))
+        #expect(exportedText.contains("稳健平衡"))
 
         let (_, destinationDatabaseURL) = makeDatabaseURLs()
         let destinationRepository = try PositionRepository(databaseURL: destinationDatabaseURL)
+        try destinationRepository.setAppSetting(key: RiskProfilePersistence.levelKey, value: "积极成长")
         let existingHoldingID = UUID()
         try destinationRepository.insert(
             makePosition(
@@ -391,6 +411,122 @@ struct PositionRepositoryTests {
             lookbackDays: 10,
             through: secondDay
         ).count == 2)
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.configuredKey) == "true")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.levelKey) == "稳健平衡")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.versionKey) == "7")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.positionLimitKey) == "28")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.cryptoLimitKey) == "12")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.foreignCurrencyLimitKey) == "45")
+        #expect(try destinationRepository.appSetting(for: RiskProfilePersistence.liquidityMinimumKey) == "15")
+        #expect(
+            try destinationRepository.appSetting(for: RiskProfilePersistence.updatedAtKey)
+                == "2026-06-20T10:30:00Z"
+        )
+
+        let legacyManifestURL = extractedDirectory.appendingPathComponent("manifest.json")
+        let legacyManifestData = try Data(contentsOf: legacyManifestURL)
+        var legacyManifest = try #require(
+            JSONSerialization.jsonObject(with: legacyManifestData) as? [String: Any]
+        )
+        legacyManifest["schemaVersion"] = 2
+        var legacyCounts = try #require(legacyManifest["recordCounts"] as? [String: Any])
+        legacyCounts.removeValue(forKey: "riskProfiles")
+        legacyManifest["recordCounts"] = legacyCounts
+        var legacyFiles = try #require(legacyManifest["files"] as? [[String: Any]])
+        legacyFiles.removeAll { $0["name"] as? String == "risk_profile.json" }
+        legacyManifest["files"] = legacyFiles
+        try JSONSerialization.data(withJSONObject: legacyManifest, options: [.prettyPrinted, .sortedKeys])
+            .write(to: legacyManifestURL, options: .atomic)
+        try FileManager.default.removeItem(
+            at: extractedDirectory.appendingPathComponent("risk_profile.json")
+        )
+        let legacyExportURL = exportDirectory.appendingPathComponent("legacy-v2.zip")
+        try runTestArchiveTool(
+            executable: "/usr/bin/zip",
+            arguments: [
+                "-q", "-X", legacyExportURL.path,
+                "manifest.json", "holdings.json", "daily_returns.json", "daily_asset_prices.json",
+            ],
+            currentDirectoryURL: extractedDirectory
+        )
+        let legacyImport = try PortfolixDataPackageService.prepareImport(from: legacyExportURL)
+        #expect(legacyImport.payload.riskProfile == nil)
+        #expect(!legacyImport.summary.riskProfileIncluded)
+
+        let (_, legacyDestinationURL) = makeDatabaseURLs()
+        let legacyDestination = try PositionRepository(databaseURL: legacyDestinationURL)
+        try legacyDestination.setAppSetting(key: RiskProfilePersistence.levelKey, value: "保留现有设置")
+        _ = try legacyDestination.importDataPayload(legacyImport.payload)
+        #expect(
+            try legacyDestination.appSetting(for: RiskProfilePersistence.levelKey)
+                == "保留现有设置"
+        )
+    }
+
+    @Test @MainActor
+    func dataPackageRestoresRiskProfileIntoActiveStoreAndRejectsInvalidLimits() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        try repository.setAppSetting(key: RiskProfilePersistence.configuredKey, value: "false")
+        try repository.setAppSetting(key: RiskProfilePersistence.levelKey, value: "未配置")
+        let store = PortfolioStore(positionRepository: repository)
+        let riskProfile = PortfolixDataPackage.RiskProfile(
+            configured: true,
+            level: "稳健平衡",
+            version: 4,
+            positionLimit: "26",
+            cryptoLimit: "9",
+            foreignCurrencyLimit: "42",
+            liquidityMinimum: "18",
+            updatedAt: "2026-09-12T03:00:00Z"
+        )
+        let payload = PortfolixDataPackage.Payload(
+            holdings: [],
+            portfolioSnapshots: [],
+            assetPriceSnapshots: [],
+            riskProfile: riskProfile
+        )
+        let preparedImport = PreparedPortfolixDataImport(
+            payload: payload,
+            summary: PortfolixDataTransferSummary(
+                holdingCount: 0,
+                portfolioSnapshotCount: 0,
+                assetPriceSnapshotCount: 0,
+                riskProfileIncluded: true
+            )
+        )
+
+        let summary = try store.importFinancialData(preparedImport)
+        #expect(summary.riskProfileIncluded)
+        #expect(store.riskProfileConfigured)
+        #expect(store.riskLevel == "稳健平衡")
+        #expect(store.riskProfileVersion == 4)
+        #expect(store.positionLimit == 26)
+        #expect(store.cryptoLimit == 9)
+        #expect(store.foreignCurrencyLimit == 42)
+        #expect(store.liquidityMinimum == 18)
+
+        let invalidPayload = PortfolixDataPackage.Payload(
+            holdings: [],
+            portfolioSnapshots: [],
+            assetPriceSnapshots: [],
+            riskProfile: PortfolixDataPackage.RiskProfile(
+                configured: true,
+                level: "稳健平衡",
+                version: 4,
+                positionLimit: "101",
+                cryptoLimit: "9",
+                foreignCurrencyLimit: "42",
+                liquidityMinimum: "18",
+                updatedAt: "2026-09-12T03:00:00Z"
+            )
+        )
+        #expect(throws: PortfolixDataPackageError.self) {
+            try PortfolixDataPackageService.validate(
+                payload: invalidPayload,
+                requiresRiskProfile: true
+            )
+        }
     }
 
     @Test

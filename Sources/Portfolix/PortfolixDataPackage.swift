@@ -3,6 +3,17 @@ import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
+enum RiskProfilePersistence {
+    static let levelKey = "risk_profile_level"
+    static let configuredKey = "risk_profile_configured"
+    static let versionKey = "risk_profile_version"
+    static let positionLimitKey = "risk_position_limit"
+    static let cryptoLimitKey = "risk_crypto_limit"
+    static let foreignCurrencyLimitKey = "risk_foreign_currency_limit"
+    static let liquidityMinimumKey = "risk_liquidity_minimum"
+    static let updatedAtKey = "risk_profile_updated_at"
+}
+
 enum PortfolixDataPackage {
     struct ArchiveManifest: Codable, Equatable, Sendable {
         let formatIdentifier: String
@@ -25,12 +36,49 @@ enum PortfolixDataPackage {
         let holdings: Int
         let portfolioSnapshots: Int
         let assetPriceSnapshots: Int
+        let riskProfiles: Int?
+
+        init(
+            holdings: Int,
+            portfolioSnapshots: Int,
+            assetPriceSnapshots: Int,
+            riskProfiles: Int? = nil
+        ) {
+            self.holdings = holdings
+            self.portfolioSnapshots = portfolioSnapshots
+            self.assetPriceSnapshots = assetPriceSnapshots
+            self.riskProfiles = riskProfiles
+        }
     }
 
     struct Payload: Codable, Equatable, Sendable {
         let holdings: [Holding]
         let portfolioSnapshots: [PortfolioHistory]
         let assetPriceSnapshots: [AssetPriceHistory]
+        let riskProfile: RiskProfile?
+
+        init(
+            holdings: [Holding],
+            portfolioSnapshots: [PortfolioHistory],
+            assetPriceSnapshots: [AssetPriceHistory],
+            riskProfile: RiskProfile? = nil
+        ) {
+            self.holdings = holdings
+            self.portfolioSnapshots = portfolioSnapshots
+            self.assetPriceSnapshots = assetPriceSnapshots
+            self.riskProfile = riskProfile
+        }
+    }
+
+    struct RiskProfile: Codable, Equatable, Sendable {
+        let configured: Bool
+        let level: String
+        let version: Int
+        let positionLimit: String
+        let cryptoLimit: String
+        let foreignCurrencyLimit: String
+        let liquidityMinimum: String
+        let updatedAt: String
     }
 
     struct Holding: Codable, Equatable, Sendable {
@@ -85,6 +133,19 @@ struct PortfolixDataTransferSummary: Equatable, Sendable {
     let holdingCount: Int
     let portfolioSnapshotCount: Int
     let assetPriceSnapshotCount: Int
+    let riskProfileIncluded: Bool
+
+    init(
+        holdingCount: Int,
+        portfolioSnapshotCount: Int,
+        assetPriceSnapshotCount: Int,
+        riskProfileIncluded: Bool = false
+    ) {
+        self.holdingCount = holdingCount
+        self.portfolioSnapshotCount = portfolioSnapshotCount
+        self.assetPriceSnapshotCount = assetPriceSnapshotCount
+        self.riskProfileIncluded = riskProfileIncluded
+    }
 }
 
 struct PreparedPortfolixDataImport: Equatable, Sendable {
@@ -120,7 +181,8 @@ enum PortfolixDataPackageService {
     static let contentType = UTType.zip
 
     private static let formatIdentifier = "app.portfolix.data-export.archive"
-    private static let schemaVersion = 2
+    private static let schemaVersion = 3
+    private static let supportedSchemaVersions = Set([2, schemaVersion])
     private static let maximumFileSize = 64 * 1_024 * 1_024
     private static let maximumUncompressedSize = 128 * 1_024 * 1_024
     private static let maximumHoldingCount = 10_000
@@ -130,13 +192,15 @@ enum PortfolixDataPackageService {
     private static let holdingsFilename = "holdings.json"
     private static let dailyReturnsFilename = "daily_returns.json"
     private static let dailyAssetPricesFilename = "daily_asset_prices.json"
+    private static let riskProfileFilename = "risk_profile.json"
 
-    private static var archiveFilenames: [String] {
-        [manifestFilename, holdingsFilename, dailyReturnsFilename, dailyAssetPricesFilename]
+    private static func archiveFilenames(for version: Int) -> [String] {
+        [manifestFilename] + dataFilenames(for: version)
     }
 
-    private static var dataFilenames: Set<String> {
-        [holdingsFilename, dailyReturnsFilename, dailyAssetPricesFilename]
+    private static func dataFilenames(for version: Int) -> [String] {
+        let financialFilenames = [holdingsFilename, dailyReturnsFilename, dailyAssetPricesFilename]
+        return version >= 3 ? financialFilenames + [riskProfileFilename] : financialFilenames
     }
 
     private static let encoder: JSONEncoder = {
@@ -148,14 +212,16 @@ enum PortfolixDataPackageService {
     private static let decoder = JSONDecoder()
 
     static func write(payload: PortfolixDataPackage.Payload, to destinationURL: URL) throws -> PortfolixDataTransferSummary {
-        try validate(payload: payload)
+        try validate(payload: payload, requiresRiskProfile: true)
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
         let holdingsData = try encoder.encode(payload.holdings)
         let dailyReturnsData = try encoder.encode(payload.portfolioSnapshots)
         let dailyAssetPricesData = try encoder.encode(payload.assetPriceSnapshots)
-        let uncompressedDataSize = holdingsData.count + dailyReturnsData.count + dailyAssetPricesData.count
+        let riskProfileData = try encoder.encode(payload.riskProfile)
+        let uncompressedDataSize = holdingsData.count + dailyReturnsData.count
+            + dailyAssetPricesData.count + riskProfileData.count
         guard uncompressedDataSize <= maximumUncompressedSize else {
             throw PortfolixDataPackageError.fileTooLarge
         }
@@ -176,6 +242,11 @@ enum PortfolixDataPackageService {
                 recordCount: payload.assetPriceSnapshots.count,
                 sha256: sha256(dailyAssetPricesData)
             ),
+            PortfolixDataPackage.ArchiveFile(
+                name: riskProfileFilename,
+                recordCount: payload.riskProfile == nil ? 0 : 1,
+                sha256: sha256(riskProfileData)
+            ),
         ]
         let counts = recordCounts(for: payload)
         let manifest = PortfolixDataPackage.ArchiveManifest(
@@ -188,19 +259,20 @@ enum PortfolixDataPackageService {
             files: archiveFiles,
             excludedData: [
                 "smart analysis data",
-                "app settings and API credentials",
+                "API credentials and device-specific app settings",
             ]
         )
         try encoder.encode(manifest).write(to: temporaryDirectory.appendingPathComponent(manifestFilename), options: .atomic)
         try holdingsData.write(to: temporaryDirectory.appendingPathComponent(holdingsFilename), options: .atomic)
         try dailyReturnsData.write(to: temporaryDirectory.appendingPathComponent(dailyReturnsFilename), options: .atomic)
         try dailyAssetPricesData.write(to: temporaryDirectory.appendingPathComponent(dailyAssetPricesFilename), options: .atomic)
+        try riskProfileData.write(to: temporaryDirectory.appendingPathComponent(riskProfileFilename), options: .atomic)
 
         let temporaryArchiveURL = temporaryDirectory.appendingPathComponent("Portfolix-Export-\(UUID().uuidString).zip")
         defer { try? FileManager.default.removeItem(at: temporaryArchiveURL) }
         _ = try runArchiveTool(
             executable: "/usr/bin/zip",
-            arguments: ["-q", "-X", temporaryArchiveURL.path] + archiveFilenames,
+            arguments: ["-q", "-X", temporaryArchiveURL.path] + archiveFilenames(for: schemaVersion),
             currentDirectoryURL: temporaryDirectory
         )
         let archiveData = try Data(contentsOf: temporaryArchiveURL, options: [.mappedIfSafe])
@@ -242,8 +314,10 @@ enum PortfolixDataPackageService {
             data: archiveData,
             maximumUncompressedSize: maximumUncompressedSize
         )
-        guard Set(archiveEntries.map(\.name)) == Set(archiveFilenames),
-              archiveEntries.count == archiveFilenames.count
+        let archiveEntryNames = Set(archiveEntries.map(\.name))
+        let supportedArchiveFilenameSets = supportedSchemaVersions.map { Set(archiveFilenames(for: $0)) }
+        guard supportedArchiveFilenameSets.contains(archiveEntryNames),
+              archiveEntries.count == archiveEntryNames.count
         else {
             throw PortfolixDataPackageError.invalidPackage("压缩包目录结构不受支持")
         }
@@ -255,7 +329,7 @@ enum PortfolixDataPackageService {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: immutableArchiveURL.path)
         _ = try runArchiveTool(
             executable: "/usr/bin/unzip",
-            arguments: ["-qq", immutableArchiveURL.path] + archiveFilenames + ["-d", temporaryDirectory.path]
+            arguments: ["-qq", immutableArchiveURL.path] + archiveEntryNames.sorted() + ["-d", temporaryDirectory.path]
         )
 
         var fileData: [String: Data] = [:]
@@ -284,8 +358,13 @@ enum PortfolixDataPackageService {
         guard manifest.formatIdentifier == formatIdentifier else {
             throw PortfolixDataPackageError.invalidPackage("文件类型不受支持")
         }
-        guard manifest.schemaVersion == schemaVersion else {
+        guard supportedSchemaVersions.contains(manifest.schemaVersion) else {
             throw PortfolixDataPackageError.unsupportedVersion(manifest.schemaVersion)
+        }
+        let expectedArchiveFilenames = Set(archiveFilenames(for: manifest.schemaVersion))
+        let expectedDataFilenames = Set(dataFilenames(for: manifest.schemaVersion))
+        guard archiveEntryNames == expectedArchiveFilenames else {
+            throw PortfolixDataPackageError.invalidPackage("压缩包版本与目录结构不一致")
         }
         guard manifest.integrityAlgorithm == "SHA-256" else {
             throw PortfolixDataPackageError.invalidPackage("完整性算法不受支持")
@@ -298,10 +377,10 @@ enum PortfolixDataPackageService {
                 throw PortfolixDataPackageError.invalidPackage("manifest 包含重复文件记录")
             }
         }
-        guard Set(manifestFiles.keys) == dataFilenames else {
+        guard Set(manifestFiles.keys) == expectedDataFilenames else {
             throw PortfolixDataPackageError.invalidPackage("manifest 文件清单无效")
         }
-        for filename in dataFilenames {
+        for filename in expectedDataFilenames {
             let data = try requiredData(named: filename, in: fileData)
             guard manifestFiles[filename]?.sha256.lowercased() == sha256(data) else {
                 throw PortfolixDataPackageError.integrityCheckFailed
@@ -322,7 +401,13 @@ enum PortfolixDataPackageService {
                 assetPriceSnapshots: try decoder.decode(
                     [PortfolixDataPackage.AssetPriceHistory].self,
                     from: try requiredData(named: dailyAssetPricesFilename, in: fileData)
-                )
+                ),
+                riskProfile: manifest.schemaVersion >= 3
+                    ? try decoder.decode(
+                        PortfolixDataPackage.RiskProfile.self,
+                        from: try requiredData(named: riskProfileFilename, in: fileData)
+                    )
+                    : nil
             )
         } catch let error as PortfolixDataPackageError {
             throw error
@@ -332,15 +417,19 @@ enum PortfolixDataPackageService {
         guard manifest.recordCounts == recordCounts(for: payload),
               manifestFiles[holdingsFilename]?.recordCount == payload.holdings.count,
               manifestFiles[dailyReturnsFilename]?.recordCount == payload.portfolioSnapshots.count,
-              manifestFiles[dailyAssetPricesFilename]?.recordCount == payload.assetPriceSnapshots.count
+              manifestFiles[dailyAssetPricesFilename]?.recordCount == payload.assetPriceSnapshots.count,
+              manifest.schemaVersion < 3 || manifestFiles[riskProfileFilename]?.recordCount == 1
         else {
             throw PortfolixDataPackageError.invalidPackage("记录计数不一致")
         }
-        try validate(payload: payload)
+        try validate(payload: payload, requiresRiskProfile: manifest.schemaVersion >= 3)
         return PreparedPortfolixDataImport(payload: payload, summary: summary(for: payload))
     }
 
-    static func validate(payload: PortfolixDataPackage.Payload) throws {
+    static func validate(
+        payload: PortfolixDataPackage.Payload,
+        requiresRiskProfile: Bool = false
+    ) throws {
         guard payload.holdings.count <= maximumHoldingCount else {
             throw PortfolixDataPackageError.invalidPackage("持仓记录数量超出限制")
         }
@@ -349,6 +438,9 @@ enum PortfolixDataPackageService {
         }
         guard payload.assetPriceSnapshots.count <= maximumAssetPriceSnapshotCount else {
             throw PortfolixDataPackageError.invalidPackage("资产价格记录数量超出限制")
+        }
+        if requiresRiskProfile, payload.riskProfile == nil {
+            throw PortfolixDataPackageError.invalidPackage("缺少风险偏好数据")
         }
 
         var holdingIdentities = Set<String>()
@@ -441,13 +533,26 @@ enum PortfolixDataPackageService {
                 throw PortfolixDataPackageError.invalidPackage("存在重复资产价格记录")
             }
         }
+
+        if let riskProfile = payload.riskProfile {
+            try validateText(riskProfile.level, field: "risk_profile.level", maximumLength: 64)
+            guard (0...1_000_000).contains(riskProfile.version) else {
+                throw PortfolixDataPackageError.invalidPackage("risk_profile.version 无效")
+            }
+            try validatePercentage(riskProfile.positionLimit, field: "risk_profile.position_limit")
+            try validatePercentage(riskProfile.cryptoLimit, field: "risk_profile.crypto_limit")
+            try validatePercentage(riskProfile.foreignCurrencyLimit, field: "risk_profile.foreign_currency_limit")
+            try validatePercentage(riskProfile.liquidityMinimum, field: "risk_profile.liquidity_minimum")
+            try validateTimestamp(riskProfile.updatedAt, field: "risk_profile.updated_at")
+        }
     }
 
     private static func recordCounts(for payload: PortfolixDataPackage.Payload) -> PortfolixDataPackage.RecordCounts {
         PortfolixDataPackage.RecordCounts(
             holdings: payload.holdings.count,
             portfolioSnapshots: payload.portfolioSnapshots.count,
-            assetPriceSnapshots: payload.assetPriceSnapshots.count
+            assetPriceSnapshots: payload.assetPriceSnapshots.count,
+            riskProfiles: payload.riskProfile == nil ? nil : 1
         )
     }
 
@@ -455,7 +560,8 @@ enum PortfolixDataPackageService {
         PortfolixDataTransferSummary(
             holdingCount: payload.holdings.count,
             portfolioSnapshotCount: payload.portfolioSnapshots.count,
-            assetPriceSnapshotCount: payload.assetPriceSnapshots.count
+            assetPriceSnapshotCount: payload.assetPriceSnapshots.count,
+            riskProfileIncluded: payload.riskProfile != nil
         )
     }
 
@@ -539,6 +645,12 @@ enum PortfolixDataPackageService {
     private static func validateDecimal(_ value: String, field: String, allowsNegative: Bool) throws {
         guard let decimal = Decimal(string: value), !decimal.isNaN, allowsNegative || decimal >= 0 else {
             throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效数值")
+        }
+    }
+
+    private static func validatePercentage(_ value: String, field: String) throws {
+        guard let decimal = Decimal(string: value), !decimal.isNaN, (0...100).contains(decimal) else {
+            throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效百分比")
         }
     }
 
