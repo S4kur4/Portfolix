@@ -2,14 +2,15 @@ import AppKit
 import SwiftUI
 
 enum PortfolixTheme {
-    static let canvas = adaptive(light: 0xF6F6F8, dark: 0x07080A)
-    private static let primarySurface = adaptive(light: 0xFFFFFF, dark: 0x0A0B0E)
+    // Keep large surfaces neutral so brand color is reserved for meaning and interaction.
+    static let canvas = adaptive(light: 0xE7E9ED, dark: 0x000000)
+    private static let primarySurface = adaptive(light: 0xF2F3F5, dark: 0x060607)
     static let sidebar = primarySurface
     static let panel = primarySurface
-    static let panelElevated = adaptive(light: 0xF3F4F6, dark: 0x14161B)
-    static let panelSoft = adaptive(light: 0xE9EAEE, dark: 0x1A1C22)
-    static let selectionFill = adaptive(light: 0xE8E3FA, dark: 0x211D30)
-    static let selectionText = adaptive(light: 0x513AB6, dark: 0xC9BEFF)
+    static let panelElevated = adaptive(light: 0xE7E9ED, dark: 0x0E0F11)
+    static let panelSoft = adaptive(light: 0xDDE0E5, dark: 0x17181C)
+    static let selectionFill = adaptive(light: 0xE2DDF1, dark: 0x18151F)
+    static let selectionText = adaptive(light: 0x513AB6, dark: 0xC5BAF8)
     static let border = Color(nsColor: .separatorColor)
     static let borderStrong = Color(nsColor: .gridColor)
     static let primaryText = Color.primary
@@ -117,7 +118,7 @@ struct PortfolixSheetBackground: View {
             Rectangle()
                 .fill(.regularMaterial)
             Rectangle()
-                .fill(PortfolixTheme.canvas.opacity(0.88))
+                .fill(PortfolixTheme.canvas.opacity(0.96))
         }
     }
 }
@@ -212,7 +213,7 @@ struct Panel<Content: View>: View {
                 RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                     .fill(PortfolixTheme.panel)
                 RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
-                    .stroke(PortfolixTheme.border.opacity(0.82), lineWidth: 1)
+                    .strokeBorder(PortfolixTheme.border.opacity(0.72), lineWidth: 0.5)
             }
     }
 }

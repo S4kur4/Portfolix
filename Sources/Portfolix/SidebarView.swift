@@ -179,10 +179,6 @@ private struct SidebarItem: View {
                         .fill(PortfolixTheme.selectionFill)
                         .opacity(isSelected ? 1 : 0)
 
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(PortfolixTheme.violet.opacity(0.18), lineWidth: 1)
-                        .opacity(isSelected ? 1 : 0)
-
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
                         .fill(PortfolixTheme.panelSoft)
                         .opacity(!isSelected && isHovering ? 1 : 0)
