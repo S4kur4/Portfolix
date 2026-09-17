@@ -3,32 +3,38 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.7</title>
-            <pubDate>Fri, 11 Sep 2026 21:43:48 +0800</pubDate>
+            <title>0.1.8</title>
+            <pubDate>Thu, 17 Sep 2026 20:31:40 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>18</sparkle:version>
-            <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+            <sparkle:version>19</sparkle:version>
+            <sparkle:shortVersionString>0.1.8</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.7 (Build 18)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.8 (Build 19)
 
-## 修复与改进
+## 新功能与改进
 
-- 适配 DeepSeek 最新模型列表，自动移除已下线模型，并保持基础模式与联网增强能力一致。
-- 更新 DeepSeek Responses API 与内建联网搜索的调用和结果校验逻辑。
-- 修复 App 升级后后台行情组件可能停止运行的问题。
-- 修复调度记录缺失时错误延后更新的问题；已到期的行情任务会按原计划补跑。
-- 后台行情写入完成后立即同步至前台，减少重新打开 App 后的显示延迟。
+- 数据备份现已包含风险偏好资料，同时继续排除 API Key 等敏感信息；导入后每日盈亏和风险画像会立即恢复。
+- 全面优化界面渲染与数据计算性能，减少大规模持仓、图表和 Agent 历史消息滚动时的卡顿。
+- 修复 Agent 聊天记录在快速滚动时偶发消失、输入焦点丢失及输入延迟的问题。
+- 智能分析改用外部联网搜索，支持免密钥的 Parallel Search，并可同时配置 Tavily 与博查作为搜索来源和回退方案。
+- Agent 现在可以根据问题选择搜索服务、回答报告范围之外的问题，并在回答中提供可点击的网页引用。
+- 改进 DeepSeek 模型兼容性、上下文管理、思考状态展示、响应校验和运行诊断。
+- 优化 DeepSeek 与搜索 API 配置体验，支持直接编辑或删除已保存的 API Key，并统一配置状态反馈。
+- 重新调整浅色与深色模式的背景、卡片边界和侧边栏选中状态，使界面更清晰一致。
 
-## Fixes and Improvements
+## New Features and Improvements
 
-- Updated the DeepSeek model catalog integration to remove retired models and keep analysis modes aligned with model capabilities.
-- Adapted the DeepSeek Responses API and built-in web search request and validation flow.
-- Fixed an issue that could stop background price updates after an app upgrade.
-- Restored overdue schedules from their last recorded run instead of delaying them after relaunch.
-- Synchronized completed background quote updates with the foreground immediately.
+- Backups now include risk preferences while continuing to exclude API keys and other sensitive data. Daily profit history and the risk profile are restored immediately after import.
+- Improved UI rendering and portfolio analytics performance to reduce stutter with large portfolios, charts, and long Agent conversations.
+- Fixed Agent messages occasionally disappearing during fast scrolling, input focus loss, and composer typing latency.
+- Replaced retired model-provided web search with external search services: keyless Parallel Search plus optional Tavily and Bocha providers with fallback support.
+- The Agent can now choose an appropriate search provider, answer questions beyond the generated report, and attach clickable web citations to supported claims.
+- Improved DeepSeek model compatibility, context management, thinking-state presentation, response validation, and runtime diagnostics.
+- Refined DeepSeek and Search API configuration, including direct editing or deletion of saved API keys and consistent configuration feedback.
+- Rebalanced light and dark appearance colors, card borders, and sidebar selection styling for a cleaner and more consistent interface.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.7/Portfolix-0.1.7.dmg" length="5769697" type="application/octet-stream" sparkle:edSignature="fsZIgF80RsKK2n1flAR+M1Ob18PbJY7yC1fkhWWU5IJzyE4ECd2xWJhreW3CB9f9vTfKzc9yyT6PatDc7HAhDw=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.8/Portfolix-0.1.8.dmg" length="6071680" type="application/octet-stream" sparkle:edSignature="HbXgAQgphtwGaX6MjrG0nDIFLdDislIAaDMe4bKlwDXc+IvzkPm6GA5vZF4QeF52X97iXhAGt8TqbFEYx8n0Bg=="/>
         </item>
     </channel>
 </rss>
