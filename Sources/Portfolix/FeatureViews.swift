@@ -420,6 +420,7 @@ struct AIReportView: View {
                     isConfigured: store.hasLLMAPIKey,
                     validationState: store.llmAPIKeyValidationState
                 ),
+                searchReadiness: connectedSearchReadiness,
                 selectedModel: aiModelBinding,
                 availableModels: availableModelOptions,
                 selectedAnalysisMode: aiAnalysisModeBinding,
@@ -522,6 +523,32 @@ struct AIReportView: View {
     private var availableModelOptions: [String] {
         store.availableLLMModels
     }
+
+    private var connectedSearchReadiness: AIReportReadiness {
+        guard store.searchConfiguration.isEnabled else { return .ready }
+        let providers = store.searchConfiguration.orderedEnabledProviders
+        guard !providers.isEmpty else { return .missing }
+        let readiness: [AIReportReadiness] = providers.map { provider in
+            switch provider {
+            case .parallel:
+                .ready
+            case .tavily:
+                AIReportReadiness.credential(
+                    isConfigured: store.hasTavilyAPIKey,
+                    validationState: store.tavilyAPIKeyValidationState
+                )
+            case .bocha:
+                AIReportReadiness.credential(
+                    isConfigured: store.hasBochaAPIKey,
+                    validationState: store.bochaAPIKeyValidationState
+                )
+            }
+        }
+        if readiness.contains(.ready) { return .ready }
+        if readiness.contains(.invalid) { return .invalid }
+        if readiness.contains(.needsValidation) { return .needsValidation }
+        return .missing
+    }
 }
 
 private enum AIReportChatRenderPolicy {
@@ -538,6 +565,7 @@ private struct AIReportChatSurface: View {
     let activityLines: [AIAgentActivityLine]
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     @Binding var selectedModel: String
     let availableModels: [String]
     @Binding var selectedAnalysisMode: SmartAnalysisMode
@@ -578,6 +606,7 @@ private struct AIReportChatSurface: View {
                                         AIReportWelcomeMessage(
                                             hasPositions: hasPositions,
                                             llmReadiness: llmReadiness,
+                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -606,6 +635,7 @@ private struct AIReportChatSurface: View {
                                         AIReportAgentBubble {
                                             AIReportFollowUpMessage(
                                                 text: text,
+                                                citations: item.citations ?? [],
                                                 createdAt: item.createdAt,
                                                 language: language,
                                                 showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text)
@@ -643,6 +673,7 @@ private struct AIReportChatSurface: View {
                                             status: run.status,
                                             hasPositions: hasPositions,
                                             llmReadiness: llmReadiness,
+                                            searchReadiness: searchReadiness,
                                             usesConnectedMode: usesConnectedMode,
                                             language: language
                                         )
@@ -679,6 +710,7 @@ private struct AIReportChatSurface: View {
                 AIReportChatComposer(
                     canGenerate: hasPositions && !isRunning,
                     canSendFollowUp: report != nil && !isRunning && !isSendingFollowUp,
+                    isAwaitingResponse: isSendingFollowUp,
                     hasReport: hasReport,
                     language: language,
                     generate: generate,
@@ -809,7 +841,7 @@ private struct AIReportChatHeader: View {
                 AIReportHeaderMenuTag(
                     title: selectedAnalysisMode.title(language: language),
                     symbol: "network",
-                    options: Array(SmartAnalysisMode.allCases),
+                    options: SmartAnalysisMode.availableCases,
                     selection: $selectedAnalysisMode,
                     isEnabled: isInteractionEnabled,
                     optionTitle: { $0.title(language: language) }
@@ -962,12 +994,20 @@ private struct AIReportAgentBubble<Content: View>: View {
 
 private struct AIReportFollowUpMessage: View {
     let text: String
+    let citations: [AIMessageCitation]
     let createdAt: Date
     let language: AppLanguage
     let showsDisclaimer: Bool
 
-    init(text: String, createdAt: Date, language: AppLanguage, showsDisclaimer: Bool = true) {
+    init(
+        text: String,
+        citations: [AIMessageCitation] = [],
+        createdAt: Date,
+        language: AppLanguage,
+        showsDisclaimer: Bool = true
+    ) {
         self.text = text
+        self.citations = citations
         self.createdAt = createdAt
         self.language = language
         self.showsDisclaimer = showsDisclaimer
@@ -976,12 +1016,18 @@ private struct AIReportFollowUpMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
             AIReportTimestampedAgentRow(date: createdAt, language: language) {
-                Text(AIUserFacingTextSanitizer.sanitize(text))
-                    .font(PortfolixTypography.body)
-                    .foregroundStyle(PortfolixTheme.primaryText)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                Group {
+                    if citations.isEmpty {
+                        Text(AIUserFacingTextSanitizer.sanitize(text))
+                            .font(PortfolixTypography.body)
+                            .foregroundStyle(PortfolixTheme.primaryText)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    } else {
+                        AIReportCitedText(text: text, citations: citations)
+                    }
+                }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PortfolixSpacing.lg)
                     .padding(.vertical, PortfolixSpacing.md)
@@ -992,6 +1038,226 @@ private struct AIReportFollowUpMessage: View {
                 AIReportDisclaimer(language: language)
             }
         }
+    }
+}
+
+private struct AIReportCitedText: NSViewRepresentable {
+    let text: String
+    let citations: [AIMessageCitation]
+
+    func makeNSView(context _: Context) -> AIReportCitationTextView {
+        AIReportCitationTextView()
+    }
+
+    func updateNSView(_ nsView: AIReportCitationTextView, context _: Context) {
+        nsView.update(text: text, citations: citations)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: AIReportCitationTextView,
+        context _: Context
+    ) -> CGSize? {
+        nsView.fittingSize(for: proposal.width)
+    }
+}
+
+@MainActor
+final class AIReportCitationTextView: NSView, NSTextViewDelegate {
+    private let textView = AIReportCitationNSTextView(frame: .zero)
+    private var renderedText = ""
+    private var renderedCitations: [AIMessageCitation] = []
+    private var lastMeasuredWidth: CGFloat = 320
+    var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.delegate = self
+        textView.onOpenLink = { [weak self] link in
+            self?.openCitation(link) ?? false
+        }
+        textView.linkTextAttributes = [
+            .foregroundColor: citationColor,
+            .cursor: NSCursor.pointingHand,
+        ]
+        addSubview(textView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        textView.frame = bounds
+    }
+
+    func update(text: String, citations: [AIMessageCitation]) {
+        guard text != renderedText || citations != renderedCitations else { return }
+        renderedText = text
+        renderedCitations = citations
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        let attributed = NSMutableAttributedString(
+            string: AIUserFacingTextSanitizer.sanitize(text),
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+        let orderedCitations = citations.enumerated().sorted { lhs, rhs in
+            if lhs.element.utf16Offset == rhs.element.utf16Offset {
+                return lhs.offset > rhs.offset
+            }
+            return lhs.element.utf16Offset > rhs.element.utf16Offset
+        }
+        for (_, citation) in orderedCitations {
+            guard let components = try? LLMBaseURLValidator.validatedComponents(from: citation.url),
+                  let url = components.url else { continue }
+            let offset = min(max(0, citation.utf16Offset), attributed.length)
+            let attachment = NSTextAttachment()
+            attachment.image = NSImage(
+                systemSymbolName: "link",
+                accessibilityDescription: "\(citation.title), \(citation.url)"
+            )?.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+            )
+            attachment.bounds = NSRect(x: 0, y: -1, width: 12, height: 12)
+            let icon = NSMutableAttributedString(attachment: attachment)
+            icon.addAttributes(
+                [
+                    .link: url,
+                    .toolTip: "\(citation.title)\n\(citation.url)",
+                    .foregroundColor: citationColor,
+                    .cursor: NSCursor.pointingHand,
+                ],
+                range: NSRange(location: 0, length: icon.length)
+            )
+            attributed.insert(icon, at: offset)
+        }
+        textView.textStorage?.setAttributedString(attributed)
+        textView.layoutManager?.invalidateLayout(
+            forCharacterRange: NSRange(location: 0, length: attributed.length),
+            actualCharacterRange: nil
+        )
+        invalidateIntrinsicContentSize()
+    }
+
+    func fittingSize(for proposedWidth: CGFloat?) -> CGSize {
+        let width = resolvedMeasurementWidth(proposedWidth)
+        return CGSize(width: width, height: fittingHeight(for: width))
+    }
+
+    func fittingHeight(for width: CGFloat) -> CGFloat {
+        let resolvedWidth = max(1, width)
+        lastMeasuredWidth = resolvedWidth
+        textView.frame.size.width = resolvedWidth
+        textView.textContainer?.containerSize = NSSize(
+            width: resolvedWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        let usedHeight = textView.layoutManager?.usedRect(for: textView.textContainer!).height ?? 0
+        return max(17, ceil(usedHeight))
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(
+            width: NSView.noIntrinsicMetric,
+            height: fittingHeight(for: lastMeasuredWidth)
+        )
+    }
+
+    func textView(
+        _: NSTextView,
+        clickedOnLink link: Any,
+        at _: Int
+    ) -> Bool {
+        openCitation(link)
+    }
+
+    func openCitation(_ link: Any) -> Bool {
+        let rawURL: String
+        switch link {
+        case let url as URL:
+            rawURL = url.absoluteString
+        case let url as NSURL:
+            rawURL = url.absoluteString ?? ""
+        case let value as String:
+            rawURL = value
+        default:
+            return false
+        }
+        guard let components = try? LLMBaseURLValidator.validatedComponents(from: rawURL),
+              let url = components.url else { return false }
+        return urlOpener(url)
+    }
+
+    private func resolvedMeasurementWidth(_ proposedWidth: CGFloat?) -> CGFloat {
+        if let proposedWidth, proposedWidth.isFinite, proposedWidth > 1 {
+            return proposedWidth
+        }
+        if bounds.width.isFinite, bounds.width > 1 {
+            return bounds.width
+        }
+        return lastMeasuredWidth
+    }
+
+    private var citationColor: NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(hex: 0xB7A5FF)
+                : NSColor(hex: 0x654BC8)
+        }
+    }
+}
+
+@MainActor
+private final class AIReportCitationNSTextView: NSTextView {
+    var onOpenLink: ((Any) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        if let link = link(at: event.locationInWindow) {
+            _ = onOpenLink?(link)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func link(at windowPoint: NSPoint) -> Any? {
+        guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else {
+            return nil
+        }
+        let localPoint = convert(windowPoint, from: nil)
+        let containerPoint = NSPoint(
+            x: localPoint.x - textContainerOrigin.x,
+            y: localPoint.y - textContainerOrigin.y
+        )
+        let glyphIndex = layoutManager.glyphIndex(
+            for: containerPoint,
+            in: textContainer,
+            fractionOfDistanceThroughGlyph: nil
+        )
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+        )
+        guard glyphRect.insetBy(dx: -2, dy: -2).contains(containerPoint) else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        guard characterIndex < textStorage.length else { return nil }
+        return textStorage.attribute(.link, at: characterIndex, effectiveRange: nil)
     }
 }
 
@@ -1157,6 +1423,7 @@ enum AIReportReadiness: Equatable {
 private struct AIReportWelcomeMessage: View {
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1179,8 +1446,8 @@ private struct AIReportWelcomeMessage: View {
                 )
                 if usesConnectedMode {
                     AIReportReadinessRow(
-                        readiness: llmReadiness,
-                        text: localizedText("DeepSeek 内建搜索", "DeepSeek built-in search", language: language)
+                        readiness: searchReadiness,
+                        text: searchReadiness.apiStatusText(name: localizedText("搜索 API", "Search API", language: language), language: language)
                     )
                 }
             }
@@ -1216,16 +1483,8 @@ private struct AIReportAgentProgressMessage: View {
     var body: some View {
         AIReportProgressCard(
             title: status.title(language: language),
-            detail: progressDetail,
             activityLines: activityLines
         )
-    }
-
-    private var progressDetail: String {
-        guard case let .running(progress) = status else {
-            return localizedText("等待下一步", "Waiting for the next step", language: language)
-        }
-        return progress.detail(language: language)
     }
 }
 
@@ -1237,7 +1496,6 @@ private struct AIReportFollowUpProgressMessage: View {
     var body: some View {
         AIReportProgressCard(
             title: progress.title(language: language),
-            detail: progress.detail(language: language),
             activityLines: activityLines
         )
     }
@@ -1245,61 +1503,42 @@ private struct AIReportFollowUpProgressMessage: View {
 
 private struct AIReportProgressCard: View {
     let title: String
-    let detail: String
     let activityLines: [AIAgentActivityLine]
 
-    private var displayLines: [AIAgentActivityLine] {
-        if activityLines.isEmpty {
-            return [
-                AIAgentActivityLine(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, text: title),
-                AIAgentActivityLine(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, text: detail),
-            ]
-        }
-        return Array(activityLines.suffix(3))
+    private var displayLine: AIAgentActivityLine {
+        activityLines.last
+            ?? AIAgentActivityLine(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                text: title
+            )
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            AIReportAgentThinkingIcon()
+            AIReportAgentThinkingIcon(size: 36)
 
-            ZStack(alignment: .bottomLeading) {
-                activityStack
-                    .id(displayLines.map(\.id))
+            ZStack(alignment: .leading) {
+                Text(displayLine.text)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .id(displayLine.id)
                     .transition(
                         .asymmetric(
-                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                            removal: .move(edge: .top).combined(with: .opacity)
+                            insertion: .offset(y: 16).combined(with: .opacity),
+                            removal: .offset(y: -16).combined(with: .opacity)
                         )
                     )
             }
-            .frame(height: 52, alignment: .bottomLeading)
+            .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
             .clipped()
-            .animation(.easeInOut(duration: 0.24), value: displayLines.map(\.id))
-
-            Spacer()
+            .animation(.easeInOut(duration: 0.28), value: displayLine.id)
         }
-        .padding(PortfolixSpacing.lg)
+        .padding(.horizontal, PortfolixSpacing.lg)
+        .padding(.vertical, PortfolixSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
-    }
-
-    private var activityStack: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(0 ..< 3, id: \.self) { index in
-                if index < displayLines.count {
-                    let line = displayLines[index]
-                    Text(line.text)
-                        .font(.system(size: 12, weight: index == displayLines.count - 1 ? .semibold : .regular))
-                        .foregroundStyle(index == displayLines.count - 1 ? PortfolixTheme.primaryText : PortfolixTheme.tertiaryText)
-                        .lineLimit(1)
-                        .frame(height: 15, alignment: .leading)
-                } else {
-                    Color.clear
-                        .frame(height: 15)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1307,6 +1546,7 @@ private struct AIReportStaticStatusMessage: View {
     let status: AIAnalysisRunStatus
     let hasPositions: Bool
     let llmReadiness: AIReportReadiness
+    let searchReadiness: AIReportReadiness
     let usesConnectedMode: Bool
     let language: AppLanguage
 
@@ -1334,7 +1574,7 @@ private struct AIReportStaticStatusMessage: View {
         if hasInvalidRequiredCredential {
             return localizedText("API 验证失败", "API validation failed", language: language)
         }
-        if llmReadiness != .ready {
+        if llmReadiness != .ready || (usesConnectedMode && searchReadiness != .ready) {
             return localizedText("需要完成 API 配置", "API configuration required", language: language)
         }
         return status.title(language: language)
@@ -1346,6 +1586,12 @@ private struct AIReportStaticStatusMessage: View {
         }
         if llmReadiness != .ready {
             return llmReadiness.configurationGuidance(name: "DeepSeek API", language: language)
+        }
+        if usesConnectedMode, searchReadiness != .ready {
+            return searchReadiness.configurationGuidance(
+                name: localizedText("搜索 API", "Search API", language: language),
+                language: language
+            )
         }
         return localizedText("请检查配置或稍后重试", "Check settings or try again later", language: language)
     }
@@ -1375,7 +1621,7 @@ private struct AIReportStaticStatusMessage: View {
     }
 
     private var hasInvalidRequiredCredential: Bool {
-        llmReadiness == .invalid
+        llmReadiness == .invalid || (usesConnectedMode && searchReadiness == .invalid)
     }
 }
 
@@ -1739,11 +1985,13 @@ private struct AIReportAssetAlertMessageRow: View {
 private struct AIReportChatComposer: View {
     let canGenerate: Bool
     let canSendFollowUp: Bool
+    let isAwaitingResponse: Bool
     let hasReport: Bool
     let language: AppLanguage
     let generate: () -> Void
     let sendFollowUp: (String) -> Void
-    @State private var draftMessage = ""
+    @State private var draftBuffer = AIReportComposerDraftBuffer()
+    @State private var hasDraftText = false
     @State private var isSubmitting = false
     @StateObject private var voiceRecorder = HoldingVoiceRecorder()
     @FocusState private var isComposerFocused: Bool
@@ -1752,7 +2000,7 @@ private struct AIReportChatComposer: View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
             HStack(spacing: PortfolixSpacing.sm) {
                 ZStack {
-                    TextField(placeholder, text: $draftMessage)
+                    TextField(placeholder, text: draftTextBinding)
                         .textFieldStyle(.plain)
                         .font(PortfolixTypography.body)
                         .foregroundStyle(PortfolixTheme.primaryText)
@@ -1770,6 +2018,7 @@ private struct AIReportChatComposer: View {
                         .allowsHitTesting(false)
                     }
                 }
+                .frame(maxWidth: .infinity)
 
                 Button {
                     isComposerFocused = false
@@ -1786,19 +2035,31 @@ private struct AIReportChatComposer: View {
             }
             .padding(.leading, PortfolixSpacing.lg)
             .padding(.trailing, PortfolixSpacing.sm)
+            .frame(maxWidth: .infinity)
             .frame(height: AIReportComposerMetrics.controlHeight)
-            .portfolixGlass(
-                in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                tint: isVoiceActive ? PortfolixTheme.violet.opacity(0.18) : nil,
-                fallbackTint: isVoiceActive ? PortfolixTheme.violet : PortfolixTheme.panelElevated,
-                fallbackOpacity: isVoiceActive ? 0.14 : 0.68
-            )
+            .background {
+                Color.clear
+                    .portfolixGlass(
+                        in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
+                        tint: isVoiceActive ? PortfolixTheme.violet.opacity(0.18) : nil,
+                        fallbackTint: isVoiceActive ? PortfolixTheme.violet : PortfolixTheme.panelElevated,
+                        fallbackOpacity: isVoiceActive ? 0.14 : 0.68
+                    )
+            }
             .overlay {
                 if isVoiceActive {
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
                         .stroke(PortfolixTheme.violet, lineWidth: 1)
                         .allowsHitTesting(false)
                 }
+            }
+            .layoutPriority(1)
+
+            AIReportSendButton(
+                isEnabled: canSubmitFollowUp,
+                help: localizedText("发送问题", "Send question", language: language)
+            ) {
+                queueFollowUpSubmission()
             }
 
             AIReportGenerateButton(
@@ -1809,18 +2070,23 @@ private struct AIReportChatComposer: View {
             ) {
                 generate()
             }
-
-            AIReportSendButton(
-                isEnabled: canSubmitFollowUp,
-                help: localizedText("基于上一份报告追问", "Ask about the latest report", language: language)
-            ) {
-                queueFollowUpSubmission()
-            }
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
         .onAppear { configureVoiceRecorder() }
         .onChange(of: language) { _, _ in configureVoiceRecorder() }
+        .onChange(of: isAwaitingResponse) { wasAwaitingResponse, isAwaitingResponse in
+            guard AIReportComposerFocusPolicy.shouldRestoreFocus(
+                wasAwaitingResponse: wasAwaitingResponse,
+                isAwaitingResponse: isAwaitingResponse,
+                isVoiceActive: isVoiceActive
+            ) else { return }
+            Task { @MainActor in
+                await Task.yield()
+                guard !self.isAwaitingResponse, !isVoiceActive else { return }
+                isComposerFocused = true
+            }
+        }
         .onDisappear { voiceRecorder.blur() }
         .alert(
             localizedText("语音输入", "Voice Input", language: language),
@@ -1844,7 +2110,7 @@ private struct AIReportChatComposer: View {
     private var canSubmitFollowUp: Bool {
         canSendFollowUp
             && !isSubmitting
-            && !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && hasDraftText
     }
 
     private var isVoiceActive: Bool {
@@ -1859,6 +2125,19 @@ private struct AIReportChatComposer: View {
         )
     }
 
+    private var draftTextBinding: Binding<String> {
+        Binding(
+            get: { draftBuffer.text },
+            set: { value in
+                draftBuffer.replace(with: value)
+                let containsText = draftBuffer.hasContent
+                if hasDraftText != containsText {
+                    hasDraftText = containsText
+                }
+            }
+        )
+    }
+
     private func configureVoiceRecorder() {
         voiceRecorder.focus(
             numeric: false,
@@ -1866,18 +2145,21 @@ private struct AIReportChatComposer: View {
             shortcut: .f1
         ) { value in
             isComposerFocused = false
-            draftMessage = value
+            draftBuffer.replace(with: value)
+            hasDraftText = draftBuffer.hasContent
         }
     }
 
     private func queueFollowUpSubmission() {
-        let question = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSendFollowUp, !isSubmitting, !question.isEmpty else { return }
+        guard canSendFollowUp,
+              !isSubmitting,
+              let question = draftBuffer.submissionText else { return }
 
         // Let AppKit finish the current text-input command before the chat tree changes.
         isSubmitting = true
         isComposerFocused = false
-        draftMessage = ""
+        draftBuffer.clear()
+        hasDraftText = false
         Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled else { return }
@@ -1890,6 +2172,38 @@ private struct AIReportChatComposer: View {
 private enum AIReportComposerMetrics {
     static let controlHeight: CGFloat = PortfolixSpacing.xxxl
     static let sendButtonWidth: CGFloat = PortfolixSpacing.xxxl
+}
+
+enum AIReportComposerFocusPolicy {
+    static func shouldRestoreFocus(
+        wasAwaitingResponse: Bool,
+        isAwaitingResponse: Bool,
+        isVoiceActive: Bool
+    ) -> Bool {
+        wasAwaitingResponse && !isAwaitingResponse && !isVoiceActive
+    }
+}
+
+@MainActor
+final class AIReportComposerDraftBuffer {
+    private(set) var text = ""
+
+    var hasContent: Bool {
+        submissionText != nil
+    }
+
+    var submissionText: String? {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    func replace(with value: String) {
+        text = value
+    }
+
+    func clear() {
+        text = ""
+    }
 }
 
 private struct AIReportGenerateButton: View {
@@ -1918,6 +2232,7 @@ private struct AIReportGenerateButton: View {
         )
         .opacity(isEnabled ? 1 : 0.5)
         .disabled(!isEnabled)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -3375,13 +3690,13 @@ struct SettingsView: View {
                     SettingsRow(
                         title: settingsText("分析模式", "Analysis Mode"),
                         helpText: settingsText(
-                            "基础模式可使用所有模型；联网增强会自动使用支持内建搜索的模型。",
-                            "Basic supports every model; Connected automatically uses a model with built-in search."
+                            "基础模式仅使用组合数据；联网增强会按需调用已启用的搜索服务。",
+                            "Basic uses portfolio data only; Connected calls enabled search services when needed."
                         ),
                         helpPlacement: .trailing
                     ) {
                         Picker(settingsText("分析模式", "Analysis Mode"), selection: smartAnalysisModeBinding) {
-                            ForEach(SmartAnalysisMode.allCases) { mode in
+                            ForEach(SmartAnalysisMode.availableCases) { mode in
                                 Text(mode.title(language: store.appLanguage)).tag(mode)
                             }
                         }
@@ -3411,6 +3726,18 @@ struct SettingsView: View {
                             buttonTitle: settingsText("配置", "Configure")
                         ) {
                             configurationSheet = .llm
+                        }
+                    }
+                    SettingsDivider()
+                    SettingsRow(title: settingsText("搜索 API", "Search APIs")) {
+                        let state = searchCredentialDisplayState()
+                        ProviderConfigurationActions(
+                            state: state.title,
+                            color: state.color,
+                            symbol: state.symbol,
+                            buttonTitle: settingsText("配置", "Configure")
+                        ) {
+                            configurationSheet = .search
                         }
                     }
                     SettingsDivider()
@@ -3471,6 +3798,9 @@ struct SettingsView: View {
             switch sheet {
             case .llm:
                 LLMConfigurationSheet()
+                    .environment(store)
+            case .search:
+                SearchConfigurationSheet()
                     .environment(store)
             }
         }
@@ -3634,6 +3964,44 @@ struct SettingsView: View {
             readiness.shortStatusText(language: store.appLanguage),
             readiness.color,
             readiness.symbol
+        )
+    }
+
+    private func searchCredentialDisplayState() -> (title: String, color: Color, symbol: String) {
+        let providers = store.searchConfiguration.orderedEnabledProviders
+        guard !providers.isEmpty else {
+            return (
+                settingsText("未启用", "Disabled"),
+                PortfolixTheme.tertiaryText,
+                "minus.circle.fill"
+            )
+        }
+        let states = providers.map { provider -> AIReportReadiness in
+            switch provider {
+            case .parallel:
+                .ready
+            case .tavily:
+                AIReportReadiness.credential(
+                    isConfigured: store.hasTavilyAPIKey,
+                    validationState: store.tavilyAPIKeyValidationState
+                )
+            case .bocha:
+                AIReportReadiness.credential(
+                    isConfigured: store.hasBochaAPIKey,
+                    validationState: store.bochaAPIKeyValidationState
+                )
+            }
+        }
+        if states.contains(.invalid) {
+            return (settingsText("验证失败", "Validation failed"), PortfolixTheme.danger, "xmark.circle.fill")
+        }
+        if states.contains(where: { $0 != .ready }) {
+            return (settingsText("待验证", "Needs validation"), PortfolixTheme.amber, "exclamationmark.circle.fill")
+        }
+        return (
+            settingsText("已启用 \(providers.count) 个", "\(providers.count) enabled"),
+            PortfolixTheme.mint,
+            "checkmark.circle.fill"
         )
     }
 }
@@ -4056,6 +4424,7 @@ private struct PositionRefreshButton: View {
 
 private enum SettingsConfigurationSheet: String, Identifiable {
     case llm
+    case search
 
     var id: String { rawValue }
 }

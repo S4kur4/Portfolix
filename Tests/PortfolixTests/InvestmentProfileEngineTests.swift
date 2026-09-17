@@ -92,7 +92,7 @@ struct InvestmentProfileEngineTests {
     }
 
     @Test
-    func harnessResearchesOnlyPublicAssetIdentityAndBuildsVerifiedExposure() async throws {
+    func harnessUsesConfiguredExternalSearchWithoutBuiltInModelSearch() async throws {
         let position = makePosition(
             name: "某某精选混合",
             symbol: "123456",
@@ -100,19 +100,12 @@ struct InvestmentProfileEngineTests {
             quoteCurrency: .cny,
             marketValue: 100_000
         )
+        let positionRef = InvestmentProfileEngine.positionRef(for: position)
         let sourceURL = "https://fund.example.com/reports/123456"
         let llm = InvestmentProfileMockLLM(
-            responses: [],
-            completionResults: [
-                LLMCompletionResult(
-                    content: exposureJSON(
-                        positionRef: InvestmentProfileEngine.positionRef(for: position),
-                        sourceURL: sourceURL
-                    ),
-                    webSearchCallCount: 1,
-                    webSearchQueries: ["123456 基金季报 投资范围 地区配置"],
-                    citations: [LLMWebCitation(title: "Fund quarterly report", url: sourceURL)]
-                ),
+            responses: [
+                toolPlanJSON(positionRef: positionRef, query: "123456 基金季报 投资范围 地区配置"),
+                exposureJSON(positionRef: positionRef, sourceURL: sourceURL),
             ]
         )
         let search = InvestmentProfileMockSearch(sourceURL: sourceURL)
@@ -122,20 +115,18 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: "llm-key",
-            searchKey: "search-key"
+            searchKeys: [.tavily: "search-key"]
         )
 
         let exposure = try #require(result.exposures.first)
         #expect(result.searchedAssetCount == 1)
-        #expect((exposure.regionWeights[InvestmentProfileRegion.unitedStates.rawValue] ?? 0) == 0.8)
-        #expect(exposure.evidence.first?.url == sourceURL)
-        #expect(await search.queries().isEmpty)
-        #expect(await llm.webSearchEnabledValues() == [true])
-        let prompt = try #require(await llm.userPrompts().first)
-        #expect(prompt.contains("123456"))
-        #expect(prompt.contains("某某精选混合"))
-        #expect(!prompt.localizedCaseInsensitiveContains("持仓成本"))
-        #expect(!prompt.localizedCaseInsensitiveContains("市值"))
+        #expect((exposure.regionWeights[InvestmentProfileRegion.unitedStates.rawValue] ?? 0) > 0)
+        #expect(exposure.evidence.contains { $0.url == sourceURL })
+        let queries = await search.queries()
+        #expect(queries.count == 1)
+        #expect(queries.first?.contains("123456") == true)
+        #expect(await llm.webSearchEnabledValues().isEmpty)
+        #expect(await llm.userPrompts().count == 2)
     }
 
     @Test
@@ -212,7 +203,7 @@ struct InvestmentProfileEngineTests {
         #expect(profile.summary.contains("AI 解释暂时不可用"))
     }
 
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func connectedAgentCompletesPlanningSearchExtractionAndCalibration() async throws {
         let position = makePosition(
             name: "某某精选混合",
@@ -300,7 +291,7 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: .default,
             llmKey: "llm-key",
-            searchKey: nil
+            searchKeys: [:]
         )
 
         #expect(result.searchedAssetCount == 0)
@@ -354,7 +345,7 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: "llm-key",
-            searchKey: "search-key"
+            searchKeys: [.tavily: "search-key"]
         )
 
         #expect(result.exposures.first?.evidence.first?.url == sourceURL)
@@ -363,8 +354,8 @@ struct InvestmentProfileEngineTests {
         #expect(await search.queries().isEmpty)
     }
 
-    @Test
-    func builtInSearchWithoutCitationsUsesSafeAttributedSourcesAtLowerConfidence() async throws {
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
+    func builtInSearchWithoutCitationsKeepsLocalExposure() async throws {
         let position = makePosition(
             name: "某某精选混合",
             symbol: "123456",
@@ -396,22 +387,21 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: "llm-key",
-            searchKey: "search-key"
+            searchKeys: [.tavily: "search-key"]
         )
 
         let exposure = try #require(result.exposures.first)
-        #expect(result.searchedAssetCount == 1)
-        #expect(exposure.evidence.first?.url == "https://fund.example.com/unused")
-        #expect(exposure.confidence <= 0.7)
+        #expect(result.searchedAssetCount == 0)
+        #expect(exposure.evidence.first?.source == "portfolix_native_resolver")
         #expect(result.limitations.contains {
-            $0.contains("未返回可独立校验的引用元数据")
+            $0.contains("未获得可验证的公开资料")
         })
         #expect(await llm.requestCount() == 1)
         #expect(await llm.webSearchEnabledValues() == [true])
         #expect(await search.queries().isEmpty)
     }
 
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func builtInSearchRejectsPrivateAttributedSourceURLs() async {
         let position = makePosition(
             name: "某某精选混合",
@@ -443,7 +433,7 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: "llm-key",
-            searchKey: nil
+            searchKeys: [:]
         )
 
         #expect(result.searchedAssetCount == 0)
@@ -451,7 +441,7 @@ struct InvestmentProfileEngineTests {
         #expect(!result.limitations.isEmpty)
     }
 
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func malformedBuiltInSearchResponseFallsBackWithoutExternalSearch() async throws {
         let position = makePosition(
             name: "某某精选混合",
@@ -479,7 +469,7 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: "llm-key",
-            searchKey: "search-key"
+            searchKeys: [.tavily: "search-key"]
         )
 
         #expect(result.searchedAssetCount == 0)
@@ -490,7 +480,7 @@ struct InvestmentProfileEngineTests {
         #expect(await search.queries().isEmpty)
     }
 
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func liveDeepSeekBuiltInSearchEnrichesQDIIExposureUsingEnvironmentCredential() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PORTFOLIX_RUN_LIVE_DEEPSEEK_PROFILE_TEST"] == "1" else { return }
@@ -520,7 +510,7 @@ struct InvestmentProfileEngineTests {
             llmConfiguration: configuration,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .tavily, quality: .basic),
             llmKey: apiKey,
-            searchKey: nil
+            searchKeys: [:]
         )
 
         let exposure = try #require(result.exposures.first)

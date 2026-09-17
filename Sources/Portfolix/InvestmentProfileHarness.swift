@@ -10,7 +10,7 @@ struct InvestmentProfileHarness: Sendable {
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
         llmKey: String,
-        searchKey: String?,
+        searchKeys: [SearchProviderOption: String],
         now: Date = .now
     ) async -> InvestmentProfileResearchResult {
         var exposures = InvestmentProfileEngine.merge(
@@ -18,8 +18,7 @@ struct InvestmentProfileHarness: Sendable {
             cached: cachedExposures,
             now: now
         )
-        _ = searchKey
-        guard searchConfiguration.isEnabled else {
+        guard searchConfiguration.isEnabled, !searchKeys.isEmpty else {
             return InvestmentProfileResearchResult(exposures: exposures, searchedAssetCount: 0, limitations: [])
         }
         let candidates = InvestmentProfileEngine.researchCandidates(
@@ -32,72 +31,66 @@ struct InvestmentProfileHarness: Sendable {
         }
 
         do {
-            let identities = candidates.map {
-                InvestmentProfileCandidatePayload(
-                    positionRef: InvestmentProfileEngine.positionRef(for: $0),
-                    name: $0.name,
-                    symbol: $0.symbol,
-                    category: $0.category.aiCode
-                )
-            }
-            let identitiesJSON = String(
-                data: try AIAnalysisAgent.inputEncoder.encode(identities),
-                encoding: .utf8
-            ) ?? "[]"
-            let completion = try await llm.completeJSONResult(
-                systemPrompt: AIAnalysisPromptText.investmentProfileExposureSystem,
-                userPrompt: AIAnalysisPromptText.investmentProfileExposureUser(
-                    identitiesJSON: identitiesJSON,
-                    evidenceJSON: "[]"
-                ),
-                configuration: llmConfiguration
-                    .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
-                    .withMaxOutputTokens(LLMOutputTokenPolicy.standard),
-                apiKey: llmKey,
-                webSearchEnabled: true,
-                webSearchProgress: nil
+            let plan = try await makePlan(
+                candidates: candidates,
+                previousQueries: [],
+                enabledProviders: searchConfiguration.orderedEnabledProviders,
+                configuration: llmConfiguration,
+                apiKey: llmKey
             )
-            guard let payload = Self.decodeExposurePayload(completion.content) else {
-                throw AIAnalysisAgentError.invalidReport
+            var sourcesByRef: [String: [AssetResearchSource]] = [:]
+            var limitations: [String] = []
+            for call in plan.toolCalls {
+                let referencedPositions = candidates.filter {
+                    call.positionRefs.contains(InvestmentProfileEngine.positionRef(for: $0))
+                }
+                let providers = SearchProviderRouter.orderedProviders(
+                    requested: call.provider,
+                    query: call.query,
+                    positions: referencedPositions,
+                    configuration: searchConfiguration
+                ).filter { searchKeys[$0] != nil }
+                var acceptedSources: [AssetResearchSource] = []
+                for provider in providers {
+                    guard let key = searchKeys[provider] else { continue }
+                    do {
+                        acceptedSources = try await search.search(
+                            query: call.query,
+                            positions: referencedPositions,
+                            configuration: searchConfiguration.selecting(provider),
+                            apiKey: key
+                        )
+                        if !acceptedSources.isEmpty { break }
+                    } catch {
+                        limitations.append(String(error.localizedDescription.prefix(160)))
+                    }
+                }
+                for ref in call.positionRefs where !acceptedSources.isEmpty {
+                    sourcesByRef[ref, default: []].append(contentsOf: acceptedSources)
+                }
             }
-            let payloadRefs = payload.profiles.map(\.positionRef)
-            guard
-                payloadRefs.count <= identities.count,
-                Set(payloadRefs).count == payloadRefs.count
-            else {
-                throw AIAnalysisAgentError.invalidReport
-            }
-            let citedSources = AIAnalysisAgent.nativeWebSearchToolResults(
-                from: completion,
-                fallbackQuery: "基金底层资产 地区 行业 业绩比较基准",
-                positionRefs: identities.map(\.positionRef)
-            ).flatMap(\.sources)
-            let attributedSources = citedSources.isEmpty
-                ? Self.modelAttributedSources(from: payload, completion: completion)
-                : []
-            let sources = citedSources + attributedSources
-            guard !sources.isEmpty else {
+            guard !sourcesByRef.isEmpty else {
                 return InvestmentProfileResearchResult(
                     exposures: exposures,
                     searchedAssetCount: 0,
-                    limitations: ["本次未获得可验证的公开资料，已保留本地穿透结果"]
+                    limitations: limitations.isEmpty
+                        ? ["本次未获得可验证的公开资料，已保留本地穿透结果"]
+                        : limitations
                 )
             }
-            let positionsByRef = Dictionary(uniqueKeysWithValues: candidates.map {
-                (InvestmentProfileEngine.positionRef(for: $0), $0)
-            })
-            let enriched = try payload.profiles.compactMap { candidate -> AssetExposureProfile? in
-                guard let position = positionsByRef[candidate.positionRef] else { return nil }
-                return try Self.validatedExposure(candidate, position: position, sources: sources, now: now)
-            }
+            let enriched = try await extractExposures(
+                positions: candidates,
+                sourcesByRef: sourcesByRef,
+                configuration: llmConfiguration,
+                apiKey: llmKey,
+                now: now
+            )
             let enrichedByRef = Dictionary(uniqueKeysWithValues: enriched.map { ($0.positionRef, $0) })
             exposures = exposures.map { enrichedByRef[$0.positionRef] ?? $0 }
             return InvestmentProfileResearchResult(
                 exposures: exposures,
                 searchedAssetCount: enriched.count,
-                limitations: attributedSources.isEmpty
-                    ? []
-                    : ["DeepSeek 内建搜索未返回可独立校验的引用元数据，穿透结果已按较低置信度处理"]
+                limitations: limitations
             )
         } catch {
             return InvestmentProfileResearchResult(
@@ -111,6 +104,7 @@ struct InvestmentProfileHarness: Sendable {
     private func makePlan(
         candidates: [Position],
         previousQueries: [String],
+        enabledProviders: [SearchProviderOption],
         configuration: AIProviderConfiguration,
         apiKey: String
     ) async throws -> AIWebSearchToolPlan {
@@ -126,11 +120,16 @@ struct InvestmentProfileHarness: Sendable {
         let candidatesJSON = String(data: data, encoding: .utf8) ?? "[]"
         let previousQueriesData = try AIAnalysisAgent.inputEncoder.encode(previousQueries)
         let previousQueriesJSON = String(data: previousQueriesData, encoding: .utf8) ?? "[]"
+        let enabledProvidersJSON = String(
+            data: try AIAnalysisAgent.encoder.encode(enabledProviders),
+            encoding: .utf8
+        ) ?? "[]"
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.investmentProfilePlanningSystem,
             userPrompt: AIAnalysisPromptText.investmentProfilePlanningUser(
                 candidatesJSON: candidatesJSON,
-                previousQueriesJSON: previousQueriesJSON
+                previousQueriesJSON: previousQueriesJSON,
+                enabledSearchProvidersJSON: enabledProvidersJSON
             ),
             configuration: configuration
                 .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
@@ -147,7 +146,8 @@ struct InvestmentProfileHarness: Sendable {
         let validated = try AIAnalysisAgent.validatedToolPlan(
             decoded,
             allowedRefs: allowedRefs,
-            allowedSearchTerms: terms
+            allowedSearchTerms: terms,
+            allowedProviders: Set(enabledProviders)
         )
         guard validated.toolCalls.allSatisfy({ $0.positionRefs.count == 1 }) else {
             throw AIAnalysisAgentError.invalidReport
@@ -165,7 +165,8 @@ struct InvestmentProfileHarness: Sendable {
             return AIWebSearchToolCall(
                 id: "web_search_\(index + 1)",
                 query: Self.publicResearchQuery(for: position, proposedQuery: call.query),
-                positionRefs: [ref]
+                positionRefs: [ref],
+                provider: call.provider
             )
         }
         return AIWebSearchToolPlan(
@@ -248,36 +249,6 @@ struct InvestmentProfileHarness: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = trimmed.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(InvestmentProfileExposurePayload.self, from: data)
-    }
-
-    static func modelAttributedSources(
-        from payload: InvestmentProfileExposurePayload,
-        completion: LLMCompletionResult
-    ) -> [AssetResearchSource] {
-        guard completion.webSearchCallCount > 0 else { return [] }
-        var seenURLs = Set<String>()
-        return payload.profiles
-            .flatMap(\.sourceURLs)
-            .compactMap { rawURL -> AssetResearchSource? in
-                let url = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard
-                    url.count <= 2_048,
-                    seenURLs.insert(url).inserted,
-                    let components = try? LLMBaseURLValidator.validatedComponents(from: url),
-                    components.scheme?.lowercased() == "https",
-                    let rawHost = components.host?.lowercased(),
-                    !rawHost.isEmpty
-                else { return nil }
-                let domain = rawHost.hasPrefix("www.") ? String(rawHost.dropFirst(4)) : rawHost
-                return AssetResearchSource(
-                    title: domain,
-                    url: url,
-                    domain: domain,
-                    publishedDate: nil,
-                    snippet: "",
-                    credibility: .general
-                )
-            }
     }
 
     static func validatedExposure(

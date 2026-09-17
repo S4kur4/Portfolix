@@ -50,6 +50,32 @@ protocol ProviderCredentialStoring: Sendable {
     func saveValidationState(_ state: ProviderCredentialValidationState, kind: ProviderCredentialKind) throws
 }
 
+enum ProviderCredentialFormPersistence {
+    enum Result: Equatable {
+        case unchanged
+        case saved
+        case deleted
+    }
+
+    static func apply(
+        value: String,
+        initialValue: String,
+        kind: ProviderCredentialKind,
+        store: ProviderCredentialStoring
+    ) throws -> Result {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInitialValue = initialValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedValue.isEmpty {
+            guard !trimmedInitialValue.isEmpty else { return .unchanged }
+            try store.delete(kind: kind)
+            return .deleted
+        }
+        guard trimmedValue != trimmedInitialValue else { return .unchanged }
+        try store.save(trimmedValue, kind: kind)
+        return .saved
+    }
+}
+
 final class ProviderCredentialStore: ProviderCredentialStoring, @unchecked Sendable {
     static let shared = ProviderCredentialStore()
 
@@ -202,8 +228,18 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         "deepseek-v4-pro",
     ]
 
+    private static let deepSeekModelAliases = [
+        "deepseek-v4-flash": "deepseek-flash",
+        "deepseek-v4-flash-vision-exp": "deepseek-flash",
+    ]
+
+    static func canonicalDeepSeekModel(_ model: String) -> String {
+        deepSeekModelAliases[model] ?? model
+    }
+
     static func supportsBuiltInWebSearch(model: String) -> Bool {
-        model == "deepseek-v4-pro"
+        _ = model
+        return false
     }
 
     static func preferredConnectedModel(in models: [String]) -> String? {
@@ -214,13 +250,14 @@ enum LLMProviderOption: String, CaseIterable, Identifiable {
         let allowedCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
         return models.reduce(into: [String]()) { result, model in
             let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.hasPrefix("deepseek-"),
-                  trimmed.utf8.count <= 128,
-                  trimmed.unicodeScalars.allSatisfy(allowedCharacters.contains),
-                  !result.contains(trimmed) else {
+            let canonical = canonicalDeepSeekModel(trimmed)
+            guard canonical.hasPrefix("deepseek-"),
+                  canonical.utf8.count <= 128,
+                  canonical.unicodeScalars.allSatisfy(allowedCharacters.contains),
+                  !result.contains(canonical) else {
                 return
             }
-            result.append(trimmed)
+            result.append(canonical)
         }
     }
 }
@@ -276,15 +313,35 @@ enum LLMOutputTokenPolicy {
 }
 
 enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
+    case parallel = "Parallel"
     case tavily = "Tavily"
     case bocha = "BochaAI"
 
     var id: String { rawValue }
 
-    var credentialKind: ProviderCredentialKind {
+    var credentialKind: ProviderCredentialKind? {
         switch self {
+        case .parallel: nil
         case .tavily: .tavily
         case .bocha: .bocha
+        }
+    }
+
+    var requiresAPIKey: Bool { credentialKind != nil }
+
+    func usableAPIKey(from store: ProviderCredentialStoring) throws -> String? {
+        guard let credentialKind else { return "" }
+        guard let key = try store.read(kind: credentialKind), !key.isEmpty else { return nil }
+        let state = try store.readValidationState(kind: credentialKind)
+        return state == .invalid ? nil : key
+    }
+
+    func title(language: AppLanguage) -> String {
+        switch (self, language) {
+        case (.parallel, _): "Parallel Search"
+        case (.tavily, _): "Tavily"
+        case (.bocha, .chinese): "博查"
+        case (.bocha, .english): "Bocha"
         }
     }
 }
@@ -313,19 +370,81 @@ enum SearchExecutionPolicy {
 
 struct SearchConfiguration: Equatable {
     var isEnabled: Bool
-    var provider: SearchProviderOption
+    var enabledProviders: Set<SearchProviderOption>
+    var preferredProvider: SearchProviderOption
     var quality: SearchQuality
 
     static let `default` = SearchConfiguration(
         isEnabled: false,
-        provider: .tavily,
+        enabledProviders: [.parallel],
+        preferredProvider: .parallel,
         quality: .basic
     )
 
     init(isEnabled: Bool, provider: SearchProviderOption, quality: SearchQuality) {
         self.isEnabled = isEnabled
-        self.provider = provider
+        enabledProviders = isEnabled ? [provider] : []
+        preferredProvider = provider
         self.quality = quality
+    }
+
+    init(
+        isEnabled: Bool,
+        enabledProviders: Set<SearchProviderOption>,
+        preferredProvider: SearchProviderOption = .tavily,
+        quality: SearchQuality
+    ) {
+        self.isEnabled = isEnabled
+        self.enabledProviders = enabledProviders
+        self.preferredProvider = enabledProviders.contains(preferredProvider)
+            ? preferredProvider
+            : enabledProviders.sorted(by: Self.providerOrder).first ?? preferredProvider
+        self.quality = quality
+    }
+
+    var provider: SearchProviderOption {
+        get { preferredProvider }
+        set {
+            preferredProvider = newValue
+            enabledProviders.insert(newValue)
+        }
+    }
+
+    var orderedEnabledProviders: [SearchProviderOption] {
+        enabledProviders.sorted(by: Self.providerOrder)
+    }
+
+    func isProviderEnabled(_ provider: SearchProviderOption) -> Bool {
+        enabledProviders.contains(provider)
+    }
+
+    mutating func setProvider(_ provider: SearchProviderOption, enabled: Bool) {
+        if enabled {
+            enabledProviders.insert(provider)
+            if enabledProviders.count == 1 {
+                preferredProvider = provider
+            }
+        } else {
+            enabledProviders.remove(provider)
+            if preferredProvider == provider,
+               let next = orderedEnabledProviders.first {
+                preferredProvider = next
+            }
+            if enabledProviders.isEmpty {
+                isEnabled = false
+            }
+        }
+    }
+
+    func selecting(_ provider: SearchProviderOption) -> SearchConfiguration {
+        var copy = self
+        copy.preferredProvider = provider
+        return copy
+    }
+
+    private static func providerOrder(_ lhs: SearchProviderOption, _ rhs: SearchProviderOption) -> Bool {
+        SearchProviderOption.allCases.firstIndex(of: lhs) ?? 0
+            < SearchProviderOption.allCases.firstIndex(of: rhs) ?? 0
     }
 
     // Compatibility for persisted diagnostics and older tests. Result count is now policy-owned.
@@ -350,6 +469,8 @@ enum SmartAnalysisMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    static var availableCases: [SmartAnalysisMode] { allCases }
+
     func title(language: AppLanguage) -> String {
         switch (self, language) {
         case (.basic, .chinese): "基础模式"
@@ -371,6 +492,8 @@ enum AIProviderConfigurationStore {
     private static let searchEnabledKey = "portfolix.ai.search.enabled"
     private static let searchProviderKey = "portfolix.ai.search.provider"
     private static let searchQualityKey = "portfolix.ai.search.quality"
+    private static let bochaEnabledKey = "portfolix.ai.bocha.enabled"
+    private static let parallelEnabledKey = "portfolix.ai.parallel.enabled"
 
     static func loadLLM(defaults: UserDefaults = .standard) -> AIProviderConfiguration {
         let fallback = AIProviderConfiguration.default
@@ -448,18 +571,43 @@ enum AIProviderConfigurationStore {
 
     static func loadSearch(defaults: UserDefaults = .standard) -> SearchConfiguration {
         let fallback = SearchConfiguration.default
-        let isEnabled = defaults.object(forKey: searchEnabledKey) == nil
-            ? (defaults.object(forKey: tavilyEnabledKey) == nil ? fallback.isEnabled : defaults.bool(forKey: tavilyEnabledKey))
+        let legacySearchEnabled = defaults.object(forKey: searchEnabledKey) == nil
+            ? nil
             : defaults.bool(forKey: searchEnabledKey)
         let provider = defaults.string(forKey: searchProviderKey)
             .flatMap(SearchProviderOption.init(rawValue:)) ?? fallback.provider
+        var enabledProviders = Set<SearchProviderOption>()
+        let hasPersistedProviderSelection = defaults.object(forKey: parallelEnabledKey) != nil
+            || defaults.object(forKey: tavilyEnabledKey) != nil
+            || defaults.object(forKey: bochaEnabledKey) != nil
+        if defaults.object(forKey: parallelEnabledKey) != nil,
+           defaults.bool(forKey: parallelEnabledKey) {
+            enabledProviders.insert(.parallel)
+        }
+        if defaults.object(forKey: tavilyEnabledKey) != nil,
+           defaults.bool(forKey: tavilyEnabledKey) {
+            enabledProviders.insert(.tavily)
+        }
+        if defaults.object(forKey: bochaEnabledKey) != nil,
+           defaults.bool(forKey: bochaEnabledKey) {
+            enabledProviders.insert(.bocha)
+        }
+        if enabledProviders.isEmpty, legacySearchEnabled == true {
+            enabledProviders.insert(provider)
+        }
+        if !hasPersistedProviderSelection, legacySearchEnabled == nil {
+            enabledProviders = fallback.enabledProviders
+        }
         let quality = defaults.string(forKey: searchQualityKey)
             .flatMap(SearchQuality.init(rawValue:))
             ?? defaults.string(forKey: tavilyDepthKey).flatMap(SearchQuality.init(rawValue:))
             ?? fallback.quality
+        let isEnabled = legacySearchEnabled
+            ?? (hasPersistedProviderSelection ? !enabledProviders.isEmpty : fallback.isEnabled)
         return SearchConfiguration(
             isEnabled: isEnabled,
-            provider: provider,
+            enabledProviders: enabledProviders,
+            preferredProvider: provider,
             quality: quality
         )
     }
@@ -468,6 +616,9 @@ enum AIProviderConfigurationStore {
         defaults.set(configuration.isEnabled, forKey: searchEnabledKey)
         defaults.set(configuration.provider.rawValue, forKey: searchProviderKey)
         defaults.set(configuration.quality.rawValue, forKey: searchQualityKey)
+        defaults.set(configuration.isProviderEnabled(.parallel), forKey: parallelEnabledKey)
+        defaults.set(configuration.isProviderEnabled(.tavily), forKey: tavilyEnabledKey)
+        defaults.set(configuration.isProviderEnabled(.bocha), forKey: bochaEnabledKey)
     }
 
     static func loadTavily() -> TavilyConfiguration { loadSearch() }

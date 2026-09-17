@@ -238,7 +238,7 @@ struct AIAgentActivityLine: Identifiable, Equatable, Sendable {
 }
 
 enum AIAgentActivityPolicy {
-    static let maximumVisibleLineCount = 3
+    static let maximumVisibleLineCount = 1
 
     static func appending(_ text: String, to lines: [AIAgentActivityLine]) -> [AIAgentActivityLine] {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -437,6 +437,86 @@ enum AIReportChatContent: Equatable {
     case assistant(String)
 }
 
+struct AIMessageCitation: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    let utf16Offset: Int
+    let title: String
+    let url: String
+
+    init(id: UUID = UUID(), utf16Offset: Int, title: String, url: String) {
+        self.id = id
+        self.utf16Offset = utf16Offset
+        self.title = title
+        self.url = url
+    }
+}
+
+struct AICitationCatalogEntry: Codable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let url: String
+}
+
+enum AIMessageCitationResolver {
+    private static let markerExpression = try! NSRegularExpression(
+        pattern: #"\[\[cite:([^\]\r\n]{1,64})\]\]"#,
+        options: []
+    )
+
+    static func catalog(from toolResults: [AIWebSearchToolResult]) -> [AICitationCatalogEntry] {
+        var seenURLs = Set<String>()
+        let sources = toolResults.flatMap(\.sources).filter { source in
+            guard (try? LLMBaseURLValidator.validatedComponents(from: source.url)) != nil else { return false }
+            return seenURLs.insert(source.url).inserted
+        }
+        return sources.enumerated().map { index, source in
+            AICitationCatalogEntry(
+                id: "source_\(index + 1)",
+                title: String(source.title.prefix(120)),
+                url: source.url
+            )
+        }
+    }
+
+    static func resolve(
+        _ answer: String,
+        catalog: [AICitationCatalogEntry]
+    ) -> (text: String, citations: [AIMessageCitation]) {
+        let sourceByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        let source = answer as NSString
+        let matches = markerExpression.matches(
+            in: answer,
+            range: NSRange(location: 0, length: source.length)
+        )
+        guard !matches.isEmpty else { return (answer, []) }
+
+        let clean = NSMutableString()
+        var citations: [AIMessageCitation] = []
+        var cursor = 0
+        for match in matches {
+            let precedingLength = match.range.location - cursor
+            if precedingLength > 0 {
+                clean.append(source.substring(with: NSRange(location: cursor, length: precedingLength)))
+            }
+            let sourceID = source.substring(with: match.range(at: 1))
+            if let entry = sourceByID[sourceID] {
+                citations.append(
+                    AIMessageCitation(
+                        utf16Offset: clean.length,
+                        title: entry.title,
+                        url: entry.url
+                    )
+                )
+            }
+            cursor = NSMaxRange(match.range)
+        }
+        if cursor < source.length {
+            clean.append(source.substring(from: cursor))
+        }
+        return (clean as String, citations)
+    }
+}
+
 struct AIReportChatItem: Codable, Identifiable, Equatable {
     enum Kind: String, Codable {
         case user
@@ -495,6 +575,7 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     let report: AIAnalysisReport?
     let runSnapshot: RunSnapshot?
     let followUpRunSnapshot: FollowUpRunSnapshot?
+    let citations: [AIMessageCitation]?
 
     init(
         id: UUID,
@@ -503,7 +584,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         text: String?,
         report: AIAnalysisReport?,
         runSnapshot: RunSnapshot?,
-        followUpRunSnapshot: FollowUpRunSnapshot? = nil
+        followUpRunSnapshot: FollowUpRunSnapshot? = nil,
+        citations: [AIMessageCitation]? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -512,6 +594,7 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         self.report = report
         self.runSnapshot = runSnapshot
         self.followUpRunSnapshot = followUpRunSnapshot
+        self.citations = citations
     }
 
     var content: AIReportChatContent {
@@ -547,7 +630,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     static func assistant(
         _ text: String,
         createdAt: Date = .now,
-        followUpRunSnapshot: FollowUpRunSnapshot? = nil
+        followUpRunSnapshot: FollowUpRunSnapshot? = nil,
+        citations: [AIMessageCitation] = []
     ) -> AIReportChatItem {
         AIReportChatItem(
             id: UUID(),
@@ -556,7 +640,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             text: text,
             report: nil,
             runSnapshot: nil,
-            followUpRunSnapshot: followUpRunSnapshot
+            followUpRunSnapshot: followUpRunSnapshot,
+            citations: citations.isEmpty ? nil : citations
         )
     }
 
@@ -586,7 +671,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             text: migratedText,
             report: report,
             runSnapshot: runSnapshot,
-            followUpRunSnapshot: followUpRunSnapshot
+            followUpRunSnapshot: followUpRunSnapshot,
+            citations: citations
         )
     }
 }
@@ -650,6 +736,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
 
 struct AIAnalysisFollowUpResult: Equatable {
     let answer: String
+    let citations: [AIMessageCitation]
     let guardrailResultJSON: String
     let searchMode: String
     let toolCallCount: Int
@@ -657,6 +744,28 @@ struct AIAnalysisFollowUpResult: Equatable {
     let loopTurnCount: Int
     let toolPlanJSON: String
     let toolResultsJSON: String
+
+    init(
+        answer: String,
+        citations: [AIMessageCitation] = [],
+        guardrailResultJSON: String,
+        searchMode: String,
+        toolCallCount: Int,
+        toolResultCount: Int,
+        loopTurnCount: Int,
+        toolPlanJSON: String,
+        toolResultsJSON: String
+    ) {
+        self.answer = answer
+        self.citations = citations
+        self.guardrailResultJSON = guardrailResultJSON
+        self.searchMode = searchMode
+        self.toolCallCount = toolCallCount
+        self.toolResultCount = toolResultCount
+        self.loopTurnCount = loopTurnCount
+        self.toolPlanJSON = toolPlanJSON
+        self.toolResultsJSON = toolResultsJSON
+    }
 }
 
 struct PersistedAIAnalysisRun: Codable, Equatable {
@@ -1248,11 +1357,25 @@ struct AIWebSearchToolCall: Codable, Equatable, Sendable {
     let id: String
     let query: String
     let positionRefs: [String]
+    let provider: SearchProviderOption?
+
+    init(
+        id: String,
+        query: String,
+        positionRefs: [String],
+        provider: SearchProviderOption? = nil
+    ) {
+        self.id = id
+        self.query = query
+        self.positionRefs = positionRefs
+        self.provider = provider
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
         case query
         case positionRefs = "position_refs"
+        case provider
     }
 }
 
@@ -1286,6 +1409,27 @@ struct AIWebSearchToolResult: Codable, Equatable, Sendable {
     let status: String
     let sources: [AssetResearchSource]
     let limitations: [String]
+    let provider: SearchProviderOption?
+
+    init(
+        callID: String,
+        query: String,
+        positionRefs: [String],
+        searchedAt: Date,
+        status: String,
+        sources: [AssetResearchSource],
+        limitations: [String],
+        provider: SearchProviderOption? = nil
+    ) {
+        self.callID = callID
+        self.query = query
+        self.positionRefs = positionRefs
+        self.searchedAt = searchedAt
+        self.status = status
+        self.sources = sources
+        self.limitations = limitations
+        self.provider = provider
+    }
 
     enum CodingKeys: String, CodingKey {
         case callID = "call_id"
@@ -1295,6 +1439,7 @@ struct AIWebSearchToolResult: Codable, Equatable, Sendable {
         case status
         case sources
         case limitations
+        case provider
     }
 }
 
@@ -1318,6 +1463,26 @@ struct AIAgentLoopTurn: Codable, Equatable, Sendable {
     }
 }
 
+struct AIAgentWorkflowStep: Codable, Equatable, Sendable {
+    let sequence: Int
+    let phase: String
+    let startedAt: Date
+    let finishedAt: Date
+    let outcome: String
+    let detail: String
+    let evidenceItemCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case sequence
+        case phase
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+        case outcome
+        case detail
+        case evidenceItemCount = "evidence_item_count"
+    }
+}
+
 struct AIAgentLoopState: Codable, Equatable, Sendable {
     let schemaVersion: String
     let id: UUID
@@ -1327,6 +1492,7 @@ struct AIAgentLoopState: Codable, Equatable, Sendable {
     let maxTurns: Int
     let maxToolCalls: Int
     let turns: [AIAgentLoopTurn]
+    var steps: [AIAgentWorkflowStep]? = nil
     let stopReason: String
 
     enum CodingKeys: String, CodingKey {
@@ -1338,6 +1504,7 @@ struct AIAgentLoopState: Codable, Equatable, Sendable {
         case maxTurns = "max_turns"
         case maxToolCalls = "max_tool_calls"
         case turns
+        case steps
         case stopReason = "stop_reason"
     }
 }

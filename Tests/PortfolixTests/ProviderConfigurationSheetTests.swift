@@ -40,6 +40,31 @@ struct ProviderConfigurationSheetTests {
     }
 
     @Test
+    func clickingHiddenAPIKeyRequestsReveal() throws {
+        let view = ProviderAPIKeyTextInputView(frame: NSRect(x: 0, y: 0, width: 340, height: 28))
+        var revealCount = 0
+        view.onReveal = { revealCount += 1 }
+        view.update(text: "sk-hidden", isVisible: false, textColor: .labelColor)
+
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+        view.mouseDown(with: event)
+
+        #expect(revealCount == 1)
+        #expect(view.plainField.isHidden)
+        #expect(view.plainField.currentEditor() == nil)
+    }
+
+    @Test
     func deepSeekModelCatalogRejectsUnexpectedIdentifiers() {
         let models = LLMProviderOption.sanitizedDeepSeekModels([
             " deepseek-v4-pro ",
@@ -114,11 +139,12 @@ struct ProviderConfigurationSheetTests {
     }
 
     @Test
-    func connectedModeSelectsOnlyKnownSearchCapableModel() {
+    func currentDeepSeekModelsUseExternalSearchForConnectedMode() {
         let models = ["deepseek-flash", "deepseek-v4-pro"]
 
         #expect(!LLMProviderOption.supportsBuiltInWebSearch(model: "deepseek-flash"))
-        #expect(LLMProviderOption.supportsBuiltInWebSearch(model: "deepseek-v4-pro"))
-        #expect(LLMProviderOption.preferredConnectedModel(in: models) == "deepseek-v4-pro")
+        #expect(!LLMProviderOption.supportsBuiltInWebSearch(model: "deepseek-v4-pro"))
+        #expect(LLMProviderOption.preferredConnectedModel(in: models) == nil)
+        #expect(SmartAnalysisMode.availableCases == [.basic, .connected])
     }
 }

@@ -37,15 +37,60 @@ protocol WebSearching: Sendable {
 
 typealias TavilySearching = WebSearching
 
+enum SearchProviderRouter {
+    static func orderedProviders(
+        requested: SearchProviderOption?,
+        query: String,
+        positions: [Position],
+        configuration: SearchConfiguration
+    ) -> [SearchProviderOption] {
+        let enabled = configuration.orderedEnabledProviders
+        guard enabled.count > 1 else { return enabled }
+
+        let preferred: SearchProviderOption
+        if let requested, configuration.isProviderEnabled(requested) {
+            preferred = requested
+        } else {
+            let inferred = inferredProvider(query: query, positions: positions)
+            preferred = enabled.contains(inferred)
+                ? inferred
+                : (enabled.contains(configuration.preferredProvider) ? configuration.preferredProvider : enabled[0])
+        }
+        return [preferred] + enabled.filter { $0 != preferred }
+    }
+
+    private static func inferredProvider(query: String, positions: [Position]) -> SearchProviderOption {
+        let hasChinese = query.unicodeScalars.contains { scalar in
+            (0x4E00...0x9FFF).contains(scalar.value)
+        }
+        let domesticPositionCount = positions.filter {
+            [.cnStock, .bStock, .fund].contains($0.category)
+        }.count
+        let overseasPositionCount = positions.filter {
+            [.usStock, .hkStock, .crypto].contains($0.category)
+        }.count
+        if domesticPositionCount > overseasPositionCount || (hasChinese && overseasPositionCount == 0) {
+            return .bocha
+        }
+        return .tavily
+    }
+}
+
 final class SearchProviderClient: WebSearching, @unchecked Sendable {
     static let shared = SearchProviderClient()
 
     private let tavily: TavilyClient
     private let bocha: BochaAIClient
+    private let parallel: ParallelSearchMCPClient
 
-    init(tavily: TavilyClient = .shared, bocha: BochaAIClient = .shared) {
+    init(
+        tavily: TavilyClient = .shared,
+        bocha: BochaAIClient = .shared,
+        parallel: ParallelSearchMCPClient = .shared
+    ) {
         self.tavily = tavily
         self.bocha = bocha
+        self.parallel = parallel
     }
 
     func search(
@@ -55,6 +100,13 @@ final class SearchProviderClient: WebSearching, @unchecked Sendable {
         apiKey: String
     ) async throws -> [AssetResearchSource] {
         switch configuration.provider {
+        case .parallel:
+            try await parallel.search(
+                query: query,
+                positions: positions,
+                configuration: configuration,
+                apiKey: apiKey
+            )
         case .tavily:
             try await tavily.search(
                 query: query,
@@ -250,8 +302,10 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
     }
 
     static func sanitizedTitle(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String((trimmed.isEmpty ? "Untitled" : trimmed).prefix(120))
+        let collapsed = value
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+        return String((collapsed.isEmpty ? "Untitled" : collapsed).prefix(120))
     }
 
     static func domain(from url: String) -> String {

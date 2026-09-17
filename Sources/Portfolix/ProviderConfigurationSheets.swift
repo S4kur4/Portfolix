@@ -4,12 +4,15 @@ import SwiftUI
 private enum ProviderConfigurationLayout {
     static let valueFieldWidth: CGFloat = 340
     static let valueFieldMinHeight: CGFloat = 28
+    static let apiKeyOpticalYOffset: CGFloat = 2
 }
 
 private enum ProviderConfigurationField: Hashable {
     case llmBaseURL
     case llmModel
     case llmAPIKey
+    case tavilyAPIKey
+    case bochaAPIKey
 }
 
 enum LLMAPIKeyValidationProbe {
@@ -35,6 +38,7 @@ struct LLMConfigurationSheet: View {
     @State private var model = ""
     @State private var baseURL = LLMProviderOption.deepSeek.defaultBaseURL
     @State private var apiKey = ""
+    @State private var initialAPIKey = ""
     @State private var availableModels = AIProviderConfigurationStore.availableDeepSeekModels()
     @State private var connectionStatus: ProviderConnectionStatus?
     @State private var isValidatingAPIKey = false
@@ -134,7 +138,9 @@ struct LLMConfigurationSheet: View {
                 ? configuration.model
                 : AIProviderConfigurationStore.preferredDeepSeekModel(in: availableModels)
             store.refreshProviderCredentialState()
-            apiKey = (try? store.readProviderAPIKey(kind: .llm)) ?? ""
+            let storedAPIKey = (try? store.readProviderAPIKey(kind: .llm)) ?? ""
+            apiKey = storedAPIKey
+            initialAPIKey = storedAPIKey
             isAPIKeyVisible = false
         }
         .task {
@@ -148,7 +154,7 @@ struct LLMConfigurationSheet: View {
     private var canSave: Bool {
         hasValidBaseURL
             && hasModel
-            && hasVisibleOrSavedAPIKey
+            && hasAPIKeyForSave
             && !isValidatingAPIKey
     }
 
@@ -173,8 +179,13 @@ struct LLMConfigurationSheet: View {
         !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var hasVisibleOrSavedAPIKey: Bool {
-        store.hasLLMAPIKey || !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var hasAPIKeyForSave: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isDeletingSavedAPIKey
+    }
+
+    private var isDeletingSavedAPIKey: Bool {
+        !initialAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var invalidFields: Set<ProviderConfigurationField> {
@@ -185,7 +196,7 @@ struct LLMConfigurationSheet: View {
         if !hasModel {
             fields.insert(.llmModel)
         }
-        if !hasVisibleOrSavedAPIKey {
+        if !hasAPIKeyForSave {
             fields.insert(.llmAPIKey)
         }
         return fields
@@ -196,10 +207,7 @@ struct LLMConfigurationSheet: View {
     }
 
     private var activeAPIKey: String {
-        if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return apiKey
-        }
-        return (try? store.readProviderAPIKey(kind: .llm)) ?? ""
+        apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func applyProviderDefaults(_ option: LLMProviderOption) {
@@ -231,12 +239,14 @@ struct LLMConfigurationSheet: View {
         do {
             _ = try LLMBaseURLValidator.validatedComponents(from: baseURL)
             let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let effectiveAPIKey = trimmedAPIKey.isEmpty ? savedAPIKey : trimmedAPIKey
-            let isValidationContextChanged = validationFingerprint(apiKey: effectiveAPIKey) != savedValidationFingerprint
-            if !trimmedAPIKey.isEmpty {
-                try store.saveProviderAPIKey(trimmedAPIKey, kind: .llm)
-            }
-            if !effectiveAPIKey.isEmpty,
+            let isValidationContextChanged = validationFingerprint(apiKey: trimmedAPIKey) != savedValidationFingerprint
+            let persistenceResult = try store.persistProviderAPIKeyEdit(
+                trimmedAPIKey,
+                initialValue: initialAPIKey,
+                kind: .llm
+            )
+            if persistenceResult != .deleted,
+               !trimmedAPIKey.isEmpty,
                let validationState = validationStateForSave(isValidationContextChanged: isValidationContextChanged) {
                 try store.saveProviderAPIKeyValidationState(validationState, kind: .llm)
             }
@@ -355,7 +365,7 @@ struct LLMConfigurationSheet: View {
         if isValidatingAPIKey {
             return text("正在验证 API 配置", "Validating API configuration")
         }
-        if !hasBaseURL && !hasVisibleOrSavedAPIKey {
+        if !hasBaseURL && !hasAPIKeyForSave {
             return text("请填写 API Base URL 和 API Key", "Enter API Base URL and API Key")
         }
         if !hasBaseURL {
@@ -401,7 +411,7 @@ struct LLMConfigurationSheet: View {
         if connectionStatus != nil || isValidatingAPIKey {
             return true
         }
-        if !hasValidBaseURL || !hasModel || !hasVisibleOrSavedAPIKey {
+        if !hasValidBaseURL || !hasModel || !hasAPIKeyForSave {
             return true
         }
         return false
@@ -428,6 +438,343 @@ struct LLMConfigurationSheet: View {
             model.trimmingCharacters(in: .whitespacesAndNewlines),
             "\(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).hashValue)",
         ].joined(separator: "|")
+    }
+
+    private func text(_ chinese: String, _ english: String) -> String {
+        localizedText(chinese, english, language: store.appLanguage)
+    }
+}
+
+enum SearchAPIKeyValidationProbe {
+    static func validate(
+        provider: SearchProviderOption,
+        apiKey: String,
+        client: WebSearching = SearchProviderClient.shared
+    ) async throws {
+        let query = provider == .bocha
+            ? "上海证券交易所 最新公告"
+            : "Apple investor relations latest filing"
+        _ = try await client.search(
+            query: query,
+            positions: [],
+            configuration: SearchConfiguration(isEnabled: true, provider: provider, quality: .basic),
+            apiKey: apiKey
+        )
+    }
+}
+
+struct SearchConfigurationSheet: View {
+    @Environment(PortfolioStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var parallelEnabled = false
+    @State private var tavilyEnabled = false
+    @State private var bochaEnabled = false
+    @State private var tavilyAPIKey = ""
+    @State private var bochaAPIKey = ""
+    @State private var initialTavilyAPIKey = ""
+    @State private var initialBochaAPIKey = ""
+    @State private var tavilyStatus: ProviderConnectionStatus?
+    @State private var bochaStatus: ProviderConnectionStatus?
+    @State private var isTavilyAPIKeyVisible = false
+    @State private var isBochaAPIKeyVisible = false
+    @State private var isValidating = false
+    @State private var didAttemptSave = false
+    @FocusState private var focusedField: ProviderConfigurationField?
+
+    var body: some View {
+        ProviderSheetScaffold(
+            title: text("搜索 API", "Search APIs"),
+            symbol: "globe",
+            height: 620,
+            cancelTitle: text("取消", "Cancel"),
+            primaryTitle: text("保存", "Save"),
+            isPrimaryDisabled: isValidating,
+            cancel: { dismiss() },
+            primary: validateAndSave
+        ) {
+            Form {
+                freeProviderSection
+
+                providerSection(
+                    provider: .tavily,
+                    isEnabled: $tavilyEnabled,
+                    apiKey: $tavilyAPIKey,
+                    isVisible: $isTavilyAPIKeyVisible,
+                    field: .tavilyAPIKey,
+                    status: tavilyStatus
+                )
+
+                providerSection(
+                    provider: .bocha,
+                    isEnabled: $bochaEnabled,
+                    apiKey: $bochaAPIKey,
+                    isVisible: $isBochaAPIKeyVisible,
+                    field: .bochaAPIKey,
+                    status: bochaStatus
+                )
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 36)
+        } secondary: { EmptyView() }
+        .onAppear {
+            store.refreshProviderCredentialState()
+            let configuration = store.searchConfiguration
+            parallelEnabled = configuration.isProviderEnabled(.parallel)
+            tavilyEnabled = configuration.isProviderEnabled(.tavily)
+            bochaEnabled = configuration.isProviderEnabled(.bocha)
+            let storedTavilyAPIKey = (try? store.readProviderAPIKey(kind: .tavily)) ?? ""
+            let storedBochaAPIKey = (try? store.readProviderAPIKey(kind: .bocha)) ?? ""
+            tavilyAPIKey = storedTavilyAPIKey
+            bochaAPIKey = storedBochaAPIKey
+            initialTavilyAPIKey = storedTavilyAPIKey
+            initialBochaAPIKey = storedBochaAPIKey
+            isTavilyAPIKeyVisible = false
+            isBochaAPIKeyVisible = false
+            tavilyStatus = persistedStatus(for: .tavily)
+            bochaStatus = persistedStatus(for: .bocha)
+        }
+    }
+
+    private var freeProviderSection: some View {
+        Section {
+            ProviderFormRow(label: SearchProviderOption.parallel.title(language: store.appLanguage)) {
+                Toggle("", isOn: $parallelEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel(text("启用 Parallel Search", "Enable Parallel Search"))
+            }
+
+            Text(parallelDescription)
+            .font(PortfolixTypography.caption)
+            .foregroundStyle(PortfolixTheme.tertiaryText)
+        }
+    }
+
+    @ViewBuilder
+    private func providerSection(
+        provider: SearchProviderOption,
+        isEnabled: Binding<Bool>,
+        apiKey: Binding<String>,
+        isVisible: Binding<Bool>,
+        field: ProviderConfigurationField,
+        status: ProviderConnectionStatus?
+    ) -> some View {
+        Section {
+            ProviderFormRow(label: provider.title(language: store.appLanguage)) {
+                Toggle("", isOn: isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel(
+                        text("启用 \(provider.title(language: .chinese))", "Enable \(provider.title(language: .english))")
+                    )
+            }
+
+            ProviderFormRow(
+                label: "API Key",
+                isRequired: isEnabled.wrappedValue,
+                isInvalid: shouldHighlight(provider)
+            ) {
+                ProviderAPIKeyInputField(
+                    text: apiKey,
+                    isVisible: isVisible,
+                    placeholder: text("填写 API Key", "Enter API Key"),
+                    field: field,
+                    focusedField: $focusedField,
+                    isInvalid: shouldHighlight(provider),
+                    visibleHelp: text("隐藏 API Key", "Hide API Key"),
+                    hiddenHelp: text("显示 API Key", "Show API Key")
+                )
+                .onChange(of: apiKey.wrappedValue) { _, _ in
+                    setStatus(nil, for: provider)
+                }
+            }
+
+            if let status {
+                Label(status.message, systemImage: statusSymbol(status))
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(status.color)
+            } else {
+                Text(providerDescription(provider))
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+            }
+        }
+    }
+
+    private func validateAndSave() {
+        didAttemptSave = true
+        guard hasRequiredKeys else { return }
+        isValidating = true
+        tavilyStatus = tavilyEnabled ? nil : tavilyStatus
+        bochaStatus = bochaEnabled ? nil : bochaStatus
+
+        Task {
+            let results = await validateEnabledProviders()
+            await MainActor.run {
+                isValidating = false
+                for (provider, result) in results {
+                    switch result {
+                    case .success:
+                        setStatus(.success(text("API 已验证", "API validated")), for: provider)
+                    case let .failure(error):
+                        setStatus(.failure(error.localizedDescription), for: provider)
+                    }
+                }
+                guard results.values.allSatisfy({ if case .success = $0 { true } else { false } }) else {
+                    return
+                }
+                guard persistConfiguration() else { return }
+                dismiss()
+            }
+        }
+    }
+
+    private func validateEnabledProviders() async -> [SearchProviderOption: Result<Void, Error>] {
+        let enabled = enabledProviders
+        return await withTaskGroup(of: (SearchProviderOption, Result<Void, Error>).self) { group in
+            for provider in enabled {
+                guard provider.requiresAPIKey else { continue }
+                let key = activeKey(for: provider)
+                guard !key.isEmpty else { continue }
+                group.addTask {
+                    do {
+                        try await SearchAPIKeyValidationProbe.validate(provider: provider, apiKey: key)
+                        return (provider, .success(()))
+                    } catch {
+                        return (provider, .failure(error))
+                    }
+                }
+            }
+            var results: [SearchProviderOption: Result<Void, Error>] = [:]
+            for await (provider, result) in group {
+                results[provider] = result
+            }
+            return results
+        }
+    }
+
+    private func persistConfiguration() -> Bool {
+        let persistedProviders = enabledProviders.filter {
+            !$0.requiresAPIKey || !activeKey(for: $0).isEmpty
+        }
+        for provider in SearchProviderOption.allCases {
+            guard let credentialKind = provider.credentialKind else { continue }
+            let key = visibleKey(for: provider).trimmingCharacters(in: .whitespacesAndNewlines)
+            do {
+                let result = try store.persistProviderAPIKeyEdit(
+                    key,
+                    initialValue: initialKey(for: provider),
+                    kind: credentialKind
+                )
+                if result == .deleted {
+                    setStatus(nil, for: provider)
+                } else if persistedProviders.contains(provider), !key.isEmpty {
+                    try store.saveProviderAPIKeyValidationState(.valid, kind: credentialKind)
+                }
+            } catch {
+                setStatus(.failure(error.localizedDescription), for: provider)
+                return false
+            }
+        }
+        let wasConnected = store.searchConfiguration.isEnabled
+        store.searchConfiguration = SearchConfiguration(
+            isEnabled: wasConnected && !persistedProviders.isEmpty,
+            enabledProviders: persistedProviders,
+            preferredProvider: store.searchConfiguration.preferredProvider,
+            quality: store.searchConfiguration.quality
+        )
+        return true
+    }
+
+    private var enabledProviders: Set<SearchProviderOption> {
+        var providers = Set<SearchProviderOption>()
+        if parallelEnabled { providers.insert(.parallel) }
+        if tavilyEnabled { providers.insert(.tavily) }
+        if bochaEnabled { providers.insert(.bocha) }
+        return providers
+    }
+
+    private var hasRequiredKeys: Bool {
+        enabledProviders.allSatisfy {
+            !$0.requiresAPIKey || !activeKey(for: $0).isEmpty || isDeletingSavedKey(for: $0)
+        }
+    }
+
+    private func activeKey(for provider: SearchProviderOption) -> String {
+        visibleKey(for: provider).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func initialKey(for provider: SearchProviderOption) -> String {
+        switch provider {
+        case .parallel: ""
+        case .tavily: initialTavilyAPIKey
+        case .bocha: initialBochaAPIKey
+        }
+    }
+
+    private func isDeletingSavedKey(for provider: SearchProviderOption) -> Bool {
+        provider.requiresAPIKey
+            && !initialKey(for: provider).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && activeKey(for: provider).isEmpty
+    }
+
+    private func visibleKey(for provider: SearchProviderOption) -> String {
+        switch provider {
+        case .parallel: ""
+        case .tavily: tavilyAPIKey
+        case .bocha: bochaAPIKey
+        }
+    }
+
+    private func shouldHighlight(_ provider: SearchProviderOption) -> Bool {
+        didAttemptSave && provider.requiresAPIKey && enabledProviders.contains(provider) && activeKey(for: provider).isEmpty
+    }
+
+    private func persistedStatus(for provider: SearchProviderOption) -> ProviderConnectionStatus? {
+        guard let credentialKind = provider.credentialKind else {
+            return nil
+        }
+        guard !activeKey(for: provider).isEmpty else { return nil }
+        let state = (try? store.credentialValidationState(for: credentialKind)) ?? .unknown
+        return switch state {
+        case .valid: ProviderConnectionStatus.success(text("API 已验证", "API validated"))
+        case .invalid: ProviderConnectionStatus.failure(text("API 验证失败", "API validation failed"))
+        case .unknown: nil
+        }
+    }
+
+    private func setStatus(_ status: ProviderConnectionStatus?, for provider: SearchProviderOption) {
+        switch provider {
+        case .parallel:
+            break
+        case .tavily:
+            tavilyStatus = status
+        case .bocha:
+            bochaStatus = status
+        }
+    }
+
+    private func statusSymbol(_ status: ProviderConnectionStatus) -> String {
+        if case .success = status { return "checkmark.circle.fill" }
+        return "xmark.circle.fill"
+    }
+
+    private func providerDescription(_ provider: SearchProviderOption) -> String {
+        switch (provider, store.appLanguage) {
+        case (.parallel, _): parallelDescription
+        case (.tavily, .chinese): "更适合国际市场、英文资料与跨市场检索。"
+        case (.tavily, .english): "Best suited to global markets, English sources, and cross-market research."
+        case (.bocha, .chinese): "更适合中文资料、A 股、基金与境内政策信息。"
+        case (.bocha, .english): "Best suited to Chinese sources, A-shares, funds, and domestic policy research."
+        }
+    }
+
+    private var parallelDescription: String {
+        text(
+            "免费的通用网页搜索服务，适合补充市场新闻、公开资料与跨市场信息，仅在联网增强模式下使用。",
+            "A free general web search service for market news, public sources, and cross-market information; used only in Connected mode."
+        )
     }
 
     private func text(_ chinese: String, _ english: String) -> String {
@@ -654,9 +1001,12 @@ private struct ProviderAPIKeyInputField: View {
             .clipped()
 
             Button {
-                let willShow = !isVisible
-                isVisible = willShow
-                focusedField.wrappedValue = willShow ? field : nil
+                if isVisible {
+                    focusedField.wrappedValue = nil
+                    isVisible = false
+                } else {
+                    revealAndFocus()
+                }
             } label: {
                 Image(systemName: isVisible ? "eye.slash" : "eye")
                     .font(.system(size: 12, weight: .medium))
@@ -664,7 +1014,7 @@ private struct ProviderAPIKeyInputField: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(PortfolixTheme.tertiaryText)
-            .help(isVisible ? visibleHelp : hiddenHelp)
+            .accessibilityLabel(isVisible ? visibleHelp : hiddenHelp)
         }
         .frame(width: ProviderConfigurationLayout.valueFieldWidth, alignment: .trailing)
         .frame(minHeight: ProviderConfigurationLayout.valueFieldMinHeight, alignment: .center)
@@ -678,7 +1028,8 @@ private struct ProviderAPIKeyInputField: View {
             isVisible: isVisible,
             field: field,
             focusedField: focusedField,
-            isInvalid: isInvalid
+            isInvalid: isInvalid,
+            onReveal: revealAndFocus
         )
             .frame(
                 maxWidth: .infinity,
@@ -686,6 +1037,15 @@ private struct ProviderAPIKeyInputField: View {
                 alignment: .trailing
             )
             .clipped()
+    }
+
+    private func revealAndFocus() {
+        guard !isVisible else { return }
+        isVisible = true
+        DispatchQueue.main.async {
+            guard isVisible else { return }
+            focusedField.wrappedValue = field
+        }
     }
 
     private var shouldShowPlaceholder: Bool {
@@ -707,6 +1067,7 @@ private struct ProviderAPIKeyTextInput: NSViewRepresentable {
     let field: ProviderConfigurationField
     let focusedField: FocusState<ProviderConfigurationField?>.Binding
     let isInvalid: Bool
+    let onReveal: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -715,11 +1076,13 @@ private struct ProviderAPIKeyTextInput: NSViewRepresentable {
     func makeNSView(context: Context) -> ProviderAPIKeyTextInputView {
         let view = ProviderAPIKeyTextInputView()
         view.plainField.delegate = context.coordinator
+        view.onReveal = onReveal
         return view
     }
 
     func updateNSView(_ nsView: ProviderAPIKeyTextInputView, context: Context) {
         context.coordinator.parent = self
+        nsView.onReveal = onReveal
         nsView.update(text: text, isVisible: isVisible, textColor: textColor)
         if focusedField.wrappedValue == field {
             nsView.focusActiveField()
@@ -760,6 +1123,7 @@ final class ProviderAPIKeyTextInputView: NSView {
     let plainField = NSTextField()
     private let maskedDisplayField = NSSecureTextField()
     private var isVisible = false
+    var onReveal: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -772,11 +1136,17 @@ final class ProviderAPIKeyTextInputView: NSView {
         NSLayoutConstraint.activate([
             plainField.leadingAnchor.constraint(equalTo: leadingAnchor),
             plainField.trailingAnchor.constraint(equalTo: trailingAnchor),
-            plainField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            plainField.centerYAnchor.constraint(
+                equalTo: centerYAnchor,
+                constant: ProviderConfigurationLayout.apiKeyOpticalYOffset
+            ),
             plainField.heightAnchor.constraint(equalToConstant: 24),
             maskedDisplayField.leadingAnchor.constraint(equalTo: leadingAnchor),
             maskedDisplayField.trailingAnchor.constraint(equalTo: trailingAnchor),
-            maskedDisplayField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            maskedDisplayField.centerYAnchor.constraint(
+                equalTo: centerYAnchor,
+                constant: ProviderConfigurationLayout.apiKeyOpticalYOffset
+            ),
             maskedDisplayField.heightAnchor.constraint(equalToConstant: 24),
         ])
         plainField.isHidden = true
@@ -810,6 +1180,21 @@ final class ProviderAPIKeyTextInputView: NSView {
                 window.makeFirstResponder(self.plainField)
             }
         }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if !isVisible, bounds.contains(point) {
+            return self
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard !isVisible else {
+            super.mouseDown(with: event)
+            return
+        }
+        onReveal?()
     }
 
     private func setup(field: NSTextField) {

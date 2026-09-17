@@ -44,15 +44,42 @@ struct LLMCompletionDiagnostics: Equatable, Sendable {
     let firstOutputMilliseconds: Int?
     let totalMilliseconds: Int?
     let reasoningCharacterCount: Int
+    let inputTokenCount: Int?
+    let cachedInputTokenCount: Int?
+    let outputTokenCount: Int?
+    let reasoningTokenCount: Int?
+    let responseID: String?
+    let responseModel: String?
 
-    static let empty = LLMCompletionDiagnostics(
-        responseHeaderMilliseconds: nil,
-        firstReasoningMilliseconds: nil,
-        firstSearchMilliseconds: nil,
-        firstOutputMilliseconds: nil,
-        totalMilliseconds: nil,
-        reasoningCharacterCount: 0
-    )
+    init(
+        responseHeaderMilliseconds: Int? = nil,
+        firstReasoningMilliseconds: Int? = nil,
+        firstSearchMilliseconds: Int? = nil,
+        firstOutputMilliseconds: Int? = nil,
+        totalMilliseconds: Int? = nil,
+        reasoningCharacterCount: Int = 0,
+        inputTokenCount: Int? = nil,
+        cachedInputTokenCount: Int? = nil,
+        outputTokenCount: Int? = nil,
+        reasoningTokenCount: Int? = nil,
+        responseID: String? = nil,
+        responseModel: String? = nil
+    ) {
+        self.responseHeaderMilliseconds = responseHeaderMilliseconds
+        self.firstReasoningMilliseconds = firstReasoningMilliseconds
+        self.firstSearchMilliseconds = firstSearchMilliseconds
+        self.firstOutputMilliseconds = firstOutputMilliseconds
+        self.totalMilliseconds = totalMilliseconds
+        self.reasoningCharacterCount = reasoningCharacterCount
+        self.inputTokenCount = inputTokenCount
+        self.cachedInputTokenCount = cachedInputTokenCount
+        self.outputTokenCount = outputTokenCount
+        self.reasoningTokenCount = reasoningTokenCount
+        self.responseID = responseID
+        self.responseModel = responseModel
+    }
+
+    static let empty = LLMCompletionDiagnostics()
 }
 
 final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLMModelListing, @unchecked Sendable {
@@ -89,6 +116,29 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         webSearchEnabled: Bool,
         webSearchProgress: LLMWebSearchProgressHandler?
     ) async throws -> LLMCompletionResult {
+        try await completeJSONResult(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            configuration: configuration,
+            apiKey: apiKey,
+            webSearchEnabled: webSearchEnabled,
+            reasoningEffort: .high,
+            webSearchProgress: webSearchProgress
+        )
+    }
+
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        reasoningEffort: DeepSeekReasoningEffort,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        guard !webSearchEnabled else {
+            throw LLMClientError.webSearchUnavailable(configuration.model)
+        }
         let request = try makeRequest(
             configuration: configuration,
             apiKey: apiKey,
@@ -96,7 +146,8 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             input: userPrompt,
             expectsJSON: true,
             webSearchEnabled: webSearchEnabled,
-            stream: true
+            stream: true,
+            reasoningEffort: reasoningEffort
         )
 
         let requestStartedAt = Date()
@@ -110,16 +161,11 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 let body = await responseBodyText(from: bytes)
                 throw Self.httpError(statusCode: httpResponse.statusCode, body: body)
             }
-            let result = try await parseStreamingResponse(
+            return try await parseStreamingResponse(
                 bytes,
                 requestStartedAt: requestStartedAt,
                 responseHeaderAt: responseHeaderAt,
                 progress: webSearchProgress
-            )
-            return try Self.validatedSearchResult(
-                result,
-                webSearchEnabled: webSearchEnabled,
-                model: configuration.model
             )
         } catch let error as LLMClientError {
             throw error
@@ -175,7 +221,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         instructions: String,
         input: String,
         expectsJSON: Bool,
-        webSearchEnabled: Bool,
+        webSearchEnabled _: Bool,
         stream: Bool,
         reasoningEffort: DeepSeekReasoningEffort = .high
     ) throws -> URLRequest {
@@ -190,14 +236,12 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(
             DeepSeekResponseRequest(
-                model: configuration.model,
+                model: LLMProviderOption.canonicalDeepSeekModel(configuration.model),
                 instructions: instructions,
                 input: input,
                 stream: stream,
                 maxOutputTokens: configuration.maxOutputTokens,
                 reasoning: DeepSeekResponseReasoning(effort: reasoningEffort),
-                tools: webSearchEnabled ? [DeepSeekResponseTool(type: "web_search")] : nil,
-                toolChoice: webSearchEnabled ? DeepSeekResponseToolChoice(type: "web_search") : nil,
                 text: expectsJSON ? DeepSeekResponseText(format: DeepSeekResponseTextFormat(type: "json_object")) : nil
             )
         )
@@ -319,6 +363,9 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             throw LLMClientError.emptyFinalContent(reasoningCharacters: reasoningCharacterCount, finishReason: nil)
         }
         let completedAt = Date()
+        let usage = completionObject?["usage"] as? [String: Any]
+        let inputDetails = usage?["input_tokens_details"] as? [String: Any]
+        let outputDetails = usage?["output_tokens_details"] as? [String: Any]
         return LLMCompletionResult(
             content: content,
             webSearchCallCount: max(searchCallIDs.count, anonymousSearchCallCount),
@@ -330,7 +377,13 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 firstSearchMilliseconds: firstSearchAt.map { Self.milliseconds(from: requestStartedAt, to: $0) },
                 firstOutputMilliseconds: firstOutputAt.map { Self.milliseconds(from: requestStartedAt, to: $0) },
                 totalMilliseconds: Self.milliseconds(from: requestStartedAt, to: completedAt),
-                reasoningCharacterCount: reasoningCharacterCount
+                reasoningCharacterCount: reasoningCharacterCount,
+                inputTokenCount: usage?["input_tokens"] as? Int,
+                cachedInputTokenCount: inputDetails?["cached_tokens"] as? Int,
+                outputTokenCount: usage?["output_tokens"] as? Int,
+                reasoningTokenCount: outputDetails?["reasoning_tokens"] as? Int,
+                responseID: completionObject?["id"] as? String,
+                responseModel: completionObject?["model"] as? String
             )
         )
     }
@@ -358,23 +411,23 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             .filter { $0["type"] as? String == "web_search_call" }
             .flatMap(searchQueries)
             .filter { seenQueries.insert($0).inserted }
+        let usage = object["usage"] as? [String: Any]
+        let inputDetails = usage?["input_tokens_details"] as? [String: Any]
+        let outputDetails = usage?["output_tokens_details"] as? [String: Any]
         return LLMCompletionResult(
             content: texts.joined(),
             webSearchCallCount: searchCalls,
             webSearchQueries: uniqueQueries,
-            citations: uniqueCitations
+            citations: uniqueCitations,
+            diagnostics: LLMCompletionDiagnostics(
+                inputTokenCount: usage?["input_tokens"] as? Int,
+                cachedInputTokenCount: inputDetails?["cached_tokens"] as? Int,
+                outputTokenCount: usage?["output_tokens"] as? Int,
+                reasoningTokenCount: outputDetails?["reasoning_tokens"] as? Int,
+                responseID: object["id"] as? String,
+                responseModel: object["model"] as? String
+            )
         )
-    }
-
-    static func validatedSearchResult(
-        _ result: LLMCompletionResult,
-        webSearchEnabled: Bool,
-        model: String
-    ) throws -> LLMCompletionResult {
-        guard !webSearchEnabled || result.webSearchCallCount > 0 || !result.citations.isEmpty else {
-            throw LLMClientError.webSearchUnavailable(model)
-        }
-        return result
     }
 
     private static func responsesURL(baseURL: String) -> URL? {
@@ -498,32 +551,23 @@ private struct DeepSeekResponseRequest: Encodable {
     let stream: Bool
     let maxOutputTokens: Int
     let reasoning: DeepSeekResponseReasoning
-    let tools: [DeepSeekResponseTool]?
-    let toolChoice: DeepSeekResponseToolChoice?
     let text: DeepSeekResponseText?
 
     enum CodingKeys: String, CodingKey {
-        case model, instructions, input, stream, reasoning, tools, text
+        case model, instructions, input, stream, reasoning, text
         case maxOutputTokens = "max_output_tokens"
-        case toolChoice = "tool_choice"
     }
 }
 
 enum DeepSeekReasoningEffort: String, Encodable {
     case none
+    case low
     case high
+    case max
 }
 
 private struct DeepSeekResponseReasoning: Encodable {
     let effort: DeepSeekReasoningEffort
-}
-
-private struct DeepSeekResponseTool: Encodable {
-    let type: String
-}
-
-private struct DeepSeekResponseToolChoice: Encodable {
-    let type: String
 }
 
 private struct DeepSeekResponseText: Encodable {

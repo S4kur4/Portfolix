@@ -54,6 +54,7 @@ enum AIFollowUpContextOrchestrator {
     static let recentItemLimit = 10
     static let relevantEarlierItemLimit = 6
     static let maximumEncodedCharacterCount = 18_000
+    static let maximumEstimatedTokenCount = 6_000
 
     static func make(
         question: String,
@@ -61,7 +62,8 @@ enum AIFollowUpContextOrchestrator {
         excludingItemIDs: Set<UUID> = [],
         recentLimit: Int = recentItemLimit,
         relevantLimit: Int = relevantEarlierItemLimit,
-        characterBudget: Int = maximumEncodedCharacterCount
+        characterBudget: Int = maximumEncodedCharacterCount,
+        tokenBudget: Int = maximumEstimatedTokenCount
     ) -> AIFollowUpConversationContext {
         var candidates = items
             .filter { !excludingItemIDs.contains($0.id) && shouldInclude($0) }
@@ -69,6 +71,7 @@ enum AIFollowUpContextOrchestrator {
         removeDuplicatedCurrentQuestion(question, from: &candidates)
 
         let sourceItemCount = candidates.count
+        candidates = deduplicated(candidates)
         let recentStart = max(0, candidates.count - max(1, recentLimit))
         let recentItems = recentStart < candidates.count ? Array(candidates[recentStart...]) : []
         let earlierItems = Array(candidates[..<recentStart])
@@ -98,7 +101,7 @@ enum AIFollowUpContextOrchestrator {
             summary: summary
         )
 
-        while encodedCharacterCount(context) > characterBudget, !relevantEntries.isEmpty {
+        while exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget), !relevantEntries.isEmpty {
             relevantEntries.removeFirst()
             context = buildContext(
                 sourceItemCount: sourceItemCount,
@@ -107,7 +110,7 @@ enum AIFollowUpContextOrchestrator {
                 summary: summary
             )
         }
-        while encodedCharacterCount(context) > characterBudget, recentEntries.count > 4 {
+        while exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget), recentEntries.count > 4 {
             recentEntries.removeFirst()
             context = buildContext(
                 sourceItemCount: sourceItemCount,
@@ -116,7 +119,7 @@ enum AIFollowUpContextOrchestrator {
                 summary: summary
             )
         }
-        if encodedCharacterCount(context) > characterBudget {
+        if exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget) {
             recentEntries = recentEntries.map { shortened($0, limit: 480) }
             relevantEntries = relevantEntries.map { shortened($0, limit: 360) }
             summary = shortened(summary, limit: 320)
@@ -127,7 +130,7 @@ enum AIFollowUpContextOrchestrator {
                 summary: summary
             )
         }
-        if encodedCharacterCount(context) > characterBudget {
+        if exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget) {
             summary = nil
             context = buildContext(
                 sourceItemCount: sourceItemCount,
@@ -136,7 +139,7 @@ enum AIFollowUpContextOrchestrator {
                 summary: nil
             )
         }
-        while encodedCharacterCount(context) > characterBudget, recentEntries.count > 1 {
+        while exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget), recentEntries.count > 1 {
             recentEntries.removeFirst()
             context = buildContext(
                 sourceItemCount: sourceItemCount,
@@ -145,7 +148,7 @@ enum AIFollowUpContextOrchestrator {
                 summary: nil
             )
         }
-        if encodedCharacterCount(context) > characterBudget {
+        if exceedsBudget(context, characterBudget: characterBudget, tokenBudget: tokenBudget) {
             recentEntries = recentEntries.map { shortened($0, limit: 160) }
             relevantEntries = []
             context = buildContext(
@@ -164,6 +167,40 @@ enum AIFollowUpContextOrchestrator {
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(context) else { return "{}" }
         return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func estimatedTokenCount(_ context: AIFollowUpConversationContext) -> Int {
+        estimatedTokenCount(encodedJSON(context))
+    }
+
+    static func estimatedTokenCount(_ text: String) -> Int {
+        var cjkCount = 0
+        var otherScalarCount = 0
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
+                cjkCount += 1
+            default:
+                otherScalarCount += 1
+            }
+        }
+        return cjkCount + Int(ceil(Double(otherScalarCount) / 4.0))
+    }
+
+    private static func exceedsBudget(
+        _ context: AIFollowUpConversationContext,
+        characterBudget: Int,
+        tokenBudget: Int
+    ) -> Bool {
+        encodedCharacterCount(context) > characterBudget || estimatedTokenCount(context) > tokenBudget
+    }
+
+    private static func deduplicated(_ items: [AIReportChatItem]) -> [AIReportChatItem] {
+        var seen = Set<String>()
+        return Array(items.reversed().filter { item in
+            let key = "\(item.kind)|\(normalizedText(content(for: item)))"
+            return seen.insert(key).inserted
+        }.reversed())
     }
 
     private static func shouldInclude(_ item: AIReportChatItem) -> Bool {

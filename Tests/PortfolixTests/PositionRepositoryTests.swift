@@ -2117,7 +2117,7 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func aiAgentGeneratesReportAndSkipsCashSearch() async throws {
         let store = try makeStore()
         try store.addPosition(
@@ -2142,7 +2142,22 @@ struct PositionRepositoryTests {
         )
 
         let tavily = MockTavilySearcher()
-        let llm = MockLLMCompleter(responses: [], completionResults: [
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
+        let llm = MockLLMCompleter(responses: [
+            """
+            {
+              "tool_calls":[{
+                "id":"web_search_1",
+                "query":"Apple AAPL latest company news",
+                "position_refs":["\(positionRef)"],
+                "provider":"Tavily"
+              }],
+              "status":"continue",
+              "limitations":[]
+            }
+            """,
+        ], completionResults: [
             LLMCompletionResult(content: """
             {
               "summary": "组合保持可观察，Apple 需要关注公开信息变化",
@@ -2174,14 +2189,14 @@ struct PositionRepositoryTests {
         #expect(report.assetAlerts.count == 1)
         #expect(report.sources.count == 1)
         #expect(await tavily.searchedSymbols().isEmpty)
-        #expect(await llm.requestCount() == 1)
+        #expect(await llm.requestCount() == 2)
         #expect(await llm.requestTimeouts() == [LLMRequestTimeoutPolicy.reportGeneration])
         #expect(await llm.outputTokenLimits() == [LLMOutputTokenPolicy.reportGeneration])
         #expect(await llm.webSearchEnabledValues() == [true])
     }
 
     @MainActor
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func aiConnectedToolPlanSearchesOnlyRequestedHolding() async throws {
         let store = try makeStore()
         for (index, symbol) in ["AAA", "BBB", "CCC", "DDD"].enumerated() {
@@ -2231,7 +2246,7 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func aiToolExecutionUsesBoundedConcurrency() async throws {
         let store = try makeStore()
         for (name, symbol) in [("Apple", "AAPL"), ("Microsoft", "MSFT"), ("Nvidia", "NVDA")] {
@@ -2313,6 +2328,83 @@ struct PositionRepositoryTests {
         }
     }
 
+    @Test
+    func aiToolPlanRestrictsModelSelectionToEnabledSearchProviders() throws {
+        let allowedRef = "position_\(UUID().uuidString)"
+        let plan = AIWebSearchToolPlan(toolCalls: [
+            AIWebSearchToolCall(
+                id: "search_1",
+                query: "Apple AAPL latest company announcement",
+                positionRefs: [allowedRef],
+                provider: .bocha
+            ),
+        ])
+
+        #expect(throws: AIAnalysisAgentError.self) {
+            try AIAnalysisAgent.validatedToolPlan(
+                plan,
+                allowedRefs: [allowedRef],
+                allowedSearchTerms: [allowedRef: ["Apple", "AAPL"]],
+                allowedProviders: [.tavily]
+            )
+        }
+
+        let validated = try AIAnalysisAgent.validatedToolPlan(
+            plan,
+            allowedRefs: [allowedRef],
+            allowedSearchTerms: [allowedRef: ["Apple", "AAPL"]],
+            allowedProviders: [.tavily, .bocha]
+        )
+        #expect(validated.toolCalls.first?.provider == .bocha)
+    }
+
+    @Test
+    func searchProviderRouterHonorsModelChoiceAndUsesMarketAwareFallback() {
+        let configuration = SearchConfiguration(
+            isEnabled: true,
+            enabledProviders: [.tavily, .bocha],
+            preferredProvider: .tavily,
+            quality: .basic
+        )
+        let overseas = makePosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            currency: .usd,
+            quantity: 1,
+            averageCost: 100,
+            latestPrice: 100
+        )
+        let domestic = makePosition(
+            name: "华夏科技创新混合",
+            symbol: "008887",
+            category: .fund,
+            currency: .cny,
+            quantity: 1,
+            averageCost: 1,
+            latestPrice: 1
+        )
+
+        #expect(SearchProviderRouter.orderedProviders(
+            requested: .bocha,
+            query: "Apple AAPL latest company announcement",
+            positions: [overseas],
+            configuration: configuration
+        ) == [.bocha, .tavily])
+        #expect(SearchProviderRouter.orderedProviders(
+            requested: nil,
+            query: "Apple AAPL latest company announcement",
+            positions: [overseas],
+            configuration: configuration
+        ) == [.tavily, .bocha])
+        #expect(SearchProviderRouter.orderedProviders(
+            requested: nil,
+            query: "华夏科技创新混合 008887 最新季报",
+            positions: [domestic],
+            configuration: configuration
+        ) == [.bocha, .tavily])
+    }
+
     @MainActor
     @Test
     func aiConnectedToolFailureStillGeneratesReportFromLocalInput() async throws {
@@ -2326,7 +2418,22 @@ struct PositionRepositoryTests {
             quoteCurrency: .usd,
             latestPrice: 120
         )
-        let llm = MockLLMCompleter(responses: [], completionResults: [
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
+        let llm = MockLLMCompleter(responses: [
+            """
+            {
+              "tool_calls":[{
+                "id":"web_search_1",
+                "query":"Apple AAPL latest company news",
+                "position_refs":["\(positionRef)"],
+                "provider":"Tavily"
+              }],
+              "status":"continue",
+              "limitations":[]
+            }
+            """,
+        ], completionResults: [
             LLMCompletionResult(content: """
             {
               "summary": "组合风险保持可观察",
@@ -2358,12 +2465,12 @@ struct PositionRepositoryTests {
             }
         )
 
-        #expect(await llm.requestCount() == 1)
+        #expect(await llm.requestCount() == 2)
         #expect(await progressRecorder.stageIDs().contains("web_search_results_ready"))
     }
 
     @MainActor
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func aiReportLoopReplansAfterEmptyEvidenceAndStopsWhenEvidenceIsSufficient() async throws {
         let store = try makeStore()
         try store.addPosition(
@@ -2426,6 +2533,7 @@ struct PositionRepositoryTests {
         decoder.dateDecodingStrategy = .iso8601
         let state = try decoder.decode(AIAgentLoopState.self, from: stateData)
         #expect(state.turns.isEmpty)
+        #expect(state.steps?.map(\.phase) == ["execute_local_tools", "synthesize_report"])
         #expect(state.stopReason == "deepseek_search_completed")
         #expect(await searcher.searchedQueries().isEmpty)
         #expect(await llm.requestCount() == 1)
@@ -2808,7 +2916,7 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
-    func aiReportAttributorAddsDeterministicEvidenceAndQualityScore() throws {
+    func aiReportQualityDoesNotInventMissingEvidence() throws {
         let store = try makeStore()
         try store.addPosition(
             name: "Apple",
@@ -2856,20 +2964,82 @@ struct PositionRepositoryTests {
             sources: []
         )
 
-        let attribution = AIReportEvidenceAttributor.attribute(report: report, input: input, ledger: ledger)
-        let attributedRefs = try #require(attribution.report.riskItems.first?.evidenceRefs)
         let inputJSON = try AIAnalysisSchemaValidator.encodedInputJSON(input)
         let scorecard = AIReportQualityEvaluator.evaluate(
-            report: attribution.report,
+            report: report,
             inputJSON: inputJSON,
             ledger: ledger
         )
 
-        #expect(attributedRefs.contains { $0.contains("concentration") })
-        #expect(attribution.notes == ["deterministic_evidence_attribution_count:1"])
+        #expect(report.riskItems.first?.evidenceRefs == nil)
         #expect(scorecard.claimCount == 1)
-        #expect(scorecard.citedClaimCount == 1)
-        #expect(scorecard.evidenceCoveragePct == 100)
+        #expect(scorecard.citedClaimCount == 0)
+        #expect(scorecard.evidenceCoveragePct == 0)
+        #expect(AIReportQualityPolicy.status(for: scorecard) == "needs_review")
+    }
+
+    @MainActor
+    @Test
+    func aiReportQualityAcceptsEvidenceBackedQualitativeClaims() throws {
+        let store = try makeStore()
+        try store.addPosition(
+            name: "Apple",
+            symbol: "AAPL",
+            category: .usStock,
+            quantity: 10,
+            averageCost: 100,
+            quoteCurrency: .usd,
+            latestPrice: 120
+        )
+        let input = AIAnalysisAgent.makeInput(
+            positions: store.positions,
+            context: makeAIContext(from: store),
+            configuration: .default,
+            trigger: .manual,
+            generatedAt: .now
+        )
+        let ledger = AIEvidenceLedgerBuilder.build(
+            localResults: AILocalFinancialToolExecutor.baselineResults(input: input),
+            webResults: []
+        )
+        let evidenceID = try #require(ledger.items.first?.id)
+        let positionRef = try #require(input.metrics.positions.first?.positionRef)
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptVersion.report,
+            riskProfileVersion: 1,
+            summary: "组合集中度需要继续观察",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [
+                AIReportRiskItem(
+                    severity: "warning",
+                    category: "concentration",
+                    title: "复核集中度",
+                    evidence: "最大持仓相对集中",
+                    impact: "组合波动可能更集中",
+                    relatedRefs: [positionRef],
+                    evidenceRefs: [evidenceID]
+                ),
+            ],
+            assetAlerts: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: [],
+            sources: []
+        )
+
+        let scorecard = AIReportQualityEvaluator.evaluate(
+            report: report,
+            inputJSON: try AIAnalysisSchemaValidator.encodedInputJSON(input),
+            ledger: ledger
+        )
+
+        #expect(scorecard.score == 100)
+        #expect(scorecard.numericClaimCount == 0)
+        #expect(scorecard.warnings.isEmpty)
+        #expect(AIReportQualityPolicy.status(for: scorecard) == "passed")
     }
 
     @MainActor
@@ -3026,7 +3196,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v16-deepseek-search")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v17-external-search")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
@@ -3034,13 +3204,16 @@ struct PositionRepositoryTests {
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("risk_profile"))
         #expect(AIAnalysisPromptText.reportSystem.contains("核心结论 / 投资组合建议 / 重点关注 / 风险因素 / 后续复核"))
         #expect(AIAnalysisPromptText.reportSystem.contains("单项资产关注内容写入 asset_alerts"))
-        #expect(AIAnalysisPromptText.toolPlanningSystem.contains("web_search"))
+        #expect(AIAnalysisPromptText.toolPlanningSystem.contains("tavily_search"))
+        #expect(AIAnalysisPromptText.toolPlanningSystem.contains("bocha_search"))
         #expect(!AIAnalysisPromptText.reportSystem.contains("risk_note 必须包含"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("不超过 220 个 Unicode 字符"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("只有没有任何单项关注点时才返回空数组"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("320 个 Unicode 字符"))
         #expect(AIAnalysisPromptText.reportUser(inputJSON: "{}", toolResultsJSON: "[]").contains("output_language = en"))
         #expect(AIAnalysisPromptText.followUpSystem.contains("response_language"))
+        #expect(AIAnalysisPromptText.followUpSystem.contains("用户当前问题是最高优先级"))
+        #expect(AIAnalysisPromptText.followUpSystem.contains("不要求问题必须围绕最新报告"))
         #expect(LLMRequestTimeoutPolicy.reportGeneration == AIAgentExecutionBudget.production.reportSeconds)
         #expect(LLMRequestTimeoutPolicy.reportRepair < LLMRequestTimeoutPolicy.reportGeneration)
         #expect(AIAgentExecutionBudget.production.totalSeconds >= 300)
@@ -3234,6 +3407,7 @@ struct PositionRepositoryTests {
         )
         #expect(followUp.answer.count >= 80)
         #expect(followUp.toolCallCount > 0)
+        #expect(followUp.toolResultCount > 0)
         #expect(followUp.searchMode == "connected_search_completed")
     }
 
@@ -3255,13 +3429,7 @@ struct PositionRepositoryTests {
             model: model,
             isEnabled: true
         )
-        let searchDepth = defaults.string(forKey: "portfolix.ai.tavily.searchDepth")
-            .flatMap(TavilySearchDepth.init(rawValue:)) ?? .basic
-        let searchConfiguration = TavilyConfiguration(
-            isEnabled: defaults.bool(forKey: "portfolix.ai.tavily.enabled"),
-            searchDepth: searchDepth,
-            maxResults: max(1, defaults.integer(forKey: "portfolix.ai.tavily.maxResults"))
-        )
+        let searchConfiguration = AIProviderConfigurationStore.loadSearch(defaults: defaults)
         let storedLLMKey = try credentialStore.read(kind: .llm)
         let llmKey = try #require(storedLLMKey)
         let models = try await LLMProviderClient.shared.listModels(
@@ -3364,8 +3532,8 @@ struct PositionRepositoryTests {
         print("PORTFOLIX_LIVE_TAVILY_SOURCE_COUNT=\(result.sourceCount)")
     }
 
-    @Test
-    func liveConnectedFollowUpPlansAndExecutesTavily() async throws {
+    @Test(.disabled("DeepSeek removed the built-in web_search tool."))
+    func liveConnectedFollowUpUsesDeepSeekBuiltInSearch() async throws {
         guard ProcessInfo.processInfo.environment["PORTFOLIX_RUN_LIVE_AGENT_TEST"] == "1" else {
             return
         }
@@ -3391,7 +3559,7 @@ struct PositionRepositoryTests {
 
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount > 0)
-        #expect(result.toolResultCount == result.toolCallCount)
+        #expect(result.toolResultCount > 0)
         print("PORTFOLIX_LIVE_FOLLOW_UP_TOOL_CALLS=\(result.toolCallCount)")
         print("PORTFOLIX_LIVE_FOLLOW_UP_TOOL_RESULTS=\(result.toolResultCount)")
     }
@@ -3556,25 +3724,25 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
-    func smartAnalysisModeKeepsModelAndSearchCapabilityInSync() throws {
+    func smartAnalysisModeIsIndependentFromDeepSeekBuiltInSearchCapability() throws {
         let store = try makeStore()
-        store.updateAvailableDeepSeekModels(["deepseek-flash", "deepseek-v4-pro"])
+        store.updateAvailableDeepSeekModels(["deepseek-v4-flash", "deepseek-v4-pro"])
 
         store.selectAIModel("deepseek-flash")
         store.selectSmartAnalysisMode(.connected)
 
-        #expect(store.aiConfiguration.model == "deepseek-v4-pro")
+        #expect(store.aiConfiguration.model == "deepseek-flash")
         #expect(store.searchConfiguration.isEnabled)
 
         store.selectAIModel("deepseek-flash")
 
         #expect(store.aiConfiguration.model == "deepseek-flash")
-        #expect(!store.searchConfiguration.isEnabled)
+        #expect(store.searchConfiguration.isEnabled)
     }
 
     @MainActor
-    @Test
-    func aiFollowUpOnlyMentionsSearchWhenConnectedSearchNeedsIt() async throws {
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
+    func aiFollowUpUsesBuiltInSearchWhenConnectedModeIsEnabled() async throws {
         let credentialStore = MockCredentialStore(
             keys: [.llm: "llm-key"],
             validationStates: [.llm: .valid]
@@ -4184,6 +4352,51 @@ struct PositionRepositoryTests {
         #expect(AIFollowUpContextOrchestrator.encodedJSON(context).utf8.count <= budget)
     }
 
+    @Test
+    func aiFollowUpContextHonorsTokenBudgetForLongChineseHistory() {
+        let longText = String(repeating: "组合风险与持仓集中度需要持续复核。", count: 100)
+        let history = (0..<24).map { index in
+            AIReportChatItem.assistant(
+                "第\(index)条：\(longText)",
+                createdAt: Date(timeIntervalSince1970: TimeInterval(1_750_100_000 + index))
+            )
+        }
+        let tokenBudget = 1_200
+
+        let context = AIFollowUpContextOrchestrator.make(
+            question: "请总结组合风险",
+            items: history,
+            characterBudget: 50_000,
+            tokenBudget: tokenBudget
+        )
+
+        #expect(!context.recentHistory.isEmpty)
+        #expect(AIFollowUpContextOrchestrator.estimatedTokenCount(context) <= tokenBudget)
+    }
+
+    @Test
+    func aiFollowUpContextDeduplicatesHistoryAndKeepsNewestCopy() throws {
+        let oldDate = Date(timeIntervalSince1970: 1_750_200_000)
+        let newDate = oldDate.addingTimeInterval(60)
+        let history = [
+            AIReportChatItem.assistant("重复结论", createdAt: oldDate),
+            AIReportChatItem.user("另一个问题", createdAt: oldDate.addingTimeInterval(30)),
+            AIReportChatItem.assistant("重复结论", createdAt: newDate),
+        ]
+
+        let context = AIFollowUpContextOrchestrator.make(
+            question: "继续分析",
+            items: history
+        )
+        let matching = (context.recentHistory + context.relevantEarlierHistory)
+            .filter { $0.content == "重复结论" }
+
+        #expect(matching.count == 1)
+        #expect(try #require(matching.first).createdAt == newDate)
+        #expect(context.sourceItemCount == 3)
+        #expect(context.includedItemCount == 2)
+    }
+
     @MainActor
     @Test
     func aiFollowUpIncludesSavedConversationHistory() async throws {
@@ -4356,11 +4569,11 @@ struct PositionRepositoryTests {
             positions: store.positions,
             portfolioContext: portfolioContext,
             llmConfiguration: AIProviderConfiguration.default,
-            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 3)
+            searchConfiguration: .default
         )
 
         let prompts = await llm.userPrompts()
-        #expect(result.searchMode == "connected_no_search_needed")
+        #expect(result.searchMode == "disabled")
         #expect(result.toolCallCount == 0)
         #expect(await llm.requestCount() == 1)
         #expect(prompts.first?.contains("<portfolio_context>") == true)
@@ -4414,7 +4627,7 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
-    func aiConnectedFollowUpUsesLLMPlannedTavilySearch() async throws {
+    func aiModelWithoutBuiltInSearchStillUsesConfiguredExternalSearch() async throws {
         let store = try makeStore()
         try store.addPosition(
             name: "Apple",
@@ -4440,8 +4653,11 @@ struct PositionRepositoryTests {
             limitations: ["内容不构成投资建议"],
             sources: []
         )
-        let expandedAnswer = #"{"answer":"经本轮联网资料核验，可关注 Apple 近期公开公告是否改变报告中的风险边界。公开资料需要与当前持仓集中度、本地价格日期和既有报告结论一并理解，不能只凭单条新闻调整仓位。后续应继续核对公司公告的具体影响范围、市场是否已经计价，以及相关风险是否会持续影响组合。","limitations":["公开资料仅作背景"]}"#
-        let llm = MockLLMCompleter(responses: [expandedAnswer], completionResults: [
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
+        let llm = MockLLMCompleter(responses: [
+            #"{"tool_calls":[{"id":"web_search_1","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"],"provider":"Tavily"}],"status":"continue","limitations":[]}"#,
+        ], completionResults: [
             LLMCompletionResult(
                 content: #"{"answer":"经本轮联网资料核验，可关注 Apple 近期公开公告是否改变报告中的风险边界。","limitations":["公开资料仅作背景"]}"#,
                 webSearchCallCount: 1,
@@ -4455,6 +4671,12 @@ struct PositionRepositoryTests {
             tavily: tavily,
             credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
         )
+        let unsupportedConfiguration = AIProviderConfiguration(
+            provider: LLMProviderOption.deepSeek.rawValue,
+            baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+            model: "deepseek-v5-preview",
+            isEnabled: true
+        )
 
         let result = try await agent.answerFollowUp(
             question: "Apple 最近是否有会影响风险判断的新公告？",
@@ -4465,26 +4687,85 @@ struct PositionRepositoryTests {
                 AIReportChatItem.user("上一个问题要求继续跟踪 Apple 的新闻"),
             ],
             positions: store.positions,
-            llmConfiguration: AIProviderConfiguration.default,
+            llmConfiguration: unsupportedConfiguration,
             searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5)
         )
 
-        #expect(result.answer.contains("公开资料"))
+        #expect(result.answer.contains("Apple"))
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
         #expect(result.loopTurnCount == 1)
-        #expect(await tavily.searchedSymbols().isEmpty)
+        #expect(await tavily.searchedSymbols() == ["AAPL"])
         #expect(await llm.requestCount() == 2)
-        #expect(await llm.systemPrompts().first == AIAnalysisPromptText.followUpSystem)
+        #expect(await llm.systemPrompts().first == AIAnalysisPromptText.followUpToolPlanningSystem)
         #expect(await llm.userPrompts().first?.contains("上一个问题要求继续跟踪 Apple 的新闻") == true)
-        #expect(await llm.userPrompts().first?.contains("connected_search_available") == true)
+        #expect(await llm.userPrompts().last?.contains("<search_mode>\nconnected_search_completed\n</search_mode>") == true)
         #expect(await llm.userPrompts().last?.contains("reuters.com") == true)
     }
 
     @MainActor
     @Test
-    func aiFollowUpLoopReplansAfterEmptySearchResult() async throws {
+    func aiFollowUpAnswersIndependentGoldQuestionWithExternalSearch() async throws {
+        let report = AIAnalysisReport(
+            generatedAt: .now,
+            searchedAt: .now,
+            model: "mock",
+            promptVersion: AIAnalysisPromptText.reportVersion,
+            riskProfileVersion: 1,
+            summary: "当前报告仅描述用户组合，不包含黄金持仓。",
+            healthScoreExplanation: "本地约束用于解释风险边界",
+            riskItems: [],
+            assetAlerts: [],
+            questionsToConsider: [],
+            dataQualityNotes: [],
+            limitations: [],
+            sources: []
+        )
+        let llm = MockLLMCompleter(responses: [
+            #"{"tool_calls":[{"id":"search_1","provider":"Tavily","query":"latest XAU USD spot gold price market Reuters","position_refs":[]}],"status":"continue","limitations":[]}"#,
+        ], completionResults: [
+            LLMCompletionResult(
+                content: #"{"answer":"现货黄金价格应以本轮联网行情为准。这里直接回答黄金市场问题，不需要把结论强行关联到当前投资组合；报价会随交易时段持续变化，操作前应再次核对时间与计价货币。","limitations":["公开行情可能存在短暂延迟"]}"#
+            ),
+        ])
+        let searcher = MockTavilySearcher()
+        let agent = AIAnalysisAgent(
+            llm: llm,
+            tavily: searcher,
+            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+        )
+
+        let result = try await agent.answerFollowUp(
+            question: "当前黄金价格是多少？",
+            report: report,
+            artifacts: nil,
+            chatHistory: [AIReportChatItem.report(report, AIAnalysisRun(status: .completed, model: "mock"))],
+            positions: [],
+            llmConfiguration: AIProviderConfiguration.default,
+            searchConfiguration: SearchConfiguration(
+                isEnabled: true,
+                enabledProviders: [.tavily],
+                preferredProvider: .tavily,
+                quality: .basic
+            )
+        )
+
+        #expect(result.searchMode == "connected_search_completed")
+        #expect(result.toolCallCount == 1)
+        #expect(result.toolResultCount == 1)
+        #expect(result.answer.contains("黄金市场问题"))
+        #expect(await searcher.searchedSymbols().isEmpty)
+        #expect(await searcher.searchedQueries() == ["latest XAU USD spot gold price market Reuters"])
+        #expect(await llm.requestCount() >= 2)
+        #expect(await llm.userPrompts().contains {
+            $0.contains("不要强行把独立市场问题解释成报告追问")
+        })
+    }
+
+    @MainActor
+    @Test
+    func aiFollowUpUsesModelSelectedProviderThenFallsBackToAnotherEnabledProvider() async throws {
         let store = try makeStore()
         try store.addPosition(
             name: "Apple",
@@ -4510,8 +4791,10 @@ struct PositionRepositoryTests {
             limitations: [],
             sources: []
         )
+        let position = try #require(store.positions.first)
+        let positionRef = "position_\(position.id.uuidString)"
         let llm = MockLLMCompleter(responses: [
-            #"{"answer":"公开资料补充了 Apple 近期公告和监管文件的背景。应把这些资料与当前持仓集中度、价格日期和既有报告的风险边界结合理解，不能只依据单条新闻作出仓位调整。后续可继续观察公司披露是否改变盈利预期、市场是否已经计价，以及相关影响是否持续。","limitations":[]}"#,
+            #"{"tool_calls":[{"id":"web_search_1","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"],"provider":"BochaAI"}],"status":"continue","limitations":[]}"#,
         ], completionResults: [
             LLMCompletionResult(
                 content: #"{"answer":"内建搜索补充了近期公开信息，可以结合当前持仓集中度继续复核风险。","limitations":[]}"#,
@@ -4539,7 +4822,17 @@ struct PositionRepositoryTests {
         let agent = AIAnalysisAgent(
             llm: llm,
             tavily: searcher,
-            credentialStore: MockCredentialStore(keys: [.llm: "llm-key", .tavily: "tvly-key"])
+            credentialStore: MockCredentialStore(keys: [
+                .llm: "llm-key",
+                .tavily: "tvly-key",
+                .bocha: "bocha-key",
+            ])
+        )
+        let unsupportedConfiguration = AIProviderConfiguration(
+            provider: LLMProviderOption.deepSeek.rawValue,
+            baseURL: LLMProviderOption.deepSeek.defaultBaseURL,
+            model: "deepseek-v5-preview",
+            isEnabled: true
         )
 
         let result = try await agent.answerFollowUp(
@@ -4547,21 +4840,27 @@ struct PositionRepositoryTests {
             report: report,
             artifacts: nil,
             positions: store.positions,
-            llmConfiguration: .default,
-            searchConfiguration: TavilyConfiguration(isEnabled: true, searchDepth: .basic, maxResults: 5)
+            llmConfiguration: unsupportedConfiguration,
+            searchConfiguration: SearchConfiguration(
+                isEnabled: true,
+                enabledProviders: [.tavily, .bocha],
+                preferredProvider: .tavily,
+                quality: .basic
+            )
         )
 
         #expect(result.searchMode == "connected_search_completed")
         #expect(result.loopTurnCount == 1)
-        #expect(result.toolCallCount == 2)
+        #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
-        #expect(result.toolPlanJSON.contains("recent regulatory filing"))
+        #expect(result.toolPlanJSON.contains("BochaAI"))
+        #expect(await searcher.searchedProviders() == [.bocha, .tavily])
         #expect(await llm.requestCount() == 2)
     }
 
     @MainActor
-    @Test
-    func aiExplicitFollowUpSearchFallsBackWhenPlannerReturnsEmpty() async throws {
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
+    func aiExplicitFollowUpSearchUsesBuiltInSearch() async throws {
         let store = try makeStore()
         try store.addPosition(
             name: "华夏国证半导体芯片ETF联接A",
@@ -4641,8 +4940,8 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test
-    func aiExplicitMarketFollowUpSearchUsesGeneralMarketQuery() async throws {
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
+    func aiExplicitMarketSearchUsesGeneralMarketQuery() async throws {
         let store = try makeStore()
         try store.addPosition(
             name: "BTC",
@@ -4708,7 +5007,7 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test
+    @Test(.disabled("DeepSeek removed the built-in web_search tool; retain for the future external search adapter."))
     func aiConnectedFollowUpAcceptsCryptoAliasSearchPlan() async throws {
         let store = try makeStore()
         try store.addPosition(
@@ -4858,6 +5157,15 @@ struct PositionRepositoryTests {
         let bocha = SearchConfiguration(isEnabled: true, provider: .bocha, quality: .basic)
         AIProviderConfigurationStore.saveSearch(bocha, defaults: defaults)
         #expect(AIProviderConfigurationStore.loadSearch(defaults: defaults) == bocha)
+
+        let dualProvider = SearchConfiguration(
+            isEnabled: true,
+            enabledProviders: [.tavily, .bocha],
+            preferredProvider: .bocha,
+            quality: .advanced
+        )
+        AIProviderConfigurationStore.saveSearch(dualProvider, defaults: defaults)
+        #expect(AIProviderConfigurationStore.loadSearch(defaults: defaults) == dualProvider)
     }
 
     @Test
@@ -5527,6 +5835,7 @@ private actor SequencedTavilySearcher: TavilySearching {
     private let responseBatches: [[AssetResearchSource]]
     private var nextResponseIndex = 0
     private var queries: [String] = []
+    private var providers: [SearchProviderOption] = []
 
     init(responseBatches: [[AssetResearchSource]]) {
         self.responseBatches = responseBatches
@@ -5539,6 +5848,7 @@ private actor SequencedTavilySearcher: TavilySearching {
         apiKey: String
     ) async throws -> [AssetResearchSource] {
         queries.append(query)
+        providers.append(configuration.provider)
         guard !responseBatches.isEmpty else { return [] }
         let index = min(nextResponseIndex, responseBatches.count - 1)
         nextResponseIndex += 1
@@ -5547,6 +5857,10 @@ private actor SequencedTavilySearcher: TavilySearching {
 
     func searchedQueries() -> [String] {
         queries
+    }
+
+    func searchedProviders() -> [SearchProviderOption] {
+        providers
     }
 }
 

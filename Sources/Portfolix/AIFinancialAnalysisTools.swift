@@ -19,6 +19,10 @@ struct AIEvidenceItem: Codable, Equatable, Sendable {
     let source: String
     let confidence: String
     let sourceURL: String?
+    var sourceExcerpt: String? = nil
+    var sourcePublishedDate: String? = nil
+    var sourceQuery: String? = nil
+    var sourceCallID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -32,6 +36,10 @@ struct AIEvidenceItem: Codable, Equatable, Sendable {
         case source
         case confidence
         case sourceURL = "source_url"
+        case sourceExcerpt = "source_excerpt"
+        case sourcePublishedDate = "source_published_date"
+        case sourceQuery = "source_query"
+        case sourceCallID = "source_call_id"
     }
 }
 
@@ -346,7 +354,11 @@ enum AIEvidenceLedgerBuilder {
                     asOf: ISO8601DateFormatter().string(from: result.searchedAt),
                     source: source.domain,
                     confidence: source.credibility.rawValue,
-                    sourceURL: source.url
+                    sourceURL: source.url,
+                    sourceExcerpt: source.snippet.isEmpty ? nil : String(source.snippet.prefix(600)),
+                    sourcePublishedDate: source.publishedDate,
+                    sourceQuery: result.query,
+                    sourceCallID: result.callID
                 )
             }
         }
@@ -374,7 +386,11 @@ enum AIEvidenceLedgerBuilder {
                     asOf: ISO8601DateFormatter().string(from: result.searchedAt),
                     source: source.domain,
                     confidence: source.credibility.rawValue,
-                    sourceURL: source.url
+                    sourceURL: source.url,
+                    sourceExcerpt: source.snippet.isEmpty ? nil : String(source.snippet.prefix(600)),
+                    sourcePublishedDate: source.publishedDate,
+                    sourceQuery: result.query,
+                    sourceCallID: result.callID
                 )
             }
         }

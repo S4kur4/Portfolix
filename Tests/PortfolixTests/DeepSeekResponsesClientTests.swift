@@ -75,7 +75,33 @@ struct DeepSeekResponsesClientTests {
     }
 
     @Test
-    func connectedRequestUsesExplicitSearchAndReasoningConfiguration() throws {
+    func parsesUsageAndResponseIdentityDiagnostics() throws {
+        let payload = #"""
+        {
+          "id":"response_usage_1",
+          "model":"deepseek-flash",
+          "usage":{
+            "input_tokens":120,
+            "input_tokens_details":{"cached_tokens":24},
+            "output_tokens":48,
+            "output_tokens_details":{"reasoning_tokens":12}
+          },
+          "output":[{"type":"message","content":[{"type":"output_text","text":"{\"status\":\"ok\"}"}]}]
+        }
+        """#
+
+        let result = try DeepSeekResponsesClient.parseResponseObject(Data(payload.utf8))
+
+        #expect(result.diagnostics.inputTokenCount == 120)
+        #expect(result.diagnostics.cachedInputTokenCount == 24)
+        #expect(result.diagnostics.outputTokenCount == 48)
+        #expect(result.diagnostics.reasoningTokenCount == 12)
+        #expect(result.diagnostics.responseID == "response_usage_1")
+        #expect(result.diagnostics.responseModel == "deepseek-flash")
+    }
+
+    @Test
+    func requestNeverIncludesRetiredBuiltInSearchParameters() throws {
         let request = try DeepSeekResponsesClient().makeRequest(
             configuration: AIProviderConfiguration.default,
             apiKey: "test-key",
@@ -87,15 +113,9 @@ struct DeepSeekResponsesClientTests {
         )
         let body = try #require(request.httpBody)
         let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        let reasoning = try #require(object["reasoning"] as? [String: String])
-        let toolChoice = try #require(object["tool_choice"] as? [String: String])
-        let tools = try #require(object["tools"] as? [[String: String]])
-
         #expect(object["model"] as? String == "deepseek-flash")
-        #expect(object["temperature"] == nil)
-        #expect(reasoning["effort"] == "high")
-        #expect(toolChoice["type"] == "web_search")
-        #expect(tools == [["type": "web_search"]])
+        #expect(object["tools"] == nil)
+        #expect(object["tool_choice"] == nil)
     }
 
     @Test
@@ -120,30 +140,28 @@ struct DeepSeekResponsesClientTests {
     }
 
     @Test
-    func connectedResponseMustContainEvidenceOfAnActualSearch() throws {
-        let noSearch = LLMCompletionResult(content: #"{"answer":"cached knowledge"}"#)
-
-        #expect(throws: LLMClientError.webSearchUnavailable("deepseek-flash")) {
-            try DeepSeekResponsesClient.validatedSearchResult(
-                noSearch,
-                webSearchEnabled: true,
-                model: "deepseek-flash"
-            )
-        }
-
-        let searched = LLMCompletionResult(
-            content: #"{"answer":"current"}"#,
-            webSearchCallCount: 1
+    func requestSupportsTaskSpecificReasoningEffort() throws {
+        let request = try DeepSeekResponsesClient().makeRequest(
+            configuration: AIProviderConfiguration.default,
+            apiKey: "test-key",
+            instructions: "Return JSON.",
+            input: "Repair this object.",
+            expectsJSON: true,
+            webSearchEnabled: false,
+            stream: true,
+            reasoningEffort: .low
         )
-        #expect(try DeepSeekResponsesClient.validatedSearchResult(
-            searched,
-            webSearchEnabled: true,
-            model: "deepseek-v4-pro"
-        ) == searched)
+        let body = try #require(request.httpBody)
+        let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let reasoning = try #require(object["reasoning"] as? [String: String])
+
+        #expect(reasoning["effort"] == "low")
+        #expect(object["tools"] == nil)
+        #expect(object["tool_choice"] == nil)
     }
 
     @Test
-    func liveConnectionJSONAndBuiltInSearchUsingEnvironmentCredential() async throws {
+    func liveConnectionAndJSONUsingEnvironmentCredential() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PORTFOLIX_RUN_LIVE_DEEPSEEK_TEST"] == "1" else { return }
         let apiKey = try #require(environment["PORTFOLIX_DEEPSEEK_API_KEY"])
@@ -158,7 +176,7 @@ struct DeepSeekResponsesClientTests {
         )
         let client = DeepSeekResponsesClient.shared
 
-        let liveModels = try await client.listModels(configuration: configuration, apiKey: apiKey)
+        _ = try await client.listModels(configuration: configuration, apiKey: apiKey)
 
         try await client.validateConnection(configuration: configuration, apiKey: apiKey)
 
@@ -176,28 +194,6 @@ struct DeepSeekResponsesClientTests {
         #expect(basicObject["status"] == "ok")
         #expect(basic.webSearchCallCount == 0)
 
-        let connectedModel = try #require(LLMProviderOption.preferredConnectedModel(in: liveModels))
-        let connectedConfiguration = AIProviderConfiguration(
-            provider: configuration.provider,
-            baseURL: configuration.baseURL,
-            model: connectedModel,
-            isEnabled: configuration.isEnabled,
-            requestTimeout: configuration.requestTimeout,
-            maxOutputTokens: configuration.maxOutputTokens
-        )
-        let connected = try await client.completeJSONResult(
-            systemPrompt: "Use web search. Return only a valid JSON object with answer and searched fields.",
-            userPrompt: "Search the official DeepSeek documentation and identify the current production text model IDs. Set searched to true.",
-            configuration: connectedConfiguration,
-            apiKey: apiKey,
-            webSearchEnabled: true,
-            webSearchProgress: nil
-        )
-        let connectedObject = try #require(
-            try JSONSerialization.jsonObject(with: Data(connected.content.utf8)) as? [String: Any]
-        )
-        #expect(connectedObject["searched"] as? Bool == true)
-        #expect(connected.webSearchCallCount > 0)
-        #expect(!connected.webSearchQueries.isEmpty)
+        #expect(LLMProviderOption.preferredConnectedModel(in: LLMProviderOption.deepSeekModels) == nil)
     }
 }

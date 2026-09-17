@@ -21,7 +21,7 @@ enum AIAnalysisAgentError: LocalizedError, Equatable {
         case .missingLLMKey:
             "请先配置 DeepSeek API Key"
         case .missingSearchKey:
-            "请先配置 DeepSeek API Key"
+            "联网增强已开启，请至少配置并启用一个有效的搜索 API"
         case .invalidReport:
             "模型返回内容未通过结构校验"
         case .timedOut:
@@ -399,6 +399,15 @@ struct AIAnalysisAgent: Sendable {
         guard let llmKey = try credentialStore.read(kind: .llm), !llmKey.isEmpty else {
             throw AIAnalysisAgentError.missingLLMKey
         }
+        var searchKeys: [SearchProviderOption: String] = [:]
+        for provider in searchConfiguration.orderedEnabledProviders {
+            if let key = try provider.usableAPIKey(from: credentialStore) {
+                searchKeys[provider] = key
+            }
+        }
+        if searchConfiguration.isEnabled, searchKeys.isEmpty {
+            throw AIAnalysisAgentError.missingSearchKey
+        }
 
         let normalizedQuestion = try AIFollowUpGuardrail.normalizedQuestion(question)
         let responseLanguage = AIResponseLanguage.detecting(from: normalizedQuestion)
@@ -422,17 +431,73 @@ struct AIAnalysisAgent: Sendable {
             ]
         )
         let portfolioContextJSON = Self.followUpPortfolioContextJSON(portfolioContext)
-        var searchMode = searchConfiguration.isEnabled ? "connected_search_available" : "disabled"
+        let usesConnectedSearch = searchConfiguration.isEnabled && !searchKeys.isEmpty
+        var searchMode = usesConnectedSearch ? "connected_search_available" : "disabled"
         var toolCallCount = 0
         var toolResults: [AIWebSearchToolResult] = []
         var followUpPlans: [AIWebSearchToolPlan] = []
         var loopTurnCount = 0
         await progress?(.analyzing)
 
-        await progress?(.composing)
         let followUpConfiguration = llmConfiguration
             .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
             .withMaxOutputTokens(LLMOutputTokenPolicy.followUp)
+        if usesConnectedSearch {
+            await progress?(.replanning(turn: 1, total: 1))
+            do {
+                let plan = try await makeFollowUpToolPlan(
+                    question: normalizedQuestion,
+                    reportJSON: reportJSON,
+                    conversationHistoryJSON: conversationHistoryJSON,
+                    portfolioContextJSON: portfolioContextJSON,
+                    loopTurn: 1,
+                    maxLoopTurns: 1,
+                    positions: positions,
+                    enabledProviders: searchConfiguration.orderedEnabledProviders,
+                    configuration: followUpConfiguration,
+                    apiKey: llmKey
+                )
+                followUpPlans = [plan]
+                toolResults = await executeToolCalls(
+                    plan,
+                    positions: positions,
+                    configuration: searchConfiguration,
+                    apiKeys: searchKeys,
+                    progress: nil,
+                    followUpProgress: progress
+                )
+            } catch {
+                if Self.followUpRequiresSearch(normalizedQuestion),
+                   let fallbackPlan = try? Self.fallbackFollowUpToolPlan(
+                       question: normalizedQuestion,
+                       positions: positions,
+                       chatHistory: chatHistory
+                   ) {
+                    followUpPlans = [fallbackPlan]
+                    toolResults = await executeToolCalls(
+                        fallbackPlan,
+                        positions: positions,
+                        configuration: searchConfiguration,
+                        apiKeys: searchKeys,
+                        progress: nil,
+                        followUpProgress: progress
+                    )
+                }
+            }
+            toolCallCount = followUpPlans.reduce(0) { $0 + $1.toolCalls.count }
+            loopTurnCount = followUpPlans.isEmpty ? 0 : 1
+            searchMode = toolCallCount == 0
+                ? "connected_no_search_needed"
+                : "connected_search_completed"
+            if toolCallCount > 0 {
+                await progress?(.evaluatingEvidence(turn: 1, total: 1))
+            }
+        }
+        let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
+        let citationCatalog = AIMessageCitationResolver.catalog(from: toolResults)
+        let citationCatalogJSON = String(data: try Self.encoder.encode(citationCatalog), encoding: .utf8) ?? "[]"
+        let toolPlanJSON = String(data: try Self.encoder.encode(followUpPlans), encoding: .utf8) ?? "[]"
+        await progress?(.composing)
         let completionStartedAt = Date()
         AIAgentRuntimeDiagnostics.event(
             "follow_up_completion_started",
@@ -451,12 +516,14 @@ struct AIAnalysisAgent: Sendable {
                 artifactSummary: artifactSummary,
                 portfolioContextJSON: portfolioContextJSON,
                 searchMode: searchMode,
-                toolResultsJSON: "[]",
+                toolResultsJSON: toolResultsJSON,
+                citationCatalogJSON: citationCatalogJSON,
                 responseLanguage: responseLanguage
             ),
             configuration: followUpConfiguration,
             apiKey: llmKey,
-            webSearchEnabled: searchConfiguration.isEnabled,
+            webSearchEnabled: false,
+            reasoningEffort: .low,
             webSearchProgress: { event in
                 switch event {
                 case .reasoningStarted:
@@ -473,29 +540,6 @@ struct AIAnalysisAgent: Sendable {
             }
         )
         let raw = completion.content
-        toolCallCount = max(completion.webSearchCallCount, completion.citations.isEmpty ? 0 : 1)
-        loopTurnCount = searchConfiguration.isEnabled ? 1 : 0
-        toolResults = Self.nativeWebSearchToolResults(
-            from: completion,
-            fallbackQuery: normalizedQuestion,
-            positionRefs: []
-        )
-        if searchConfiguration.isEnabled {
-            searchMode = toolCallCount == 0
-                ? "connected_no_search_needed"
-                : "connected_search_completed"
-        }
-        if toolCallCount > 0 {
-            let queries = completion.webSearchQueries.isEmpty
-                ? [normalizedQuestion]
-                : completion.webSearchQueries
-            let calls = queries.enumerated().map { index, query in
-                AIWebSearchToolCall(id: "deepseek_web_search_\(index + 1)", query: query, positionRefs: [])
-            }
-            followUpPlans = [AIWebSearchToolPlan(toolCalls: calls, status: "model_managed")]
-        }
-        let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
-        let toolPlanJSON = String(data: try Self.encoder.encode(followUpPlans), encoding: .utf8) ?? "[]"
         AIAgentRuntimeDiagnostics.event(
             "follow_up_completion_finished",
             runID: runID,
@@ -535,6 +579,7 @@ struct AIAnalysisAgent: Sendable {
             portfolioContextJSON: portfolioContextJSON,
             searchMode: searchMode,
             toolResultsJSON: toolResultsJSON,
+            citationCatalogJSON: citationCatalogJSON,
             responseLanguage: responseLanguage,
             configuration: followUpConfiguration,
             apiKey: llmKey,
@@ -544,7 +589,9 @@ struct AIAnalysisAgent: Sendable {
             usedExpansion = true
         }
         let payload = validated.payload
-        let answer = AIUserFacingTextSanitizer.sanitize(validated.answer, language: responseLanguage)
+        let sanitizedAnswer = AIUserFacingTextSanitizer.sanitize(validated.answer, language: responseLanguage)
+        let citedAnswer = AIMessageCitationResolver.resolve(sanitizedAnswer, catalog: citationCatalog)
+        let answer = citedAnswer.text
         let guardrailResultJSON = String(
             data: try Self.encoder.encode(
                 AIReportGuardrailResult(
@@ -560,6 +607,7 @@ struct AIAnalysisAgent: Sendable {
         ) ?? #"{"status":"passed"}"#
         let result = AIAnalysisFollowUpResult(
             answer: answer,
+            citations: citedAnswer.citations,
             guardrailResultJSON: guardrailResultJSON,
             searchMode: searchMode,
             toolCallCount: toolCallCount,
@@ -604,6 +652,7 @@ struct AIAnalysisAgent: Sendable {
             configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
             apiKey: apiKey,
             webSearchEnabled: false,
+            reasoningEffort: .low,
             webSearchProgress: { event in
                 switch event {
                 case .reasoningStarted:
@@ -633,6 +682,7 @@ struct AIAnalysisAgent: Sendable {
         portfolioContextJSON: String,
         searchMode: String,
         toolResultsJSON: String,
+        citationCatalogJSON: String,
         responseLanguage: AIResponseLanguage,
         configuration: AIProviderConfiguration,
         apiKey: String,
@@ -650,11 +700,13 @@ struct AIAnalysisAgent: Sendable {
                 portfolioContextJSON: portfolioContextJSON,
                 searchMode: searchMode,
                 toolResultsJSON: toolResultsJSON,
+                citationCatalogJSON: citationCatalogJSON,
                 responseLanguage: responseLanguage
             ),
             configuration: configuration,
             apiKey: apiKey,
             webSearchEnabled: false,
+            reasoningEffort: .low,
             webSearchProgress: { event in
                 switch event {
                 case .reasoningStarted:
@@ -697,6 +749,7 @@ struct AIAnalysisAgent: Sendable {
         loopTurn: Int = 1,
         maxLoopTurns: Int = 1,
         positions: [Position],
+        enabledProviders: [SearchProviderOption],
         configuration: AIProviderConfiguration,
         apiKey: String
     ) async throws -> AIWebSearchToolPlan {
@@ -709,6 +762,7 @@ struct AIAnalysisAgent: Sendable {
             )
         }
         let positionsJSON = String(data: try Self.encoder.encode(identities), encoding: .utf8) ?? "[]"
+        let enabledProvidersJSON = String(data: try Self.encoder.encode(enabledProviders), encoding: .utf8) ?? "[]"
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.followUpToolPlanningSystem,
             userPrompt: AIAnalysisPromptText.followUpToolPlanningUser(
@@ -718,6 +772,7 @@ struct AIAnalysisAgent: Sendable {
                 conversationHistoryJSON: conversationHistoryJSON,
                 portfolioContextJSON: portfolioContextJSON,
                 previousToolResultsJSON: previousToolResultsJSON,
+                enabledSearchProvidersJSON: enabledProvidersJSON,
                 loopTurn: loopTurn,
                 maxLoopTurns: maxLoopTurns
             ),
@@ -732,7 +787,8 @@ struct AIAnalysisAgent: Sendable {
             allowedRefs: Set(identities.map(\.positionRef)),
             allowedSearchTerms: Self.allowedSearchTerms(positions: positions),
             allowsGeneralQueries: true,
-            contextQuestion: question
+            contextQuestion: question,
+            allowedProviders: Set(enabledProviders)
         )
     }
 
@@ -807,6 +863,24 @@ struct AIAnalysisAgent: Sendable {
         if let value = diagnostics.totalMilliseconds {
             metadata["stream_total_ms"] = String(value)
         }
+        if let value = diagnostics.inputTokenCount {
+            metadata["input_tokens"] = String(value)
+        }
+        if let value = diagnostics.cachedInputTokenCount {
+            metadata["cached_input_tokens"] = String(value)
+        }
+        if let value = diagnostics.outputTokenCount {
+            metadata["output_tokens"] = String(value)
+        }
+        if let value = diagnostics.reasoningTokenCount {
+            metadata["reasoning_tokens"] = String(value)
+        }
+        if let value = diagnostics.responseID {
+            metadata["response_id"] = value
+        }
+        if let value = diagnostics.responseModel {
+            metadata["response_model"] = value
+        }
         return metadata
     }
 
@@ -830,6 +904,7 @@ struct AIAnalysisAgent: Sendable {
             "最新", "近期", "最近", "今天", "昨日", "昨晚",
             "公告", "新闻", "媒体", "报道", "监管", "政策", "财报",
             "市场表现", "行情", "走势", "净值", "涨跌", "上涨", "下跌", "回调",
+            "价格", "现价", "实时报价",
             "search", "latest", "recent", "today", "news", "announcement", "market performance",
             "price", "quote", "performance",
         ]
@@ -884,9 +959,18 @@ struct AIAnalysisAgent: Sendable {
         let asksForGeneralMarket = [
             "美股", "美国股市", "美股市场", "美股行情", "美股新闻",
             "纳斯达克", "纳指", "标普", "标普500", "道琼斯", "道指",
+            "黄金", "金价", "现货金", "原油", "汇率", "外汇", "债券", "利率", "大宗商品",
             "usstock", "u.s.stock", "usmarket", "stockmarket", "nasdaq", "s&p500", "sp500", "dowjones",
+            "gold", "xau", "silver", "oil", "forex", "exchange rate", "bond", "commodity",
         ].contains { normalized.contains(normalizedIdentityText($0)) }
         guard asksForGeneralMarket else { return nil }
+
+        let asksForGold = ["黄金", "金价", "现货金", "gold", "xau"].contains {
+            normalized.contains(normalizedIdentityText($0))
+        }
+        if asksForGold {
+            return "最新 现货黄金 XAU USD 价格 行情 权威财经来源"
+        }
 
         let asksForLastSession = ["昨晚", "昨日", "昨天", "lastnight", "yesterday"].contains {
             normalized.contains(normalizedIdentityText($0))
@@ -1014,13 +1098,19 @@ struct AIAnalysisAgent: Sendable {
             throw AIAnalysisAgentError.missingLLMKey
         }
 
+        var profileSearchKeys: [SearchProviderOption: String] = [:]
+        for provider in searchConfiguration.orderedEnabledProviders {
+            if let key = try provider.usableAPIKey(from: credentialStore) {
+                profileSearchKeys[provider] = key
+            }
+        }
         let research = await InvestmentProfileHarness(llm: llm, search: search).enrich(
             positions: positions,
             cachedExposures: cachedExposures,
             llmConfiguration: llmConfiguration,
             searchConfiguration: searchConfiguration,
             llmKey: llmKey,
-            searchKey: nil,
+            searchKeys: profileSearchKeys,
             now: generatedAt
         )
         let scoreResult = InvestmentProfileEngine.score(
@@ -1052,7 +1142,9 @@ struct AIAnalysisAgent: Sendable {
             data: try Self.inputEncoder.encode(calibrationContext),
             encoding: .utf8
         ) ?? "{}"
-        let evidenceSourceCount = Set(research.exposures.flatMap(\.evidence).compactMap(\.url)).count
+        let evidenceSourceCount = Set(
+            research.exposures.flatMap { $0.evidence }.compactMap { $0.url }
+        ).count
         do {
             let raw = try await llm.completeJSON(
                 systemPrompt: AIAnalysisPromptText.investmentProfileSystem,
@@ -1115,18 +1207,21 @@ struct AIAnalysisAgent: Sendable {
         previousTurns: [AIAgentLoopTurn] = [],
         loopTurn: Int = 1,
         maxLoopTurns: Int = 1,
+        enabledProviders: [SearchProviderOption],
         configuration: AIProviderConfiguration,
         apiKey: String
     ) async throws -> AIWebSearchToolPlan {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
         let evidenceLedgerJSON = String(data: try Self.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
         let previousTurnsJSON = String(data: try Self.encoder.encode(previousTurns), encoding: .utf8) ?? "[]"
+        let enabledProvidersJSON = String(data: try Self.encoder.encode(enabledProviders), encoding: .utf8) ?? "[]"
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.toolPlanningSystem,
             userPrompt: AIAnalysisPromptText.toolPlanningUser(
                 inputJSON: inputJSON,
                 evidenceLedgerJSON: evidenceLedgerJSON,
                 previousTurnsJSON: previousTurnsJSON,
+                enabledSearchProvidersJSON: enabledProvidersJSON,
                 loopTurn: loopTurn,
                 maxLoopTurns: maxLoopTurns
             ),
@@ -1145,7 +1240,8 @@ struct AIAnalysisAgent: Sendable {
         return try Self.validatedToolPlan(
             decoded,
             allowedRefs: Set(input.metrics.positions.map(\.positionRef)),
-            allowedSearchTerms: searchTermsByRef
+            allowedSearchTerms: searchTermsByRef,
+            allowedProviders: Set(enabledProviders)
         )
     }
 
@@ -1153,7 +1249,7 @@ struct AIAnalysisAgent: Sendable {
         _ plan: AIWebSearchToolPlan,
         positions: [Position],
         configuration: SearchConfiguration,
-        apiKey: String,
+        apiKeys: [SearchProviderOption: String],
         progress: AIAnalysisProgressHandler?,
         followUpProgress: AIFollowUpProgressHandler? = nil
     ) async -> [AIWebSearchToolResult] {
@@ -1185,7 +1281,7 @@ struct AIAnalysisAgent: Sendable {
                         entry.element,
                         positionsByRef: positionsByRef,
                         configuration: configuration,
-                        apiKey: apiKey
+                        apiKeys: apiKeys
                     )
                     return (entry.offset, result)
                 }
@@ -1210,39 +1306,55 @@ struct AIAnalysisAgent: Sendable {
         _ call: AIWebSearchToolCall,
         positionsByRef: [String: Position],
         configuration: SearchConfiguration,
-        apiKey: String
+        apiKeys: [SearchProviderOption: String]
     ) async -> AIWebSearchToolResult {
         let referencedPositions = call.positionRefs.compactMap { positionsByRef[$0] }
-        do {
-            let sources = try await search.search(
-                query: call.query,
-                positions: referencedPositions,
-                configuration: configuration,
-                apiKey: apiKey
-            )
-            let emptySearchLimitation = call.positionRefs.isEmpty
-                ? "搜索未返回可用的公开 HTTPS 来源"
-                : "搜索未返回与指定持仓直接相关的可用 HTTPS 来源"
-            return AIWebSearchToolResult(
-                callID: call.id,
-                query: call.query,
-                positionRefs: call.positionRefs,
-                searchedAt: .now,
-                status: sources.isEmpty ? "empty" : "ok",
-                sources: sources,
-                limitations: sources.isEmpty ? [emptySearchLimitation] : []
-            )
-        } catch {
-            return AIWebSearchToolResult(
-                callID: call.id,
-                query: call.query,
-                positionRefs: call.positionRefs,
-                searchedAt: .now,
-                status: "failed",
-                sources: [],
-                limitations: [String(error.localizedDescription.prefix(180))]
-            )
+        let providers = SearchProviderRouter.orderedProviders(
+            requested: call.provider,
+            query: call.query,
+            positions: referencedPositions,
+            configuration: configuration
+        ).filter { apiKeys[$0] != nil }
+        var failures: [String] = []
+        for provider in providers {
+            guard let apiKey = apiKeys[provider] else { continue }
+            do {
+                let sources = try await search.search(
+                    query: call.query,
+                    positions: referencedPositions,
+                    configuration: configuration.selecting(provider),
+                    apiKey: apiKey
+                )
+                if !sources.isEmpty {
+                    return AIWebSearchToolResult(
+                        callID: call.id,
+                        query: call.query,
+                        positionRefs: call.positionRefs,
+                        searchedAt: .now,
+                        status: "ok",
+                        sources: sources,
+                        limitations: failures,
+                        provider: provider
+                    )
+                }
+                failures.append("\(provider.rawValue) 未返回可用来源")
+            } catch {
+                failures.append("\(provider.rawValue)：\(String(error.localizedDescription.prefix(140)))")
+            }
         }
+        let emptySearchLimitation = call.positionRefs.isEmpty
+            ? "搜索未返回可用的公开 HTTPS 来源"
+            : "搜索未返回与指定持仓直接相关的可用 HTTPS 来源"
+        return AIWebSearchToolResult(
+            callID: call.id,
+            query: call.query,
+            positionRefs: call.positionRefs,
+            searchedAt: .now,
+            status: failures.isEmpty ? "empty" : "failed",
+            sources: [],
+            limitations: failures.isEmpty ? [emptySearchLimitation] : failures,
+            provider: call.provider
+        )
     }
 
     fileprivate func makeReportPayload(
@@ -1274,6 +1386,7 @@ struct AIAnalysisAgent: Sendable {
                 configuration: reportConfiguration,
                 apiKey: apiKey,
                 webSearchEnabled: webSearchEnabled,
+                reasoningEffort: .high,
                 webSearchProgress: { event in
                     switch event {
                     case .reasoningStarted:
@@ -1296,13 +1409,15 @@ struct AIAnalysisAgent: Sendable {
             throw AIAnalysisPipelineError(stage: reportStage, underlying: error)
         }
         let raw = completion.content
-        let nativeToolResults = Self.nativeWebSearchToolResults(
-            from: completion,
-            fallbackQuery: input.outputLanguage == .english
-                ? "Portfolio market context"
-                : "投资组合市场背景",
-            positionRefs: input.metrics.positions.map(\.positionRef)
-        )
+        let nativeToolResults = webSearchEnabled
+            ? Self.nativeWebSearchToolResults(
+                from: completion,
+                fallbackQuery: input.outputLanguage == .english
+                    ? "Portfolio market context"
+                    : "投资组合市场背景",
+                positionRefs: input.metrics.positions.map(\.positionRef)
+            )
+            : []
         let effectiveToolResults = toolResults + nativeToolResults
         let effectiveEvidenceLedger = AIEvidenceLedgerBuilder.adding(
             webResults: nativeToolResults,
@@ -1416,6 +1531,7 @@ struct AIAnalysisAgent: Sendable {
             configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
             apiKey: apiKey,
             webSearchEnabled: false,
+            reasoningEffort: .low,
             webSearchProgress: { event in
                 switch event {
                 case .reasoningStarted:
@@ -2001,7 +2117,8 @@ struct AIAnalysisAgent: Sendable {
         allowedRefs: Set<String>,
         allowedSearchTerms: [String: Set<String>] = [:],
         allowsGeneralQueries: Bool = false,
-        contextQuestion: String? = nil
+        contextQuestion: String? = nil,
+        allowedProviders: Set<SearchProviderOption> = Set(SearchProviderOption.allCases)
     ) throws -> AIWebSearchToolPlan {
         guard plan.toolCalls.count <= 3 else { throw AIAnalysisAgentError.invalidReport }
         let prohibitedQueryFragments = [
@@ -2020,6 +2137,8 @@ struct AIAnalysisAgent: Sendable {
                 .joined(separator: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let refs = Array(NSOrderedSet(array: call.positionRefs).compactMap { $0 as? String })
+            let provider = call.provider
+                ?? SearchProviderOption.allCases.first(where: allowedProviders.contains)
             let isGeneralQuery = refs.isEmpty && allowsGeneralQueries
             if isGeneralQuery {
                 query = Self.optimizedGeneralMarketQuery(query, contextQuestion: contextQuestion)
@@ -2040,7 +2159,8 @@ struct AIAnalysisAgent: Sendable {
                 isGeneralQuery || queryNumbers.isSubset(of: identityNumbers),
                 !isGeneralQuery || Self.isAcceptableGeneralMarketQuery(query),
                 prohibitedQueryFragments.allSatisfy({ !query.localizedCaseInsensitiveContains($0) }),
-                seenQueries.insert(query.lowercased()).inserted
+                provider.map(allowedProviders.contains) ?? false,
+                seenQueries.insert("\(provider?.rawValue ?? "")|\(query.lowercased())").inserted
             else {
                 throw AIAnalysisAgentError.invalidReport
             }
@@ -2048,7 +2168,8 @@ struct AIAnalysisAgent: Sendable {
                 AIWebSearchToolCall(
                     id: "web_search_\(index + 1)",
                     query: query,
-                    positionRefs: refs
+                    positionRefs: refs,
+                    provider: provider
                 )
             )
         }
@@ -2085,9 +2206,11 @@ struct AIAnalysisAgent: Sendable {
         let normalized = normalizedIdentityText(query)
         let marketHints = [
             "美股", "美国股市", "市场", "行情", "新闻", "指数", "纳斯达克", "纳指", "标普", "道琼斯",
-            "股市", "宏观", "政策", "监管", "财报", "行业", "科技股",
+            "股市", "宏观", "政策", "监管", "财报", "行业", "科技股", "价格", "现价",
+            "黄金", "金价", "现货金", "原油", "汇率", "外汇", "债券", "利率", "大宗商品",
             "market", "stock", "stocks", "index", "indices", "nasdaq", "sp500", "s&p500", "dowjones",
-            "earnings", "fed", "inflation", "rates", "sector", "technology",
+            "earnings", "fed", "inflation", "rates", "sector", "technology", "price", "quote",
+            "gold", "xau", "silver", "oil", "forex", "currency", "bond", "commodity",
         ]
         return marketHints.contains { normalized.contains(normalizedIdentityText($0)) }
     }
@@ -2446,6 +2569,7 @@ struct AIAnalysisHarness {
 
         let localToolsStartedAt = Date()
         let localToolResults = AILocalFinancialToolExecutor.baselineResults(input: input)
+        let localToolsFinishedAt = Date()
         await traceRecorder.record(
             stageID: "executing_local_financial_tools",
             kind: "tool",
@@ -2457,42 +2581,140 @@ struct AIAnalysisHarness {
             ]
         )
 
-        let loopStartedAt = Date()
+        let loopStartedAt = localToolsStartedAt
         let loopID = UUID()
         let loopBudget = AIAgentExecutionBudget.production
+        guard localToolResults.count <= loopBudget.maxToolCalls else {
+            throw AIAnalysisPipelineError(
+                stage: .buildingInput,
+                underlying: AIAnalysisAgentError.invalidReport
+            )
+        }
+        var workflowSteps = [
+            AIAgentWorkflowStep(
+                sequence: 1,
+                phase: "execute_local_tools",
+                startedAt: localToolsStartedAt,
+                finishedAt: localToolsFinishedAt,
+                outcome: "passed",
+                detail: localToolResults.map(\.tool.rawValue).joined(separator: ","),
+                evidenceItemCount: localToolResults.flatMap(\.evidence).count
+            ),
+        ]
         var toolResults: [AIWebSearchToolResult] = []
-        var stopReason = preflight.usesConnectedSearch
-            ? "deepseek_built_in_search_available"
-            : "connected_search_disabled"
+        var stopReason = preflight.usesConnectedSearch ? "search_not_requested" : "connected_search_disabled"
         var evidenceLedger = AIEvidenceLedgerBuilder.build(
             localResults: localToolResults,
             webResults: []
-        )
-        let delegatedAt = Date()
-        await traceRecorder.record(
-            stageID: "planning_tool_calls",
-            kind: "model",
-            startedAt: delegatedAt,
-            outcome: preflight.usesConnectedSearch ? "delegated" : "skipped",
-            metadata: [
-                "reason": stopReason,
-                "tool_provider": preflight.usesConnectedSearch ? "deepseek_responses" : "none",
-            ]
         )
         var toolPlan = AIWebSearchToolPlan(
             toolCalls: [],
             status: stopReason,
             limitations: []
         )
+        var loopTurns: [AIAgentLoopTurn] = []
+        let planningStartedAt = Date()
+        if preflight.usesConnectedSearch {
+            await request.progress?(.planningToolCalls)
+            do {
+                toolPlan = try await agent.makeToolPlan(
+                    input: input,
+                    evidenceLedger: evidenceLedger,
+                    loopTurn: 1,
+                    maxLoopTurns: 1,
+                    enabledProviders: request.searchConfiguration.orderedEnabledProviders,
+                    configuration: request.llmConfiguration
+                        .withRequestTimeout(loopBudget.planningSeconds)
+                        .withMaxOutputTokens(LLMOutputTokenPolicy.standard),
+                    apiKey: preflight.llmKey
+                )
+                let searchStartedAt = Date()
+                toolResults = await agent.executeToolCalls(
+                    toolPlan,
+                    positions: request.positions,
+                    configuration: request.searchConfiguration,
+                    apiKeys: preflight.searchKeys,
+                    progress: request.progress
+                )
+                evidenceLedger = AIEvidenceLedgerBuilder.build(
+                    localResults: localToolResults,
+                    webResults: toolResults
+                )
+                stopReason = toolPlan.toolCalls.isEmpty ? "model_search_not_needed" : "external_search_completed"
+                loopTurns.append(
+                    AIAgentLoopTurn(
+                        turn: 1,
+                        startedAt: planningStartedAt,
+                        finishedAt: Date(),
+                        plan: toolPlan,
+                        toolResults: toolResults,
+                        evidenceItemCount: evidenceLedger.items.count,
+                        decision: stopReason
+                    )
+                )
+                workflowSteps.append(
+                    AIAgentWorkflowStep(
+                        sequence: workflowSteps.count + 1,
+                        phase: "external_search",
+                        startedAt: searchStartedAt,
+                        finishedAt: Date(),
+                        outcome: toolResults.contains(where: { $0.status == "ok" }) ? "passed" : "completed_without_sources",
+                        detail: toolResults.compactMap(\.provider?.rawValue).joined(separator: ","),
+                        evidenceItemCount: toolResults.flatMap(\.sources).count
+                    )
+                )
+                if !toolPlan.toolCalls.isEmpty {
+                    await request.progress?(
+                        .webSearchResultsReady(
+                            callCount: toolPlan.toolCalls.count,
+                            sourceCount: toolResults.flatMap(\.sources).count
+                        )
+                    )
+                }
+                await traceRecorder.record(
+                    stageID: "planning_tool_calls",
+                    kind: "model",
+                    startedAt: planningStartedAt,
+                    outcome: "passed",
+                    metadata: [
+                        "tool_call_count": String(toolPlan.toolCalls.count),
+                        "enabled_providers": request.searchConfiguration.orderedEnabledProviders.map(\.rawValue).joined(separator: ","),
+                    ]
+                )
+            } catch {
+                stopReason = "search_planning_failed"
+                toolPlan = AIWebSearchToolPlan(
+                    toolCalls: [],
+                    status: stopReason,
+                    limitations: [String(error.localizedDescription.prefix(180))]
+                )
+                await traceRecorder.record(
+                    stageID: "planning_tool_calls",
+                    kind: "model",
+                    startedAt: planningStartedAt,
+                    outcome: "failed_open",
+                    metadata: ["error_type": String(describing: type(of: error))]
+                )
+            }
+        } else {
+            await traceRecorder.record(
+                stageID: "planning_tool_calls",
+                kind: "model",
+                startedAt: planningStartedAt,
+                outcome: "skipped",
+                metadata: ["reason": stopReason]
+            )
+        }
         var loopState = AIAgentLoopState(
-            schemaVersion: "agent-loop-state.v1",
+            schemaVersion: "agent-workflow-state.v2",
             id: loopID,
             goal: "generate_portfolio_analysis_report",
             startedAt: loopStartedAt,
             finishedAt: Date(),
             maxTurns: loopBudget.maxLoopTurns,
             maxToolCalls: loopBudget.maxToolCalls,
-            turns: [],
+            turns: loopTurns,
+            steps: workflowSteps,
             stopReason: stopReason
         )
         var searchedAt = toolResults.map(\.searchedAt).max() ?? Date()
@@ -2517,7 +2739,7 @@ struct AIAnalysisHarness {
                 evidenceLedger: evidenceLedger,
                 configuration: request.llmConfiguration,
                 apiKey: preflight.llmKey,
-                webSearchEnabled: preflight.usesConnectedSearch,
+                webSearchEnabled: false,
                 progress: request.progress
             )
             await traceRecorder.record(
@@ -2548,38 +2770,31 @@ struct AIAnalysisHarness {
         }
         toolResults = reportPayloadResult.toolResults
         evidenceLedger = reportPayloadResult.evidenceLedger
+        let reportFinishedAt = Date()
+        workflowSteps.append(
+            AIAgentWorkflowStep(
+                sequence: workflowSteps.count + 1,
+                phase: "synthesize_report",
+                startedAt: reportStartedAt,
+                finishedAt: reportFinishedAt,
+                outcome: "passed",
+                detail: request.llmConfiguration.model,
+                evidenceItemCount: evidenceLedger.items.count
+            )
+        )
         searchedAt = toolResults.map(\.searchedAt).max() ?? Date()
-        if preflight.usesConnectedSearch {
-            let nativeSearchCallCount = max(
-                reportPayloadResult.completion.webSearchCallCount,
-                reportPayloadResult.completion.citations.isEmpty ? 0 : 1
-            )
-            stopReason = nativeSearchCallCount == 0
-                ? "deepseek_search_not_needed"
-                : (toolResults.isEmpty ? "deepseek_search_no_citations" : "deepseek_search_completed")
-            let queries = reportPayloadResult.completion.webSearchQueries.isEmpty
-                ? [input.outputLanguage == .english ? "Portfolio market context" : "投资组合市场背景"]
-                : reportPayloadResult.completion.webSearchQueries
-            let calls = queries.enumerated().map { index, query in
-                AIWebSearchToolCall(
-                    id: "deepseek_web_search_\(index + 1)",
-                    query: query,
-                    positionRefs: input.metrics.positions.map(\.positionRef)
-                )
-            }
-            toolPlan = AIWebSearchToolPlan(toolCalls: calls, status: stopReason, limitations: [])
-            loopState = AIAgentLoopState(
-                schemaVersion: "agent-loop-state.v1",
-                id: loopID,
-                goal: "generate_portfolio_analysis_report",
-                startedAt: loopStartedAt,
-                finishedAt: Date(),
-                maxTurns: loopBudget.maxLoopTurns,
-                maxToolCalls: loopBudget.maxToolCalls,
-                turns: [],
-                stopReason: stopReason
-            )
-        }
+        loopState = AIAgentLoopState(
+            schemaVersion: "agent-workflow-state.v2",
+            id: loopID,
+            goal: "generate_portfolio_analysis_report",
+            startedAt: loopStartedAt,
+            finishedAt: Date(),
+            maxTurns: loopBudget.maxLoopTurns,
+            maxToolCalls: loopBudget.maxToolCalls,
+            turns: loopTurns,
+            steps: workflowSteps,
+            stopReason: stopReason
+        )
         toolResultsJSON = String(data: try AIAnalysisAgent.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
         toolPlanJSON = String(data: try AIAnalysisAgent.encoder.encode(toolPlan), encoding: .utf8) ?? #"{"tool_calls":[]}"#
         evidenceLedgerJSON = String(data: try AIAnalysisAgent.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
@@ -2594,13 +2809,8 @@ struct AIAnalysisHarness {
             riskProfileVersion: request.storeContext.riskProfileVersion
         )
         let normalization = AIReportPolicyNormalizer.normalize(report: generatedReport, input: input)
-        let attribution = AIReportEvidenceAttributor.attribute(
-            report: normalization.report,
-            input: input,
-            ledger: evidenceLedger
-        )
-        let report = attribution.report
-        let reportProcessingNotes = normalization.notes + attribution.notes
+        let report = normalization.report
+        let reportProcessingNotes = normalization.notes
         await request.progress?(.validatingReport)
         let validationStartedAt = Date()
         let finalReportJSON: String
@@ -2631,7 +2841,7 @@ struct AIAnalysisHarness {
                 stageID: "validating_report",
                 kind: "guardrail",
                 startedAt: validationStartedAt,
-                outcome: "passed",
+                outcome: guardrailOutput.status,
                 metadata: [
                     "final_report_characters": String(finalReportJSON.count),
                     "normalization_note_count": String(reportProcessingNotes.count),
@@ -2722,15 +2932,24 @@ private struct AIPreflightNode {
         guard let llmKey = try credentialStore.read(kind: .llm), !llmKey.isEmpty else {
             throw AIAnalysisAgentError.missingLLMKey
         }
+        var searchKeys: [SearchProviderOption: String] = [:]
+        for provider in searchConfiguration.orderedEnabledProviders {
+            if let key = try provider.usableAPIKey(from: credentialStore) {
+                searchKeys[provider] = key
+            }
+        }
         if searchConfiguration.isEnabled {
+            guard !searchKeys.isEmpty else { throw AIAnalysisAgentError.missingSearchKey }
             return AIPreflightOutput(
                 llmKey: llmKey,
+                searchKeys: searchKeys,
                 usesConnectedSearch: true,
                 analysisMode: "connected_enhanced"
             )
         }
         return AIPreflightOutput(
             llmKey: llmKey,
+            searchKeys: [:],
             usesConnectedSearch: false,
             analysisMode: "basic_standard"
         )
@@ -2739,6 +2958,7 @@ private struct AIPreflightNode {
 
 private struct AIPreflightOutput {
     let llmKey: String
+    let searchKeys: [SearchProviderOption: String]
     let usesConnectedSearch: Bool
     let analysisMode: String
 }
@@ -2950,6 +3170,7 @@ enum AIUserFacingTextSanitizer {
         ("web_search", "联网搜索", "online search"),
         ("Tavily", "联网搜索服务", "online search service"),
         ("BochaAI", "联网搜索服务", "online search service"),
+        ("Parallel", "联网搜索服务", "online search service"),
         ("Harness", "分析流程", "analysis workflow"),
         ("tool_results", "联网资料", "online sources"),
         ("analysis_input", "组合数据", "portfolio data"),
@@ -2994,7 +3215,7 @@ private enum AIReportGuardrailNode {
         inputJSON: String,
         evidenceLedger: AIEvidenceLedger,
         normalizationNotes: [String]
-    ) throws -> (json: String, scorecard: AIReportQualityScorecard) {
+    ) throws -> (json: String, scorecard: AIReportQualityScorecard, status: String) {
         try AIAnalysisAgent.validate(
             report: report,
             allowedPositionRefs: Set(input.metrics.positions.map(\.positionRef)),
@@ -3006,10 +3227,11 @@ private enum AIReportGuardrailNode {
             inputJSON: inputJSON,
             ledger: evidenceLedger
         )
+        let status = AIReportQualityPolicy.status(for: scorecard)
         let json = String(
             data: try AIAnalysisAgent.encoder.encode(
                 AIReportGuardrailResult(
-                    status: "passed",
+                    status: status,
                     validator: "AIReportGuardrailNode",
                     checkedAt: ISO8601DateFormatter().string(from: .now),
                     notes: [
@@ -3021,8 +3243,8 @@ private enum AIReportGuardrailNode {
                 )
             ),
             encoding: .utf8
-        ) ?? #"{"status":"passed"}"#
-        return (json, scorecard)
+        ) ?? "{\"status\":\"\(status)\"}"
+        return (json, scorecard, status)
     }
 }
 

@@ -119,11 +119,12 @@ final class HoldingVoiceRecorder: ObservableObject {
             }
         case .f1:
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+                guard event.keyCode == 122 else { return event }
                 MainActor.assumeIsolated {
-                    guard let self, event.keyCode == 122, NSApp.isActive else { return }
+                    guard let self, NSApp.isActive else { return }
                     if event.type == .keyDown { self.press() } else { self.release() }
                 }
-                return event.keyCode == 122 ? nil : event
+                return nil
             }
         case .none:
             break

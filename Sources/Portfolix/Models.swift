@@ -757,6 +757,8 @@ final class PortfolioStore {
         }
     }
     var hasLLMAPIKey = false
+    var hasTavilyAPIKey = false
+    var hasBochaAPIKey = false
     private(set) var mcpReadAccessEnabled = false
 
     func setMCPReadAccessEnabled(_ enabled: Bool) {
@@ -770,8 +772,23 @@ final class PortfolioStore {
         } catch { persistenceErrorMessage = error.localizedDescription }
     }
     var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
+    var tavilyAPIKeyValidationState: ProviderCredentialValidationState = .unknown
+    var bochaAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var hasValidLLMAPIKey: Bool {
         hasLLMAPIKey && llmAPIKeyValidationState == .valid
+    }
+
+    var hasUsableSearchProvider: Bool {
+        searchConfiguration.orderedEnabledProviders.contains { provider in
+            switch provider {
+            case .parallel:
+                true
+            case .tavily:
+                hasTavilyAPIKey && tavilyAPIKeyValidationState != .invalid
+            case .bocha:
+                hasBochaAPIKey && bochaAPIKeyValidationState != .invalid
+            }
+        }
     }
     var aiAnalysisRun = AIAnalysisRun()
     var aiAnalysisReport: AIAnalysisReport?
@@ -1390,9 +1407,15 @@ final class PortfolioStore {
 
     func refreshProviderCredentialState() {
         let hasLLMKey = ((try? credentialStore.read(kind: .llm)) ?? nil)?.isEmpty == false
+        let hasTavilyKey = ((try? credentialStore.read(kind: .tavily)) ?? nil)?.isEmpty == false
+        let hasBochaKey = ((try? credentialStore.read(kind: .bocha)) ?? nil)?.isEmpty == false
 
         hasLLMAPIKey = hasLLMKey
+        hasTavilyAPIKey = hasTavilyKey
+        hasBochaAPIKey = hasBochaKey
         llmAPIKeyValidationState = hasLLMKey ? ((try? credentialStore.readValidationState(kind: .llm)) ?? .unknown) : .unknown
+        tavilyAPIKeyValidationState = hasTavilyKey ? ((try? credentialStore.readValidationState(kind: .tavily)) ?? .unknown) : .unknown
+        bochaAPIKeyValidationState = hasBochaKey ? ((try? credentialStore.readValidationState(kind: .bocha)) ?? .unknown) : .unknown
     }
 
     func refreshDeepSeekModelCatalog(client: any LLMModelListing = LLMProviderClient.shared) {
@@ -1427,12 +1450,6 @@ final class PortfolioStore {
         var configuration = aiConfiguration
         configuration.model = normalized
         aiConfiguration = configuration
-        if searchConfiguration.isEnabled,
-           !LLMProviderOption.supportsBuiltInWebSearch(model: normalized) {
-            var search = searchConfiguration
-            search.isEnabled = false
-            searchConfiguration = search
-        }
     }
 
     func selectSmartAnalysisMode(_ mode: SmartAnalysisMode) {
@@ -1442,13 +1459,7 @@ final class PortfolioStore {
             searchConfiguration = search
             return
         }
-        if !LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model),
-           let connectedModel = LLMProviderOption.preferredConnectedModel(in: availableLLMModels) {
-            var configuration = aiConfiguration
-            configuration.model = connectedModel
-            aiConfiguration = configuration
-        }
-        search.isEnabled = LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model)
+        search.isEnabled = true
         searchConfiguration = search
     }
 
@@ -1462,24 +1473,27 @@ final class PortfolioStore {
             )
             aiConfiguration = configuration
         }
-        guard searchConfiguration.isEnabled,
-              !LLMProviderOption.supportsBuiltInWebSearch(model: aiConfiguration.model) else {
-            return
-        }
-        if let connectedModel = LLMProviderOption.preferredConnectedModel(in: availableLLMModels) {
-            var configuration = aiConfiguration
-            configuration.model = connectedModel
-            aiConfiguration = configuration
-        } else {
-            var search = searchConfiguration
-            search.isEnabled = false
-            searchConfiguration = search
-        }
     }
 
     func saveProviderAPIKey(_ apiKey: String, kind: ProviderCredentialKind) throws {
         try credentialStore.save(apiKey, kind: kind)
         refreshProviderCredentialState()
+    }
+
+    @discardableResult
+    func persistProviderAPIKeyEdit(
+        _ value: String,
+        initialValue: String,
+        kind: ProviderCredentialKind
+    ) throws -> ProviderCredentialFormPersistence.Result {
+        let result = try ProviderCredentialFormPersistence.apply(
+            value: value,
+            initialValue: initialValue,
+            kind: kind,
+            store: credentialStore
+        )
+        refreshProviderCredentialState()
+        return result
     }
 
     func saveProviderAPIKeyValidationState(_ state: ProviderCredentialValidationState, kind: ProviderCredentialKind) throws {
@@ -1489,6 +1503,10 @@ final class PortfolioStore {
 
     func readProviderAPIKey(kind: ProviderCredentialKind) throws -> String? {
         try credentialStore.read(kind: kind)
+    }
+
+    func credentialValidationState(for kind: ProviderCredentialKind) throws -> ProviderCredentialValidationState {
+        try credentialStore.readValidationState(kind: kind)
     }
 
     func deleteProviderAPIKey(kind: ProviderCredentialKind) throws {
@@ -1578,7 +1596,11 @@ final class PortfolioStore {
                 ]
             )
             appendAIAnalysisChatItem(
-                .assistant(answer.text, followUpRunSnapshot: answer.runSnapshot),
+                .assistant(
+                    answer.text,
+                    followUpRunSnapshot: answer.runSnapshot,
+                    citations: answer.citations
+                ),
                 runtimeRunID: runtimeRunID
             )
             AIAgentRuntimeDiagnostics.event(
@@ -1610,19 +1632,28 @@ final class PortfolioStore {
 #endif
 
     private func aiAPIConfigurationMessage(language: AppLanguage) -> String? {
-        guard !hasValidLLMAPIKey else { return nil }
-        return localizedText(
-            "DeepSeek API 未完成有效配置。请先在系统设置中配置并验证 API Key 后再使用智能分析。",
-            "The DeepSeek API is not validly configured. Configure and validate the API key in Settings before using smart analysis.",
-            language: language
-        )
+        if !hasValidLLMAPIKey {
+            return localizedText(
+                "DeepSeek API 未完成有效配置。请先在系统设置中配置并验证 API Key 后再使用智能分析。",
+                "The DeepSeek API is not validly configured. Configure and validate the API key in Settings before using smart analysis.",
+                language: language
+            )
+        }
+        if searchConfiguration.isEnabled, !hasUsableSearchProvider {
+            return localizedText(
+                "联网增强需要至少一个可用的搜索服务。请在系统设置中启用 Parallel Search，或配置 Tavily、博查。",
+                "Connected mode requires at least one available search service. Enable Parallel Search, or configure Tavily or Bocha in Settings.",
+                language: language
+            )
+        }
+        return nil
     }
 
     private func answerAIAnalysisFollowUp(
         _ question: String,
         chatHistory: [AIReportChatItem],
         runtimeRunID: UUID
-    ) async -> (text: String, runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
+    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
             ? .english
@@ -1630,17 +1661,19 @@ final class PortfolioStore {
         guard let report = aiAnalysisReport else {
             return (
                 localizedText("请先生成一份智能分析报告，再继续追问。", "Generate a smart analysis report before asking a follow-up.", language: responseAppLanguage),
+                [],
                 nil
             )
         }
         guard aiConfiguration.isEnabled else {
             return (
                 localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: responseAppLanguage),
+                [],
                 nil
             )
         }
         if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return (configurationMessage, nil)
+            return (configurationMessage, [], nil)
         }
 
         do {
@@ -1668,7 +1701,7 @@ final class PortfolioStore {
                     }
                 }
             )
-            return (result.answer, AIReportChatItem.FollowUpRunSnapshot(result: result))
+            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result))
         } catch {
             let stage: String
             if let pipelineError = error as? AIAnalysisPipelineError {
@@ -1690,6 +1723,7 @@ final class PortfolioStore {
                     "This follow-up did not pass information security or response-structure validation. Please try again.",
                     language: responseAppLanguage
                 ),
+                [],
                 nil
             )
         }
@@ -2520,10 +2554,12 @@ final class PortfolioStore {
             }
             .joined(separator: "|")
         return [
-            "v5-deepseek-search",
+            "v6-external-search",
             InvestmentProfileEngine.resolverVersion,
             aiConfiguration.model,
-            searchConfiguration.isEnabled ? "deepseek-built-in-search" : "basic-mode",
+            searchConfiguration.isEnabled
+                ? "external-search:\(searchConfiguration.orderedEnabledProviders.map(\.rawValue).joined(separator: ","))"
+                : "basic-mode",
             String(riskProfileVersion),
             stableFingerprintNumber(positionLimit, decimals: 0),
             stableFingerprintNumber(cryptoLimit, decimals: 0),

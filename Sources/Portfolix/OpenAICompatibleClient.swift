@@ -65,6 +65,15 @@ protocol LLMCompleting: Sendable {
         webSearchEnabled: Bool,
         webSearchProgress: LLMWebSearchProgressHandler?
     ) async throws -> LLMCompletionResult
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        reasoningEffort: DeepSeekReasoningEffort,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult
 }
 
 extension LLMCompleting {
@@ -83,6 +92,25 @@ extension LLMCompleting {
                 configuration: configuration,
                 apiKey: apiKey
             )
+        )
+    }
+
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        reasoningEffort _: DeepSeekReasoningEffort,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        try await completeJSONResult(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            configuration: configuration,
+            apiKey: apiKey,
+            webSearchEnabled: webSearchEnabled,
+            webSearchProgress: webSearchProgress
         )
     }
 }
@@ -121,6 +149,27 @@ final class LLMProviderClient: LLMCompleting, LLMConnectionValidating, LLMModelL
             configuration: configuration,
             apiKey: apiKey,
             webSearchEnabled: webSearchEnabled,
+            webSearchProgress: webSearchProgress
+        )
+    }
+
+
+    func completeJSONResult(
+        systemPrompt: String,
+        userPrompt: String,
+        configuration: AIProviderConfiguration,
+        apiKey: String,
+        webSearchEnabled: Bool,
+        reasoningEffort: DeepSeekReasoningEffort,
+        webSearchProgress: LLMWebSearchProgressHandler?
+    ) async throws -> LLMCompletionResult {
+        try await DeepSeekResponsesClient.shared.completeJSONResult(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            configuration: configuration,
+            apiKey: apiKey,
+            webSearchEnabled: webSearchEnabled,
+            reasoningEffort: reasoningEffort,
             webSearchProgress: webSearchProgress
         )
     }

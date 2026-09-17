@@ -4,7 +4,7 @@ import Testing
 @Suite("Agent activity policy")
 struct AIAgentActivityPolicyTests {
     @Test
-    func keepsOnlyThreeLatestDistinctNonemptyLines() {
+    func keepsOnlyTheLatestDistinctNonemptyLine() {
         var lines: [AIAgentActivityLine] = []
         lines = AIAgentActivityPolicy.appending("  Preparing input  ", to: lines)
         lines = AIAgentActivityPolicy.appending("Preparing input", to: lines)
@@ -13,7 +13,49 @@ struct AIAgentActivityPolicyTests {
         lines = AIAgentActivityPolicy.appending("Generating output", to: lines)
         lines = AIAgentActivityPolicy.appending("   ", to: lines)
 
-        #expect(lines.map(\.text) == ["Reasoning", "Searching", "Generating output"])
+        #expect(lines.map(\.text) == ["Generating output"])
+    }
+
+    @Test
+    func restoresComposerFocusOnlyAfterAnAgentResponseFinishes() {
+        #expect(
+            AIReportComposerFocusPolicy.shouldRestoreFocus(
+                wasAwaitingResponse: true,
+                isAwaitingResponse: false,
+                isVoiceActive: false
+            )
+        )
+        #expect(
+            !AIReportComposerFocusPolicy.shouldRestoreFocus(
+                wasAwaitingResponse: false,
+                isAwaitingResponse: false,
+                isVoiceActive: false
+            )
+        )
+        #expect(
+            !AIReportComposerFocusPolicy.shouldRestoreFocus(
+                wasAwaitingResponse: true,
+                isAwaitingResponse: false,
+                isVoiceActive: true
+            )
+        )
+    }
+
+    @MainActor
+    @Test
+    func composerDraftBufferNormalizesSubmissionWithoutPublishingEveryCharacter() {
+        let buffer = AIReportComposerDraftBuffer()
+        buffer.replace(with: "   ")
+        #expect(!buffer.hasContent)
+        #expect(buffer.submissionText == nil)
+
+        buffer.replace(with: "  继续分析这项持仓  ")
+        #expect(buffer.hasContent)
+        #expect(buffer.submissionText == "继续分析这项持仓")
+
+        buffer.clear()
+        #expect(buffer.text.isEmpty)
+        #expect(!buffer.hasContent)
     }
 }
 
