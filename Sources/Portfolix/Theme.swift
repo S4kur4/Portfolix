@@ -24,6 +24,18 @@ enum PortfolixTheme {
     static let mint = adaptive(light: 0x287D70, dark: 0x76C7B7)
     static let danger = adaptive(light: 0xB44755, dark: 0xDD7D88)
 
+    static func performanceColor(for value: Decimal) -> Color {
+        if value > 0 { return mint }
+        if value < 0 { return danger }
+        return secondaryText
+    }
+
+    static func performanceColor(for value: Double) -> Color {
+        if value > 0 { return mint }
+        if value < 0 { return danger }
+        return secondaryText
+    }
+
     static let purpleGradient = LinearGradient(
         colors: [adaptive(light: 0xAF9AFF, dark: 0xC3B1FF), adaptive(light: 0x7457E2, dark: 0x8068EF)],
         startPoint: .topLeading,

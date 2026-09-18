@@ -109,13 +109,6 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: nil
-        case .dark: .dark
-        case .light: .light
-        }
-    }
 }
 
 enum AppLanguage: String, CaseIterable, Identifiable, Sendable {

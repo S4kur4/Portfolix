@@ -74,10 +74,36 @@ struct PrimaryPositionOrderingTests {
         #expect(todayAscending.map(\.name) == ["Medium", "High", "Low"])
     }
 
+    @Test
+    func detailTableSortsByTotalCostMarketValueAndReturnRate() {
+        let first = makePosition(name: "First", marketValue: 300, profitRate: -5, totalCost: 100)
+        let second = makePosition(name: "Second", marketValue: 100, profitRate: 15, totalCost: 300)
+        let third = makePosition(name: "Third", marketValue: 200, profitRate: 5, totalCost: 200)
+        let positions = [first, second, third]
+
+        let byCost = PositionDetailOrdering.sorted(
+            positions,
+            using: [KeyPathComparator(\Position.totalCost, order: .forward)]
+        )
+        let byMarketValue = PositionDetailOrdering.sorted(
+            positions,
+            using: [KeyPathComparator(\Position.marketValueCNY, order: .reverse)]
+        )
+        let byReturnRate = PositionDetailOrdering.sorted(
+            positions,
+            using: [KeyPathComparator(\Position.profitRate, order: .forward)]
+        )
+
+        #expect(byCost.map(\.name) == ["First", "Third", "Second"])
+        #expect(byMarketValue.map(\.name) == ["First", "Third", "Second"])
+        #expect(byReturnRate.map(\.name) == ["First", "Third", "Second"])
+    }
+
     private func makePosition(
         name: String,
         marketValue: Decimal,
-        profitRate: Decimal
+        profitRate: Decimal,
+        totalCost: Decimal = 1
     ) -> Position {
         Position(
             id: UUID(),
@@ -86,7 +112,7 @@ struct PrimaryPositionOrderingTests {
             category: .cnStock,
             quoteCurrency: .cny,
             quantity: 1,
-            averageCost: 1,
+            averageCost: totalCost,
             latestPrice: marketValue,
             marketValueCNY: marketValue,
             profitRate: profitRate,

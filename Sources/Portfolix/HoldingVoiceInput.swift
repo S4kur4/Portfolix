@@ -658,10 +658,6 @@ private struct HoldingVoiceInputModifier: ViewModifier {
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact)
                         .fill(PortfolixTheme.violet.opacity(0.14))
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                        .stroke(PortfolixTheme.violet, lineWidth: 1)
-                }
                 .overlay { waveform }
                 .allowsHitTesting(false)
         case .waveformOnly:

@@ -232,9 +232,7 @@ private struct PortfolioHeroCard: View {
     }
 
     private func valueColor(for value: Decimal) -> Color {
-        if value > 0 { return PortfolixTheme.mint }
-        if value < 0 { return PortfolixTheme.danger }
-        return PortfolixTheme.secondaryText
+        PortfolixTheme.performanceColor(for: value)
     }
 
     private func fetchedDate(for position: Position) -> Date {
@@ -784,11 +782,13 @@ private struct PerformanceTrendCard: View {
     }
 
     private var changeSymbol: String {
-        intervalChange >= 0 ? "arrow.up.right" : "arrow.down.right"
+        if intervalChange > 0 { return "arrow.up.right" }
+        if intervalChange < 0 { return "arrow.down.right" }
+        return "minus"
     }
 
     private var changeColor: Color {
-        intervalChange >= 0 ? PortfolixTheme.mint : PortfolixTheme.danger
+        PortfolixTheme.performanceColor(for: intervalChange)
     }
 
     private var intervalChange: Double {
@@ -1480,7 +1480,7 @@ private struct CompactPositionRow: View {
 
             Text(formatPercent(position.profitRate))
                 .positionMetricColumn(width: 72)
-                .foregroundStyle(position.profitRate >= 0 ? PortfolixTheme.mint : PortfolixTheme.danger)
+                .foregroundStyle(PortfolixTheme.performanceColor(for: position.profitRate))
                 .monospacedDigit()
 
             let todayProfit = store.todayProfitCNY(for: position)
@@ -1492,9 +1492,7 @@ private struct CompactPositionRow: View {
             )
                 .positionMetricColumn(width: 96)
                 .foregroundStyle(
-                    isTodayProfitZero
-                        ? PortfolixTheme.secondaryText
-                        : (todayProfit > 0 ? PortfolixTheme.mint : PortfolixTheme.danger)
+                    PortfolixTheme.performanceColor(for: todayProfit)
                 )
                 .monospacedDigit()
                 .contentTransition(.numericText())
@@ -1540,12 +1538,12 @@ private struct PositionSparkline: View {
     }
 
     private var color: Color {
-        isRising ? PortfolixTheme.mint : PortfolixTheme.danger
+        PortfolixTheme.performanceColor(for: trendDelta)
     }
 
-    private var isRising: Bool {
-        guard let first = values.first, let last = values.last else { return true }
-        return last >= first
+    private var trendDelta: Double {
+        guard let first = values.first, let last = values.last else { return 0 }
+        return last - first
     }
 
     private var domain: ClosedRange<Double> {
@@ -1605,9 +1603,13 @@ private struct PositionSparkline: View {
         if values.count < 2 {
             return localizedText("历史数据不足", "Not enough history", language: store.appLanguage)
         }
-        return isRising
-            ? localizedText("上涨", "Rising", language: store.appLanguage)
-            : localizedText("下跌", "Falling", language: store.appLanguage)
+        if trendDelta > 0 {
+            return localizedText("上涨", "Rising", language: store.appLanguage)
+        }
+        if trendDelta < 0 {
+            return localizedText("下跌", "Falling", language: store.appLanguage)
+        }
+        return localizedText("持平", "Unchanged", language: store.appLanguage)
     }
 }
 
@@ -2481,9 +2483,7 @@ private struct DailyProfitCard: View {
     }
 
     private func profitColor(_ amount: Decimal) -> Color {
-        if amount > 0 { return PortfolixTheme.mint }
-        if amount < 0 { return PortfolixTheme.danger }
-        return PortfolixTheme.secondaryText
+        PortfolixTheme.performanceColor(for: amount)
     }
 
     private func cellBackground(_ amount: Decimal?) -> Color {

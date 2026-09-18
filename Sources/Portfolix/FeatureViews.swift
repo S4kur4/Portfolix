@@ -8,6 +8,7 @@ struct PositionsView: View {
     @State private var isBatchDeletionConfirmationPresented = false
     @State private var isPositionUpdatePresented = false
     @State private var operationErrorMessage: String?
+    @State private var positionSortOrder: [KeyPathComparator<Position>] = []
     @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
@@ -206,7 +207,7 @@ struct PositionsView: View {
     }
 
     private var positionsTable: some View {
-        Table(store.filteredPositions, selection: selectedPositionBinding) {
+        Table(sortedFilteredPositions, selection: selectedPositionBinding, sortOrder: $positionSortOrder) {
             TableColumn("") { position in
                 Toggle("", isOn: batchSelectionBinding(for: position.id))
                     .labelsHidden()
@@ -252,26 +253,35 @@ struct PositionsView: View {
             }
             .width(72)
 
-            TableColumn(localizedText("总成本", "Total Cost", language: store.appLanguage)) { position in
+            TableColumn(
+                localizedText("总成本", "Total Cost", language: store.appLanguage),
+                value: \.totalCost
+            ) { position in
                 Text(formatMoney(position.totalCost, currency: position.quoteCurrency))
                     .foregroundStyle(primaryRowColor(for: position))
                     .monospacedDigit()
             }
             .width(116)
 
-            TableColumn(localizedText("当前市值", "Market Value", language: store.appLanguage)) { position in
+            TableColumn(
+                localizedText("当前市值", "Market Value", language: store.appLanguage),
+                value: \.marketValueCNY
+            ) { position in
                 Text(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
                     .foregroundStyle(primaryRowColor(for: position))
                     .monospacedDigit()
             }
             .width(116)
 
-            TableColumn(localizedText("收益率", "Return Rate", language: store.appLanguage)) { position in
+            TableColumn(
+                localizedText("收益率", "Return Rate", language: store.appLanguage),
+                value: \.profitRate
+            ) { position in
                 Text(formatPercent(position.profitRate))
                     .foregroundStyle(
                         isSelected(position)
                             ? Color.white
-                            : position.profitRate >= 0 ? PortfolixTheme.mint : PortfolixTheme.danger
+                            : PortfolixTheme.performanceColor(for: position.profitRate)
                     )
                     .monospacedDigit()
             }
@@ -347,6 +357,13 @@ struct PositionsView: View {
         )
     }
 
+    private var sortedFilteredPositions: [Position] {
+        PositionDetailOrdering.sorted(
+            store.filteredPositions,
+            using: positionSortOrder
+        )
+    }
+
     private func canRefresh(_ position: Position) -> Bool {
         position.category != .cash
     }
@@ -394,6 +411,16 @@ struct PositionsView: View {
         } catch {
             operationErrorMessage = error.localizedDescription
         }
+    }
+}
+
+enum PositionDetailOrdering {
+    static func sorted(
+        _ positions: [Position],
+        using comparators: [KeyPathComparator<Position>]
+    ) -> [Position] {
+        guard !comparators.isEmpty else { return positions }
+        return positions.sorted(using: comparators)
     }
 }
 
@@ -2046,13 +2073,6 @@ private struct AIReportChatComposer: View {
                         fallbackOpacity: isVoiceActive ? 0.14 : 0.68
                     )
             }
-            .overlay {
-                if isVoiceActive {
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                        .stroke(PortfolixTheme.violet, lineWidth: 1)
-                        .allowsHitTesting(false)
-                }
-            }
             .layoutPriority(1)
 
             AIReportSendButton(
@@ -3070,7 +3090,8 @@ struct RiskProfileView: View {
                             value: $store.positionLimit,
                             range: 10 ... 60,
                             mode: .maximum,
-                            language: store.appLanguage
+                            language: store.appLanguage,
+                            onCommit: { store.saveRiskThresholdVersion() }
                         )
 
                         RiskConstraintSliderRow(
@@ -3081,7 +3102,8 @@ struct RiskProfileView: View {
                             value: $store.cryptoLimit,
                             range: 0 ... 50,
                             mode: .maximum,
-                            language: store.appLanguage
+                            language: store.appLanguage,
+                            onCommit: { store.saveRiskThresholdVersion() }
                         )
 
                         RiskConstraintSliderRow(
@@ -3092,7 +3114,8 @@ struct RiskProfileView: View {
                             value: $store.foreignCurrencyLimit,
                             range: 10 ... 90,
                             mode: .maximum,
-                            language: store.appLanguage
+                            language: store.appLanguage,
+                            onCommit: { store.saveRiskThresholdVersion() }
                         )
 
                         RiskConstraintSliderRow(
@@ -3103,7 +3126,8 @@ struct RiskProfileView: View {
                             value: $store.liquidityMinimum,
                             range: 0 ... 40,
                             mode: .minimum,
-                            language: store.appLanguage
+                            language: store.appLanguage,
+                            onCommit: { store.saveRiskThresholdVersion() }
                         )
 
                     }
@@ -3410,6 +3434,7 @@ private struct RiskConstraintSliderRow: View {
     let range: ClosedRange<Double>
     let mode: RiskConstraintMode
     let language: AppLanguage
+    let onCommit: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -3433,7 +3458,11 @@ private struct RiskConstraintSliderRow: View {
                 .frame(width: leadingWidth, alignment: .leading)
 
                 HStack(spacing: PortfolixSpacing.md) {
-                    Slider(value: $value, in: range, step: 5)
+                    Slider(value: $value, in: range, step: 5) { isEditing in
+                        if !isEditing {
+                            onCommit()
+                        }
+                    }
                         .tint(PortfolixTheme.lilac)
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {

@@ -1567,6 +1567,33 @@ struct PositionRepositoryTests {
 
     @MainActor
     @Test
+    func riskConstraintSliderChangesPersistAcrossStoreReloads() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let store = PortfolioStore(
+            positionRepository: try PositionRepository(databaseURL: databaseURL)
+        )
+        let originalVersion = store.riskProfileVersion
+
+        store.positionLimit = 45
+        store.cryptoLimit = 25
+        store.foreignCurrencyLimit = 65
+        store.liquidityMinimum = 15
+        store.saveRiskThresholdVersion(now: Date(timeIntervalSince1970: 1_800_000_000))
+
+        let reloadedStore = PortfolioStore(
+            positionRepository: try PositionRepository(databaseURL: databaseURL)
+        )
+
+        #expect(reloadedStore.positionLimit == 45)
+        #expect(reloadedStore.cryptoLimit == 25)
+        #expect(reloadedStore.foreignCurrencyLimit == 65)
+        #expect(reloadedStore.liquidityMinimum == 15)
+        #expect(reloadedStore.riskProfileVersion == originalVersion + 1)
+        #expect(reloadedStore.riskProfileUpdatedAt == Date(timeIntervalSince1970: 1_800_000_000))
+    }
+
+    @MainActor
+    @Test
     func riskConstraintEvaluationReflectsPassAndBreachStates() throws {
         let store = try makeStore()
         try store.addPosition(

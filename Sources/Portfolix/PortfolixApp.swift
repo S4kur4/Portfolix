@@ -84,7 +84,6 @@ struct RootView: View {
             .ignoresSafeArea(edges: .top)
         }
         .background(PortfolixTheme.canvas)
-        .preferredColorScheme(store.appearanceMode.colorScheme)
         .tint(PortfolixTheme.violet)
         .sheet(item: $store.positionEditorPresentation) { presentation in
             PositionEditorSheet(presentation: presentation)
@@ -98,7 +97,11 @@ struct RootView: View {
             Text(store.persistenceErrorMessage ?? "")
         }
         .onAppear {
+            synchronizeApplicationAppearance(store.appearanceMode)
             store.synchronizePersistedMarketDataIfNeeded()
+        }
+        .onChange(of: store.appearanceMode) { _, mode in
+            synchronizeApplicationAppearance(mode)
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -210,5 +213,15 @@ struct RootView: View {
                 }
             }
         )
+    }
+
+    private func synchronizeApplicationAppearance(_ mode: AppearanceMode) {
+        let appearance: NSAppearance? = switch mode {
+        case .system: nil
+        case .dark: NSAppearance(named: .darkAqua)
+        case .light: NSAppearance(named: .aqua)
+        }
+        NSApp.appearance = appearance
+        NSApp.windows.forEach { $0.appearance = appearance }
     }
 }

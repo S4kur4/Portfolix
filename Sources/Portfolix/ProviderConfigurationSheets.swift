@@ -7,6 +7,16 @@ private enum ProviderConfigurationLayout {
     static let apiKeyOpticalYOffset: CGFloat = 2
 }
 
+enum ProviderAPIKeyPresentation {
+    static func displaysEditableText(isVisible: Bool, text: String) -> Bool {
+        isVisible || text.isEmpty
+    }
+
+    static func shouldRevealWhenEditing(isVisible: Bool, text: String) -> Bool {
+        !isVisible && text.isEmpty
+    }
+}
+
 private enum ProviderConfigurationField: Hashable {
     case llmBaseURL
     case llmModel
@@ -477,7 +487,9 @@ struct SearchConfigurationSheet: View {
     @State private var bochaStatus: ProviderConnectionStatus?
     @State private var isTavilyAPIKeyVisible = false
     @State private var isBochaAPIKeyVisible = false
-    @State private var isValidating = false
+    @State private var validatingProviders: Set<SearchProviderOption> = []
+    @State private var activationPromptProviders: Set<SearchProviderOption> = []
+    @State private var didLoadConfiguration = false
     @State private var didAttemptSave = false
     @FocusState private var focusedField: ProviderConfigurationField?
 
@@ -533,6 +545,10 @@ struct SearchConfigurationSheet: View {
             isBochaAPIKeyVisible = false
             tavilyStatus = persistedStatus(for: .tavily)
             bochaStatus = persistedStatus(for: .bocha)
+            Task { @MainActor in
+                await Task.yield()
+                didLoadConfiguration = true
+            }
         }
     }
 
@@ -562,7 +578,7 @@ struct SearchConfigurationSheet: View {
     ) -> some View {
         Section {
             ProviderFormRow(label: provider.title(language: store.appLanguage)) {
-                Toggle("", isOn: isEnabled)
+                Toggle("", isOn: activationBinding(for: provider, isEnabled: isEnabled, field: field))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .accessibilityLabel(
@@ -586,6 +602,12 @@ struct SearchConfigurationSheet: View {
                     hiddenHelp: text("显示 API Key", "Show API Key")
                 )
                 .onChange(of: apiKey.wrappedValue) { _, _ in
+                    guard didLoadConfiguration else { return }
+                    activationPromptProviders.remove(provider)
+                    validatingProviders.remove(provider)
+                    if isEnabled.wrappedValue {
+                        isEnabled.wrappedValue = false
+                    }
                     setStatus(nil, for: provider)
                 }
             }
@@ -604,53 +626,90 @@ struct SearchConfigurationSheet: View {
 
     private func validateAndSave() {
         didAttemptSave = true
-        guard hasRequiredKeys else { return }
-        isValidating = true
-        tavilyStatus = tavilyEnabled ? nil : tavilyStatus
-        bochaStatus = bochaEnabled ? nil : bochaStatus
+        guard hasRequiredKeys, persistConfiguration() else { return }
+        dismiss()
+    }
 
-        Task {
-            let results = await validateEnabledProviders()
-            await MainActor.run {
-                isValidating = false
-                for (provider, result) in results {
-                    switch result {
-                    case .success:
-                        setStatus(.success(text("API 已验证", "API validated")), for: provider)
-                    case let .failure(error):
-                        setStatus(.failure(error.localizedDescription), for: provider)
-                    }
-                }
-                guard results.values.allSatisfy({ if case .success = $0 { true } else { false } }) else {
+    private var isValidating: Bool {
+        !validatingProviders.isEmpty
+    }
+
+    private func activationBinding(
+        for provider: SearchProviderOption,
+        isEnabled: Binding<Bool>,
+        field: ProviderConfigurationField
+    ) -> Binding<Bool> {
+        Binding(
+            get: { isEnabled.wrappedValue },
+            set: { requestedValue in
+                if !requestedValue {
+                    validatingProviders.remove(provider)
+                    activationPromptProviders.remove(provider)
+                    isEnabled.wrappedValue = false
                     return
                 }
-                guard persistConfiguration() else { return }
-                dismiss()
+                enable(provider, isEnabled: isEnabled, field: field)
+            }
+        )
+    }
+
+    private func enable(
+        _ provider: SearchProviderOption,
+        isEnabled: Binding<Bool>,
+        field: ProviderConfigurationField
+    ) {
+        let key = activeKey(for: provider)
+        guard !key.isEmpty else {
+            activationPromptProviders.insert(provider)
+            setStatus(
+                .failure(text("请先填写 API Key", "Enter an API Key first")),
+                for: provider
+            )
+            revealAndFocusAPIKey(for: provider, field: field)
+            return
+        }
+
+        activationPromptProviders.remove(provider)
+        isEnabled.wrappedValue = true
+        validatingProviders.insert(provider)
+        setStatus(.validating(text("正在验证 API", "Validating API")), for: provider)
+
+        Task {
+            let result: Result<Void, Error>
+            do {
+                try await SearchAPIKeyValidationProbe.validate(provider: provider, apiKey: key)
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+
+            validatingProviders.remove(provider)
+            guard isEnabled.wrappedValue, activeKey(for: provider) == key else { return }
+            switch result {
+            case .success:
+                setStatus(.success(text("API 已验证", "API validated")), for: provider)
+            case let .failure(error):
+                isEnabled.wrappedValue = false
+                setStatus(.failure(error.localizedDescription), for: provider)
             }
         }
     }
 
-    private func validateEnabledProviders() async -> [SearchProviderOption: Result<Void, Error>] {
-        let enabled = enabledProviders
-        return await withTaskGroup(of: (SearchProviderOption, Result<Void, Error>).self) { group in
-            for provider in enabled {
-                guard provider.requiresAPIKey else { continue }
-                let key = activeKey(for: provider)
-                guard !key.isEmpty else { continue }
-                group.addTask {
-                    do {
-                        try await SearchAPIKeyValidationProbe.validate(provider: provider, apiKey: key)
-                        return (provider, .success(()))
-                    } catch {
-                        return (provider, .failure(error))
-                    }
-                }
-            }
-            var results: [SearchProviderOption: Result<Void, Error>] = [:]
-            for await (provider, result) in group {
-                results[provider] = result
-            }
-            return results
+    private func revealAndFocusAPIKey(
+        for provider: SearchProviderOption,
+        field: ProviderConfigurationField
+    ) {
+        switch provider {
+        case .parallel:
+            return
+        case .tavily:
+            isTavilyAPIKeyVisible = true
+        case .bocha:
+            isBochaAPIKeyVisible = true
+        }
+        Task { @MainActor in
+            await Task.yield()
+            focusedField = field
         }
     }
 
@@ -728,7 +787,8 @@ struct SearchConfigurationSheet: View {
     }
 
     private func shouldHighlight(_ provider: SearchProviderOption) -> Bool {
-        didAttemptSave && provider.requiresAPIKey && enabledProviders.contains(provider) && activeKey(for: provider).isEmpty
+        activationPromptProviders.contains(provider)
+            || (didAttemptSave && provider.requiresAPIKey && enabledProviders.contains(provider) && activeKey(for: provider).isEmpty)
     }
 
     private func persistedStatus(for provider: SearchProviderOption) -> ProviderConnectionStatus? {
@@ -756,8 +816,11 @@ struct SearchConfigurationSheet: View {
     }
 
     private func statusSymbol(_ status: ProviderConnectionStatus) -> String {
-        if case .success = status { return "checkmark.circle.fill" }
-        return "xmark.circle.fill"
+        switch status {
+        case .success: "checkmark.circle.fill"
+        case .failure: "xmark.circle.fill"
+        case .validating: "arrow.triangle.2.circlepath"
+        }
     }
 
     private func providerDescription(_ provider: SearchProviderOption) -> String {
@@ -785,10 +848,11 @@ struct SearchConfigurationSheet: View {
 enum ProviderConnectionStatus: Equatable {
     case success(String)
     case failure(String)
+    case validating(String)
 
     var message: String {
         switch self {
-        case let .success(message), let .failure(message): message
+        case let .success(message), let .failure(message), let .validating(message): message
         }
     }
 
@@ -796,6 +860,7 @@ enum ProviderConnectionStatus: Equatable {
         switch self {
         case .success: PortfolixTheme.mint
         case .failure: PortfolixTheme.danger
+        case .validating: PortfolixTheme.lilac
         }
     }
 }
@@ -1025,10 +1090,14 @@ private struct ProviderAPIKeyInputField: View {
     private var inputContent: some View {
         ProviderAPIKeyTextInput(
             text: $text,
-            isVisible: isVisible,
+            isVisible: displaysEditableText,
             field: field,
             focusedField: focusedField,
             isInvalid: isInvalid,
+            shouldRevealWhenEditing: ProviderAPIKeyPresentation.shouldRevealWhenEditing(
+                isVisible: isVisible,
+                text: text
+            ),
             onReveal: revealAndFocus
         )
             .frame(
@@ -1046,6 +1115,10 @@ private struct ProviderAPIKeyInputField: View {
             guard isVisible else { return }
             focusedField.wrappedValue = field
         }
+    }
+
+    private var displaysEditableText: Bool {
+        ProviderAPIKeyPresentation.displaysEditableText(isVisible: isVisible, text: text)
     }
 
     private var shouldShowPlaceholder: Bool {
@@ -1067,6 +1140,7 @@ private struct ProviderAPIKeyTextInput: NSViewRepresentable {
     let field: ProviderConfigurationField
     let focusedField: FocusState<ProviderConfigurationField?>.Binding
     let isInvalid: Bool
+    let shouldRevealWhenEditing: Bool
     let onReveal: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1101,6 +1175,9 @@ private struct ProviderAPIKeyTextInput: NSViewRepresentable {
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
+            if parent.shouldRevealWhenEditing {
+                parent.onReveal()
+            }
             parent.focusedField.wrappedValue = parent.field
         }
 

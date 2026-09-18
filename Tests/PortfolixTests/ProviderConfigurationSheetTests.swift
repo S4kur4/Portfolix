@@ -6,6 +6,23 @@ import Testing
 @MainActor
 struct ProviderConfigurationSheetTests {
     @Test
+    func validatingProviderUsesTheDeepSeekAccentColor() {
+        #expect(
+            ProviderConnectionStatus.validating("Validating API").color
+                == PortfolixTheme.lilac
+        )
+    }
+
+    @Test
+    func emptyAPIKeyIsImmediatelyEditableWithoutRevealingItFirst() {
+        #expect(ProviderAPIKeyPresentation.displaysEditableText(isVisible: false, text: ""))
+        #expect(ProviderAPIKeyPresentation.shouldRevealWhenEditing(isVisible: false, text: ""))
+        #expect(!ProviderAPIKeyPresentation.displaysEditableText(isVisible: false, text: "stored-secret"))
+        #expect(!ProviderAPIKeyPresentation.shouldRevealWhenEditing(isVisible: false, text: "stored-secret"))
+        #expect(ProviderAPIKeyPresentation.displaysEditableText(isVisible: true, text: "stored-secret"))
+    }
+
+    @Test
     func hiddenAPIKeyUsesAConstantNonSelectableMask() throws {
         let view = ProviderAPIKeyTextInputView(frame: NSRect(x: 0, y: 0, width: 340, height: 28))
         let key = "sk-" + String(repeating: "a", count: 64)
