@@ -1164,6 +1164,11 @@ final class PositionRepository {
         try bind(positionID.uuidString, to: 1, in: quoteStatement)
         try stepDone(quoteStatement)
 
+        let snapshotStatement = try prepare("DELETE FROM asset_price_snapshots WHERE asset_id = ?")
+        defer { sqlite3_finalize(snapshotStatement) }
+        try bind(positionID.uuidString, to: 1, in: snapshotStatement)
+        try stepDone(snapshotStatement)
+
         let assetStatement = try prepare("DELETE FROM assets WHERE id = ?")
         defer { sqlite3_finalize(assetStatement) }
         try bind(positionID.uuidString, to: 1, in: assetStatement)

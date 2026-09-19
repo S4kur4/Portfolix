@@ -1465,6 +1465,39 @@ struct PositionRepositoryTests {
         #expect(store.positions.map(\.symbol) == ["KEEP"])
     }
 
+    @Test
+    func deletingPositionAlsoRemovesItsHistoricalPriceSnapshots() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let position = makePosition(
+            symbol: "DELETE-HISTORY",
+            quantity: 10,
+            averageCost: 100,
+            latestPrice: 110
+        )
+        let firstDay = try #require(Calendar.current.date(byAdding: .day, value: -1, to: .now))
+        try repository.insert(position)
+        try repository.replaceDailySnapshots(positions: [position], snapshotDate: firstDay)
+        try repository.replaceDailySnapshots(
+            positions: [makePosition(
+                id: position.id,
+                symbol: position.symbol,
+                quantity: position.quantity,
+                averageCost: position.averageCost,
+                latestPrice: 112
+            )],
+            snapshotDate: .now
+        )
+
+        #expect(try repository.fetchAssetPriceSnapshots(positionID: position.id).count == 2)
+        #expect(try repository.fetchDailyProfitPoints().count == 1)
+
+        try repository.delete(positionID: position.id)
+
+        #expect(try repository.fetchAssetPriceSnapshots(positionID: position.id).isEmpty)
+        #expect(try repository.fetchDailyProfitPoints().isEmpty)
+    }
+
     @MainActor
     @Test
     func portfolioStoreBatchBalanceUpdateRecalculatesCostsAndKeepsCashAtOne() throws {
