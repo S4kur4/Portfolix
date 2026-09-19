@@ -1521,7 +1521,7 @@ final class PortfolioStore {
                 .user(
                     hasReport
                         ? localizedText("请重新生成分析报告", "Regenerate the analysis report", language: appLanguage)
-                        : localizedText("请基于当前持仓生成一次智能分析报告", "Generate a smart analysis report from my current portfolio", language: appLanguage)
+                        : localizedText("请基于当前持仓生成分析报告", "Generate a smart analysis report from my current portfolio", language: appLanguage)
                 )
             )
         }
@@ -2257,7 +2257,7 @@ final class PortfolioStore {
     private func seedAIAnalysisChatIfNeeded() {
         guard aiAnalysisChatItems.isEmpty, let report = aiAnalysisReport else { return }
         let prompt = localizedText(
-            "请基于当前持仓生成一次智能分析报告",
+            "请基于当前持仓生成分析报告",
             "Generate a smart analysis report from my current portfolio",
             language: appLanguage
         )
