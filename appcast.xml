@@ -4,16 +4,17 @@
         <title>Portfolix</title>
         <item>
             <title>0.1.9</title>
-            <pubDate>Sat, 19 Sep 2026 13:19:56 +0800</pubDate>
+            <pubDate>Mon, 21 Sep 2026 21:33:37 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>20</sparkle:version>
+            <sparkle:version>21</sparkle:version>
             <sparkle:shortVersionString>0.1.9</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.9 (Build 20)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.9 (Build 21)
 
 ## 优化与修复
 
+- 更新 Portfolix 应用图标，优化浅色、深色与着色外观下的视觉表现。
 - 修复“跟随系统”外观模式不能立即响应当前 macOS 深浅色设置的问题。
 - 优化 DeepSeek 与搜索 API 的密钥编辑、显示和即时验证流程；未填写密钥时会在开启搜索服务前给出明确提示。
 - 持仓明细新增按总成本、当前市值和收益率排序，并保持排序状态与表格交互一致。
@@ -25,6 +26,7 @@
 
 ## Improvements and Fixes
 
+- Updated the Portfolix app icon with refined light, dark, and tinted appearances.
 - Fixed Follow System appearance not immediately matching the current macOS light or dark setting.
 - Improved DeepSeek and Search API key editing, visibility, and immediate validation, with clear guidance before enabling a provider without a key.
 - Added holdings-detail sorting by total cost, current market value, and return rate with consistent table interactions.
@@ -34,7 +36,7 @@
 - Fixed deleted holdings leaving historical price snapshots that could continue to appear in Daily Profit.
 - Simplified the initial smart-analysis prompt and kept restored report conversations consistent.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.9/Portfolix-0.1.9.dmg" length="6072676" type="application/octet-stream" sparkle:edSignature="/TzIHMi0wXauxGNM2CHO50deoQ8+/dIjx0YEkR1X9TG1aHz6n+EIjpQHDfKk/gSax9bQacD8PXZc/3aCmnsaCw=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.9/Portfolix-0.1.9.dmg" length="6181536" type="application/octet-stream" sparkle:edSignature="bJfuU11hzgkjMYf8IiLkPpkqbpirwa5RxdjXlvH7pX/M3yydXqoMCWxVEcWe3QZa2BTmL8kwlo22g7ZijYj2CA=="/>
         </item>
     </channel>
 </rss>
