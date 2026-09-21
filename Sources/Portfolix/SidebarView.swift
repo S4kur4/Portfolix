@@ -60,7 +60,7 @@ private struct SidebarVersion: View {
     }
 
     private var build: String {
-        normalizedBundleValue(for: "CFBundleVersion") ?? "20"
+        normalizedBundleValue(for: "CFBundleVersion") ?? "21"
     }
 
     var body: some View {
