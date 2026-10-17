@@ -3,40 +3,54 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.9</title>
-            <pubDate>Mon, 21 Sep 2026 21:33:37 +0800</pubDate>
+            <title>0.1.10</title>
+            <pubDate>Sat, 17 Oct 2026 22:03:50 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>21</sparkle:version>
-            <sparkle:shortVersionString>0.1.9</sparkle:shortVersionString>
+            <sparkle:version>22</sparkle:version>
+            <sparkle:shortVersionString>0.1.10</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.9 (Build 21)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.10 (Build 22)
+
+## 新功能
+
+- 新增投资云图：在“今日盈亏”和“投资分布”之间切换，以矩形面积呈现各资产的当日盈亏，或通过 AI 分析底层投资领域及其金额与占比。
+- 投资分布随行情更新，并优先复用已有分类；未启用 AI、缺少有效密钥或分析失败时，按资产类别展示。
+- 搜索 API 新增 DeepSeek Search 开关，复用 DeepSeek API Key，支持与 Parallel Search、Tavily、博查同时启用，由 Agent 按需选择并在失败时回退。
 
 ## 优化与修复
 
-- 更新 Portfolix 应用图标，优化浅色、深色与着色外观下的视觉表现。
-- 修复“跟随系统”外观模式不能立即响应当前 macOS 深浅色设置的问题。
-- 优化 DeepSeek 与搜索 API 的密钥编辑、显示和即时验证流程；未填写密钥时会在开启搜索服务前给出明确提示。
-- 持仓明细新增按总成本、当前市值和收益率排序，并保持排序状态与表格交互一致。
-- 统一收益与收益率的零值颜色；数值为零时使用中性色，不再错误显示为盈利或亏损。
-- 移除语音输入状态下输入框外侧的紫色描边，仅保留背景高亮和波形反馈。
-- 修复风险偏好关键约束调整后未能可靠保存的问题。
-- 修复删除持仓后历史价格快照仍被保留、导致每日盈亏继续显示已删除资产记录的问题。
-- 简化首次生成智能分析报告的默认提示语，并统一相关历史恢复场景。
+- 统一浅色与深色模式下的文字层级、卡片底色、选中状态和 Liquid Glass 按钮、选择器质感；保留旧版 macOS 的兼容外观。
+- 统一卡片内边距和标题、控件对齐，移除卡片外侧描边，优化侧边栏、弹出窗口及持仓表格的视觉一致性。
+- “每日盈亏”更名为“盈亏日历”，优化月份显示和日历底部间距，并调整其与投资云图的布局顺序。
+- 持仓占比改为按累计市值达到 90% 展示，其余合并为“其他”；悬停时显示对应金额，并去除柱状图灰色衬底和描边。
+- 移除旧投资画像、资产配置和计价币种分布卡片，清理旧画像的 AI 评分流程。
+- 智能分析输入区使用动态圆形按钮：空白时生成分析，输入文字后切换为发送。
+- 修复投资云图等显示选择未能持久保存的问题，优化持仓表格选择时的闪烁及相关稳定性。
+- 简化搜索配置说明，统一 Tavily 与 DeepSeek 的密钥验证提示文案、图标及状态颜色。
+
+DeepSeek Search 为独立计费服务，默认关闭。启用前请确认 DeepSeek 账户的服务可用性及费用。
+
+## New Features
+
+- Added the Investment Map, with Today's P&L and Distribution modes. Tile areas represent absolute daily gains or losses, or AI-assisted underlying investment-sector allocations with amounts and percentages.
+- Distribution updates with market data and reuses existing classifications. Asset-category distributions remain available when AI is disabled, credentials are unavailable, or analysis fails.
+- Added DeepSeek Search using the existing DeepSeek API key. Enable it alongside Parallel Search, Tavily, and Bocha, with agent-selected routing and provider fallback.
 
 ## Improvements and Fixes
 
-- Updated the Portfolix app icon with refined light, dark, and tinted appearances.
-- Fixed Follow System appearance not immediately matching the current macOS light or dark setting.
-- Improved DeepSeek and Search API key editing, visibility, and immediate validation, with clear guidance before enabling a provider without a key.
-- Added holdings-detail sorting by total cost, current market value, and return rate with consistent table interactions.
-- Standardized neutral coloring for zero profit and zero return values instead of showing them as gains or losses.
-- Removed the purple outline during voice input while retaining background highlighting and waveform feedback.
-- Fixed risk-preference constraint changes not being reliably persisted.
-- Fixed deleted holdings leaving historical price snapshots that could continue to appear in Daily Profit.
-- Simplified the initial smart-analysis prompt and kept restored report conversations consistent.
+- Unified text hierarchy, card surfaces, selection states, and Liquid Glass buttons and selectors in light and dark appearances, with compatible rendering on earlier macOS versions.
+- Standardized card padding and header alignment, removed outer card borders, and improved consistency across the sidebar, sheets, and holdings tables.
+- Renamed Daily P&L to P&L Calendar, improved month labels and bottom spacing, and rearranged the calendar and investment-map cards.
+- Holding Mix now shows holdings up to 90% of cumulative market value and groups the remainder as Other, displays hovered amounts, and removes the gray chart backing and outline.
+- Removed the retired investment-profile, asset-allocation, and quote-currency cards, along with the old AI radar-scoring workflow.
+- Added a dynamic circular composer button that generates analysis when empty and sends a question when text is entered.
+- Persisted display selections and improved holdings-table selection stability and flicker behavior.
+- Simplified search configuration descriptions and aligned Tavily validation messages, icons, and colors with DeepSeek.
+
+DeepSeek Search is billed separately and is disabled by default. Check service availability and pricing before enabling it.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.9/Portfolix-0.1.9.dmg" length="6181536" type="application/octet-stream" sparkle:edSignature="bJfuU11hzgkjMYf8IiLkPpkqbpirwa5RxdjXlvH7pX/M3yydXqoMCWxVEcWe3QZa2BTmL8kwlo22g7ZijYj2CA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.10/Portfolix-0.1.10.dmg" length="6223814" type="application/octet-stream" sparkle:edSignature="+NPOTlb8EiJeuoE8rOjVmqKBs9Ht385JQQOFI4sxpaMJRWWW+NQpwe1CMkuxvBP5fnG3GTu6vcFMPW12bAAHAQ=="/>
         </item>
     </channel>
 </rss>
