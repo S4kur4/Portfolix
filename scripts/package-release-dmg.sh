@@ -117,6 +117,11 @@ xcrun actool \
   --output-partial-info-plist "$APP_CONTENTS/Info.plist" \
   "$ICON_SOURCE"
 
+if [[ ! -s "$APP_RESOURCES/Assets.car" || ! -s "$APP_RESOURCES/$ICON_NAME.icns" ]]; then
+  echo "app icon compilation did not produce the required resources" >&2
+  exit 1
+fi
+
 cat >"$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
