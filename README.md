@@ -23,9 +23,9 @@ Portfolix 不连接券商账户，不要求输入任何第三方金融账户密�
 
 - 目前支持记录和跟踪A股、B股、美股、港股、公募基金、数字货币和现金类资产
 - 维护每日组合快照和资产成本价格，并可批量或通过本机语音更新持仓份额与成本
-- 查看组合价值、每日盈亏、持仓收益趋势、持仓占比和币种敞口
-- 查看结合持仓底层标的生成的投资画像，并评估组合与个人风险约束的匹配情况
-- 使用自行配置的 DeepSeek API 生成智能分析报告，并可按需启用免密钥的 Parallel Search，或配置 Tavily、博查提供联网搜索
+- 查看组合价值、盈亏日历、持仓收益趋势和持仓占比
+- 通过投资云图查看今日盈亏和 AI 穿透分析的投资领域分布；未开启 AI 时按资产类别展示投资分布
+- 使用自行配置的 DeepSeek API 生成智能分析报告，并可按需启用免密钥的 Parallel Search、复用 DeepSeek API Key 的 DeepSeek Search，或配置 Tavily、博查提供联网搜索
 - 可将持仓明细、每日收益、资产每日价格和风险偏好导出为结构化数据包，或通过只读 MCP 供本机 AI 工具按授权访问
 
 ## 行情数据
@@ -56,9 +56,9 @@ Portfolix does not connect to brokerage accounts and does not require you to ent
 
 - Multi-Asset Tracking: Currently supports recording and tracking A-shares, B-shares, US stocks, Hong Kong stocks, public funds, digital currencies, and cash assets.
 - Snapshot Management: Maintains daily portfolio snapshots and asset cost bases, with batch or on-device voice updates for holding quantities and costs.
-- Visual Analytics: View portfolio value, daily profit and loss, holding return trends, holding allocations, and currency exposure.
-- Risk Assessment: View an investment profile informed by underlying portfolio exposures and evaluate how well your portfolio aligns with your individual risk constraints.
-- AI-Powered Analysis: Generate intelligent reports with your own DeepSeek API key and optionally enable keyless Parallel Search or configure Tavily and Bocha for web research.
+- Visual Analytics: View portfolio value, the P&L calendar, holding return trends, and holding allocations.
+- Investment Map: Explore today's P&L and AI-assisted underlying investment-sector distributions, with asset-category distributions when AI is disabled.
+- AI-Powered Analysis: Generate intelligent reports with your own DeepSeek API key and optionally enable keyless Parallel Search, reuse your DeepSeek API key for DeepSeek Search, or configure Tavily and Bocha for web research.
 - Data Access: Export holding details, daily returns, daily asset prices, and risk preferences as structured data packages, or grant authorized local AI tools read-only MCP access.
 
 ## Market Data
