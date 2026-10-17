@@ -44,6 +44,7 @@ struct BatchPositionUpdateSheet: View {
                             }
                         }
                     }
+                    .background(PortfolixTheme.panel)
                 }
                 .clipShape(
                     RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
@@ -135,6 +136,7 @@ struct BatchPositionUpdateSheet: View {
 }
 
 private struct PositionUpdateTableHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
     let language: AppLanguage
 
     var body: some View {
@@ -148,7 +150,7 @@ private struct PositionUpdateTableHeader: View {
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, minHeight: PositionUpdateLayout.headerHeight, alignment: .leading)
-        .background(PortfolixTheme.panelElevated)
+        .background(colorScheme == .dark ? PortfolixTheme.panel : PortfolixTheme.panelElevated)
     }
 
     private func header(

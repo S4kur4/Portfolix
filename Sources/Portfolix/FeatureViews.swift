@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PositionsView: View {
     @Environment(PortfolioStore.self) private var store
+    @Environment(\.colorScheme) private var colorScheme
     @State private var pendingDeletionID: Position.ID?
     @State private var selectedBatchPositionIDs: Set<Position.ID> = []
     @State private var isBatchDeletionConfirmationPresented = false
@@ -76,8 +77,7 @@ struct PositionsView: View {
                                 .focused($isSearchFieldFocused)
                         }
                         .padding(.horizontal, PortfolixSpacing.md)
-                        .padding(.vertical, PortfolixSpacing.sm)
-                        .frame(width: 260)
+                        .frame(width: 260, height: PortfolixLayout.positionsToolbarControlHeight)
                         .portfolixGlass(
                             in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
                             fallbackTint: PortfolixTheme.panelElevated,
@@ -98,14 +98,14 @@ struct PositionsView: View {
 
                         Spacer()
 
-                        Picker(localizedText("展示币种", "Display Currency", language: store.appLanguage), selection: $store.displayCurrency) {
-                            ForEach(DisplayCurrency.allCases) { currency in
-                                Text(currency.rawValue).tag(currency)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 240)
+                        PortfolixGlassSegmentedPicker(
+                            title: localizedText("展示币种", "Display Currency", language: store.appLanguage),
+                            selection: $store.displayCurrency,
+                            options: DisplayCurrency.allCases,
+                            optionTitle: { $0.rawValue },
+                            width: 240,
+                            height: PortfolixLayout.positionsToolbarControlHeight
+                        )
                     }
                     .padding(PortfolixSpacing.lg)
 
@@ -194,18 +194,6 @@ struct PositionsView: View {
         )
     }
 
-    private func isSelected(_ position: Position) -> Bool {
-        store.selectedPositionID == position.id
-    }
-
-    private func primaryRowColor(for position: Position) -> Color {
-        isSelected(position) ? .white : PortfolixTheme.primaryText
-    }
-
-    private func secondaryRowColor(for position: Position) -> Color {
-        isSelected(position) ? .white.opacity(0.74) : PortfolixTheme.tertiaryText
-    }
-
     private var positionsTable: some View {
         Table(sortedFilteredPositions, selection: selectedPositionBinding, sortOrder: $positionSortOrder) {
             TableColumn("") { position in
@@ -224,11 +212,11 @@ struct PositionsView: View {
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { position in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(position.name)
-                        .foregroundStyle(primaryRowColor(for: position))
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                         .lineLimit(1)
                     Text(position.symbol)
                         .font(.system(size: 10))
-                        .foregroundStyle(secondaryRowColor(for: position))
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
                         .lineLimit(1)
                 }
             }
@@ -237,10 +225,10 @@ struct PositionsView: View {
             TableColumn(localizedText("类别", "Type", language: store.appLanguage)) { position in
                 HStack(spacing: PortfolixSpacing.xs) {
                     Circle()
-                        .fill(isSelected(position) ? Color.white : position.category.color)
+                        .fill(PositionTableForeground(color: position.category.color))
                         .frame(width: 5, height: 5)
                     Text(position.category.title(language: store.appLanguage))
-                        .foregroundStyle(isSelected(position) ? Color.white : PortfolixTheme.secondaryText)
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.secondaryText))
                         .lineLimit(1)
                 }
             }
@@ -248,7 +236,7 @@ struct PositionsView: View {
 
             TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { position in
                 Text(NSDecimalNumber(decimal: position.quantity).stringValue)
-                    .foregroundStyle(primaryRowColor(for: position))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                     .monospacedDigit()
             }
             .width(72)
@@ -258,7 +246,7 @@ struct PositionsView: View {
                 value: \.totalCost
             ) { position in
                 Text(formatMoney(position.totalCost, currency: position.quoteCurrency))
-                    .foregroundStyle(primaryRowColor(for: position))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                     .monospacedDigit()
             }
             .width(116)
@@ -268,7 +256,7 @@ struct PositionsView: View {
                 value: \.marketValueCNY
             ) { position in
                 Text(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
-                    .foregroundStyle(primaryRowColor(for: position))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                     .monospacedDigit()
             }
             .width(116)
@@ -278,47 +266,22 @@ struct PositionsView: View {
                 value: \.profitRate
             ) { position in
                 Text(formatPercent(position.profitRate))
-                    .foregroundStyle(
-                        isSelected(position)
-                            ? Color.white
-                            : PortfolixTheme.performanceColor(for: position.profitRate)
-                    )
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: position.profitRate)))
                     .monospacedDigit()
             }
             .width(72)
 
             TableColumn(localizedText("来源 / 状态", "Source / Status", language: store.appLanguage)) { position in
-                HStack(spacing: PortfolixSpacing.sm) {
-                    VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                        Text(localizedQuoteSource(position.source, language: store.appLanguage))
-                            .foregroundStyle(primaryRowColor(for: position))
-                            .lineLimit(1)
-                        RelativeTimeText { now in
-                            "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: now, language: store.appLanguage))"
-                        }
-                            .font(.system(size: 10))
-                            .foregroundStyle(secondaryRowColor(for: position))
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: PortfolixSpacing.sm)
-
-                    if isSelected(position), canRefresh(position) {
-                        PositionRefreshButton(
-                            position: position,
-                            isRefreshing: store.refreshingPositionIDs.contains(position.id),
-                            language: store.appLanguage
-                        ) {
-                            store.refreshPosition(id: position.id)
-                        }
-                    }
-                }
+                PositionSourceCell(position: position, store: store)
             }
             .width(min: 136, ideal: 160)
         }
-        .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark))
+        .scrollContentBackground(.hidden)
+        .background(PortfolixTheme.panel)
         .transaction { transaction in
             transaction.animation = nil
+            transaction.disablesAnimations = true
         }
         .contextMenu(forSelectionType: Position.ID.self) { selection in
             if let positionID = selection.first {
@@ -410,6 +373,56 @@ struct PositionsView: View {
             clearBatchSelection()
         } catch {
             operationErrorMessage = error.localizedDescription
+        }
+    }
+}
+
+// Resolve selection styling with the native row background, rather than redrawing
+// every column from a separate copy of the table selection state.
+struct PositionTableForeground: ShapeStyle {
+    let color: Color
+    var selectedOpacity: Double = 1
+
+    func resolve(in environment: EnvironmentValues) -> Color {
+        environment.backgroundProminence == .increased ? .white.opacity(selectedOpacity) : color
+    }
+}
+
+struct PositionSourceCell: View {
+    let position: Position
+    // Table cells can be hosted and recycled outside the parent environment tree.
+    let store: PortfolioStore
+
+    var body: some View {
+        let isSelected = store.selectedPositionID == position.id
+
+        HStack(spacing: PortfolixSpacing.sm) {
+            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
+                Text(localizedQuoteSource(position.source, language: store.appLanguage))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .lineLimit(1)
+                RelativeTimeText { now in
+                    "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: now, language: store.appLanguage))"
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: PortfolixSpacing.sm)
+
+            if position.category != .cash {
+                PositionRefreshButton(
+                    position: position,
+                    isRefreshing: store.refreshingPositionIDs.contains(position.id),
+                    language: store.appLanguage
+                ) {
+                    store.refreshPosition(id: position.id)
+                }
+                .opacity(isSelected ? 1 : 0)
+                .allowsHitTesting(isSelected)
+                .accessibilityHidden(!isSelected)
+            }
         }
     }
 }
@@ -855,10 +868,9 @@ private struct AIReportChatHeader: View {
 
             Spacer()
 
-            HStack(spacing: PortfolixSpacing.md) {
+            HStack(spacing: PortfolixLayout.controlSpacing) {
                 AIReportHeaderMenuTag(
                     title: model,
-                    symbol: "cpu",
                     options: availableModels,
                     selection: $selectedModel,
                     isEnabled: isInteractionEnabled && !availableModels.isEmpty,
@@ -867,7 +879,6 @@ private struct AIReportChatHeader: View {
 
                 AIReportHeaderMenuTag(
                     title: selectedAnalysisMode.title(language: language),
-                    symbol: "network",
                     options: SmartAnalysisMode.availableCases,
                     selection: $selectedAnalysisMode,
                     isEnabled: isInteractionEnabled,
@@ -890,46 +901,21 @@ private struct AIReportChatHeader: View {
 
 private struct AIReportHeaderMenuTag<Option: Hashable>: View {
     let title: String
-    let symbol: String
     let options: [Option]
     @Binding var selection: Option
     let isEnabled: Bool
     let optionTitle: (Option) -> String
 
     var body: some View {
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Button {
-                    selection = option
-                } label: {
-                    Text(optionTitle(option))
-                }
-            }
-        } label: {
-            HStack(spacing: PortfolixSpacing.sm) {
-                Image(systemName: symbol)
-                Text(title)
-                    .fixedSize(horizontal: true, vertical: false)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
-            }
-            .font(PortfolixTypography.captionEmphasis)
-            .lineLimit(1)
-            .foregroundStyle(PortfolixTheme.secondaryText)
-            .padding(.horizontal, PortfolixSpacing.sm)
-            .padding(.vertical, 6)
-            .portfolixGlass(
-                in: Capsule(),
-                fallbackTint: PortfolixTheme.panelSoft,
-                fallbackOpacity: 0.48
-            )
-            .contentShape(Capsule())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
+        PortfolixGlassMenuPicker(
+            title: title,
+            selection: $selection,
+            options: options,
+            optionTitle: optionTitle,
+            selectionTitle: title,
+            showsSelectionIndicator: false
+        )
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.64)
     }
 }
 
@@ -952,14 +938,9 @@ private struct AIReportChatActionsMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.secondaryText)
-                .frame(width: 36, height: 26)
-                .portfolixGlass(
-                    in: Capsule(),
-                    fallbackTint: PortfolixTheme.panelSoft,
-                    fallbackOpacity: 0.42
-                )
-                .contentShape(Capsule())
+                .foregroundStyle(PortfolixTheme.glassControlText)
+                .frame(width: PortfolixLayout.glassControlHeight)
+                .portfolixGlassControl()
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -982,12 +963,12 @@ private struct AIReportUserBubble: View {
 
             Text(text)
                 .font(PortfolixTypography.body)
-                .foregroundStyle(Color(hex: 0x120F20))
+                .foregroundStyle(PortfolixTheme.userMessageText)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .padding(.horizontal, PortfolixSpacing.lg)
                 .padding(.vertical, PortfolixSpacing.md)
-                .background(PortfolixTheme.purpleGradient, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+                .background(PortfolixTheme.userMessageGradient, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1816,9 +1797,8 @@ private struct AIAnalysisDiagnosticCard: View {
                     )
                     .font(PortfolixTypography.captionEmphasis)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(copied ? PortfolixTheme.mint : PortfolixTheme.amber)
-                .help(localizedText("复制脱敏诊断信息", "Copy redacted diagnostic details", language: language))
+                .buttonStyle(QuietButtonStyle())
+                .accessibilityLabel(localizedText("复制脱敏诊断信息", "Copy redacted diagnostic details", language: language))
             }
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
@@ -2092,7 +2072,8 @@ private struct AIReportChatComposer: View {
             }
         }
         .padding(.horizontal, PortfolixSpacing.lg)
-        .padding(.vertical, PortfolixSpacing.md)
+        .padding(.top, PortfolixLayout.chatComposerTopInset)
+        .padding(.bottom, PortfolixLayout.chatComposerBottomInset)
         .onAppear { configureVoiceRecorder() }
         .onChange(of: language) { _, _ in configureVoiceRecorder() }
         .onChange(of: isAwaitingResponse) { wasAwaitingResponse, isAwaitingResponse in
@@ -2236,21 +2217,11 @@ private struct AIReportGenerateButton: View {
             Label(title, systemImage: "sparkles")
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
-                .foregroundStyle(Color(hex: 0x120F20))
                 .padding(.horizontal, PortfolixSpacing.md)
                 .frame(height: AIReportComposerMetrics.controlHeight)
                 .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                .fill(PortfolixTheme.purpleGradient)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        )
-        .opacity(isEnabled ? 1 : 0.5)
+        .buttonStyle(PrimaryButtonStyle(preservesLabelSize: true))
         .disabled(!isEnabled)
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -2271,19 +2242,9 @@ private struct AIReportSendButton: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? Color.black.opacity(0.85) : PortfolixTheme.tertiaryText)
-        .background {
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                .fill(isEnabled ? AnyShapeStyle(PortfolixTheme.purpleGradient) : AnyShapeStyle(PortfolixTheme.panelSoft))
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                .stroke(isEnabled ? Color.white.opacity(0.16) : PortfolixTheme.border.opacity(0.84), lineWidth: 1)
-        )
-        .opacity(isEnabled ? 1 : 0.55)
+        .buttonStyle(PrimaryButtonStyle(preservesLabelSize: true))
         .disabled(!isEnabled)
-        .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -3463,7 +3424,7 @@ private struct RiskConstraintSliderRow: View {
                             onCommit()
                         }
                     }
-                        .tint(PortfolixTheme.lilac)
+                        .tint(PortfolixTheme.controlAccent)
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {
                         Text("\(limitLabel) \(percentText(value))")
@@ -3474,7 +3435,8 @@ private struct RiskConstraintSliderRow: View {
 
                         RiskLimitBadge(
                             title: isPassing ? localizedText("正常", "OK", language: language) : localizedText("需关注", "Watch", language: language),
-                            color: isPassing ? PortfolixTheme.mint : PortfolixTheme.amber
+                            color: isPassing ? PortfolixTheme.mint : PortfolixTheme.amber,
+                            textColor: isPassing ? PortfolixTheme.positiveStatusText : PortfolixTheme.warningStatusText
                         )
                     }
                     .frame(width: 92, alignment: .trailing)
@@ -3616,11 +3578,12 @@ private struct RiskCountPill: View {
 private struct RiskLimitBadge: View {
     let title: String
     let color: Color
+    let textColor: Color
 
     var body: some View {
         Text(title)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(color)
+            .foregroundStyle(textColor)
             .lineLimit(1)
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, PortfolixSpacing.xs)
@@ -3652,40 +3615,40 @@ struct SettingsView: View {
 
                 SettingsSection(title: settingsText("显示设置", "Display"), symbol: "display") {
                     SettingsRow(title: settingsText("外观模式", "Appearance")) {
-                        Picker(settingsText("外观模式", "Appearance"), selection: $store.appearanceMode) {
-                            ForEach(AppearanceMode.allCases) { mode in
-                                Text(mode.title(language: store.appLanguage)).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 240, alignment: .trailing)
+                        PortfolixGlassSegmentedPicker(
+                            title: settingsText("外观模式", "Appearance"),
+                            selection: $store.appearanceMode,
+                            options: AppearanceMode.allCases,
+                            optionTitle: { $0.title(language: store.appLanguage) },
+                            width: 240,
+                            height: PortfolixLayout.settingsControlHeight
+                        )
                     }
 
                     SettingsDivider()
 
                     SettingsRow(title: settingsText("界面语言", "Language")) {
-                        Picker(settingsText("界面语言", "Language"), selection: $store.appLanguage) {
-                            ForEach(AppLanguage.allCases) { language in
-                                Text(language.rawValue).tag(language)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 240, alignment: .trailing)
+                        PortfolixGlassSegmentedPicker(
+                            title: settingsText("界面语言", "Language"),
+                            selection: $store.appLanguage,
+                            options: AppLanguage.allCases,
+                            optionTitle: { $0.rawValue },
+                            width: 240,
+                            height: PortfolixLayout.settingsControlHeight
+                        )
                     }
 
                     SettingsDivider()
 
                     SettingsRow(title: settingsText("默认展示币种", "Default Currency")) {
-                        Picker(settingsText("默认展示币种", "Default Currency"), selection: $store.displayCurrency) {
-                            ForEach(DisplayCurrency.allCases) { currency in
-                                Text(currency.rawValue).tag(currency)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 240, alignment: .trailing)
+                        PortfolixGlassSegmentedPicker(
+                            title: settingsText("默认展示币种", "Default Currency"),
+                            selection: $store.displayCurrency,
+                            options: DisplayCurrency.allCases,
+                            optionTitle: { $0.rawValue },
+                            width: 240,
+                            height: PortfolixLayout.settingsControlHeight
+                        )
                     }
                 }
 
@@ -3724,14 +3687,14 @@ struct SettingsView: View {
                         ),
                         helpPlacement: .trailing
                     ) {
-                        Picker(settingsText("分析模式", "Analysis Mode"), selection: smartAnalysisModeBinding) {
-                            ForEach(SmartAnalysisMode.availableCases) { mode in
-                                Text(mode.title(language: store.appLanguage)).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 240, alignment: .trailing)
+                        PortfolixGlassSegmentedPicker(
+                            title: settingsText("分析模式", "Analysis Mode"),
+                            selection: smartAnalysisModeBinding,
+                            options: SmartAnalysisMode.availableCases,
+                            optionTitle: { $0.title(language: store.appLanguage) },
+                            width: 240,
+                            height: PortfolixLayout.settingsControlHeight
+                        )
                     }
                     SettingsDivider()
                     SettingsRow(title: settingsText("内容保留时长", "Content Retention")) {
@@ -4097,7 +4060,7 @@ private struct SettingsRow<Trailing: View>: View {
     }
 }
 
-private struct SettingsMenuPicker<Value: CaseIterable & Identifiable>: View where Value.AllCases: RandomAccessCollection {
+private struct SettingsMenuPicker<Value: CaseIterable & Identifiable & Hashable>: View where Value.AllCases: RandomAccessCollection {
     let title: String
     @Binding var selection: Value
     var isEnabled = true
@@ -4105,58 +4068,15 @@ private struct SettingsMenuPicker<Value: CaseIterable & Identifiable>: View wher
     let optionTitle: (Value) -> String
 
     var body: some View {
-        Menu {
-            ForEach(Value.allCases, id: \.id) { option in
-                Button {
-                    selection = option
-                } label: {
-                    Text(optionTitle(option))
-                }
-            }
-        } label: {
-            HStack(spacing: PortfolixSpacing.sm) {
-                Text(optionTitle(selection))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.9)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(isEnabled ? PortfolixTheme.tertiaryText : PortfolixTheme.tertiaryText.opacity(0.72))
-            }
-            .font(PortfolixTypography.captionEmphasis)
-            .foregroundStyle(isEnabled ? PortfolixTheme.primaryText : PortfolixTheme.tertiaryText)
-            .padding(.horizontal, PortfolixSpacing.md)
-            .frame(width: resolvedWidth, height: 32, alignment: .trailing)
-            .background {
-                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                    .fill(PortfolixTheme.panelElevated)
-                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                    .stroke(PortfolixTheme.border.opacity(0.84), lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-        }
-        .buttonStyle(.plain)
+        PortfolixGlassMenuPicker(
+            title: title,
+            selection: $selection,
+            options: Array(Value.allCases),
+            optionTitle: optionTitle,
+            height: PortfolixLayout.settingsControlHeight
+        )
+        .frame(width: width, alignment: .trailing)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.58)
-        .accessibilityLabel(title)
-        .accessibilityValue(optionTitle(selection))
-    }
-
-    private var resolvedWidth: CGFloat {
-        if let width {
-            return width
-        }
-        let longestTextWidth = Value.allCases
-            .map { renderedTextWidth(optionTitle($0)) }
-            .max() ?? 0
-        let horizontalPadding = PortfolixSpacing.md * 2
-        let chevronWidth: CGFloat = 12
-        let minimumWidth: CGFloat = 78
-        return ceil(max(minimumWidth, longestTextWidth + horizontalPadding + PortfolixSpacing.sm + chevronWidth))
-    }
-
-    private func renderedTextWidth(_ text: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        return (text as NSString).size(withAttributes: [.font: font]).width
     }
 }
 
@@ -4436,12 +4356,9 @@ private struct PositionRefreshButton: View {
                 .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white.opacity(isRefreshing ? 0.48 : 0.92))
-        .background {
-            Circle()
-                .fill(.white.opacity(isRefreshing ? 0.10 : 0.16))
-        }
-        .help(localizedText("更新此资产价格", "Refresh this asset price", language: language))
+        .foregroundStyle(PortfolixTheme.glassControlText)
+        .portfolixGlass(in: Circle(), interactive: true)
+        .opacity(isRefreshing ? 0.5 : 1)
         .accessibilityLabel(
             language == .english
                 ? "Refresh \(position.name) price"

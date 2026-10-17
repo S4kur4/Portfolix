@@ -4,18 +4,24 @@ import SwiftUI
 enum PortfolixTheme {
     // Keep large surfaces neutral so brand color is reserved for meaning and interaction.
     static let canvas = adaptive(light: 0xE7E9ED, dark: 0x000000)
-    private static let primarySurface = adaptive(light: 0xF2F3F5, dark: 0x060607)
+    private static let primarySurface = adaptive(light: 0xF2F3F5, dark: 0x0B0C0E)
     static let sidebar = primarySurface
     static let panel = primarySurface
-    static let panelElevated = adaptive(light: 0xE7E9ED, dark: 0x0E0F11)
-    static let panelSoft = adaptive(light: 0xDDE0E5, dark: 0x17181C)
+    static let panelElevated = adaptive(light: 0xE7E9ED, dark: 0x17181B)
+    static let panelSoft = adaptive(light: 0xDDE0E5, dark: 0x1E2024)
     static let selectionFill = adaptive(light: 0xE2DDF1, dark: 0x18151F)
     static let selectionText = adaptive(light: 0x513AB6, dark: 0xC5BAF8)
+    static let controlSelectionFill = adaptive(light: 0xDCD7E7, dark: 0x3F3B4B)
     static let border = Color(nsColor: .separatorColor)
     static let borderStrong = Color(nsColor: .gridColor)
-    static let primaryText = Color.primary
-    static let secondaryText = Color.secondary
-    static let tertiaryText = Color(nsColor: .secondaryLabelColor).opacity(0.78)
+    static let primaryText = Color(nsColor: .labelColor)
+    static let secondaryText = Color(nsColor: .secondaryLabelColor)
+    // Keep useful metadata readable; reserve the dimmer system color for disabled controls.
+    static let tertiaryText = secondaryText
+    static let disabledText = Color(nsColor: .disabledControlTextColor)
+    // Opaque text avoids different vibrancy blending between AppKit and SwiftUI glass.
+    private static let lightGlassText: UInt = 0x3E3E3E
+    static let glassControlText = adaptive(light: lightGlassText, dark: 0xFFFFFF)
     static let lilac = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
     static let violet = adaptive(light: 0x7253DB, dark: 0x8C75FF)
     static let blue = adaptive(light: 0x3B6FCC, dark: 0x7FA7FF)
@@ -23,6 +29,14 @@ enum PortfolixTheme {
     static let amber = adaptive(light: 0x9B681E, dark: 0xD7A967)
     static let mint = adaptive(light: 0x287D70, dark: 0x76C7B7)
     static let danger = adaptive(light: 0xB44755, dark: 0xDD7D88)
+    // Text on tonal status backgrounds needs more contrast than the decorative fill.
+    static let positiveStatusText = adaptive(light: 0x20675C, dark: 0x76C7B7)
+    static let negativeStatusText = adaptive(light: 0x9E3947, dark: 0xDD7D88)
+    static let warningStatusText = adaptive(light: 0x805319, dark: 0xD7A967)
+    static let controlAccent = violet
+    static let primaryButtonTint = adaptive(light: 0xAF9AFF, dark: 0xB7A5FF)
+    static let primaryButtonText = adaptive(light: lightGlassText, dark: 0x120F20)
+    static let buttonShadow = Color.black.opacity(0.12)
 
     static func performanceColor(for value: Decimal) -> Color {
         if value > 0 { return mint }
@@ -35,6 +49,23 @@ enum PortfolixTheme {
         if value < 0 { return danger }
         return secondaryText
     }
+
+    static func performanceStatusText(for value: Decimal) -> Color {
+        if value > 0 { return positiveStatusText }
+        if value < 0 { return negativeStatusText }
+        return secondaryText
+    }
+
+    static let userMessageText = Color(hex: 0x120F20)
+    static let userMessageGradientColors = [
+        adaptive(light: 0xAF9AFF, dark: 0xC3B1FF),
+        adaptive(light: 0x8F75EB, dark: 0x8068EF),
+    ]
+    static let userMessageGradient = LinearGradient(
+        colors: userMessageGradientColors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
 
     static let purpleGradient = LinearGradient(
         colors: [adaptive(light: 0xAF9AFF, dark: 0xC3B1FF), adaptive(light: 0x7457E2, dark: 0x8068EF)],
@@ -66,9 +97,17 @@ enum PortfolixRadius {
 }
 
 enum PortfolixLayout {
+    static let cardPadding: CGFloat = PortfolixSpacing.lg
+    static let cardHeaderHeight: CGFloat = 24
     static let dashboardHeroContentHeight: CGFloat = 268
     static let dashboardTrendContentHeight: CGFloat = 252
-    static let dashboardCompactControlHeight: CGFloat = 24
+    static let glassControlHeight: CGFloat = 24
+    static let positionsToolbarControlHeight: CGFloat = 30
+    static let settingsControlHeight: CGFloat = 30
+    static let chatComposerTopInset: CGFloat = PortfolixSpacing.lg
+    static let chatComposerBottomInset: CGFloat = PortfolixSpacing.lg
+    static let controlSpacing: CGFloat = PortfolixSpacing.sm
+    static let controlSelectionInset: CGFloat = 2
     static let distributionContentHeight: CGFloat = 180
     static let reportSummaryContentHeight: CGFloat = 144
     static let riskProfileSummaryContentHeight: CGFloat = 104
@@ -118,8 +157,22 @@ extension Decimal {
 }
 
 struct PortfolixSidebarBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     var body: some View {
-        PortfolixTheme.sidebar
+        Group {
+            if reduceTransparency {
+                PortfolixTheme.sidebar
+            } else if #available(macOS 26.0, *) {
+                PortfolixTheme.sidebar
+                    .glassEffect(.clear, in: Rectangle())
+                    // Extend the glass rim beyond the clipped sidebar so it does not read as a divider.
+                    .padding(-PortfolixSpacing.xs)
+            } else {
+                PortfolixTheme.sidebar
+            }
+        }
+        .clipped()
         .ignoresSafeArea()
     }
 }
@@ -171,7 +224,6 @@ private struct PortfolixGlassSurface<S: Shape>: ViewModifier {
                 .background {
                     shape.fill(.regularMaterial)
                     shape.fill(fallbackTint.opacity(fallbackOpacity))
-                    shape.stroke(PortfolixTheme.border.opacity(0.72), lineWidth: 1)
                 }
         }
     }
@@ -207,13 +259,156 @@ extension View {
             )
         )
     }
+
+    func portfolixGlassControl(height: CGFloat = PortfolixLayout.glassControlHeight) -> some View {
+        frame(height: height)
+            .foregroundStyle(PortfolixTheme.glassControlText)
+            .portfolixGlass(
+                in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
+                fallbackTint: PortfolixTheme.panelSoft,
+                fallbackOpacity: 0.48,
+                interactive: true
+            )
+            .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+    }
+}
+
+struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [Value]
+    let optionTitle: (Value) -> String
+    var optionSymbol: ((Value) -> String)? = nil
+    var width: CGFloat? = nil
+    var height: CGFloat = PortfolixLayout.glassControlHeight
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @FocusState private var focusedOption: Value?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                } label: {
+                    Group {
+                        if let optionSymbol {
+                            Image(systemName: optionSymbol(option))
+                                .frame(width: 14)
+                        } else {
+                            Text(optionTitle(option))
+                        }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(PortfolixTheme.glassControlText)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, optionSymbol == nil ? PortfolixSpacing.md : PortfolixSpacing.sm)
+                    .frame(maxWidth: width == nil ? nil : .infinity)
+                    .frame(height: height - PortfolixLayout.controlSelectionInset * 2)
+                    .background {
+                        if selection == option {
+                            RoundedRectangle(
+                                cornerRadius: PortfolixRadius.compact - PortfolixLayout.controlSelectionInset,
+                                style: .continuous
+                            )
+                            .fill(PortfolixTheme.controlSelectionFill)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focused($focusedOption, equals: option)
+                .overlay(alignment: .trailing) {
+                    if showsDivider(after: option) {
+                        Rectangle()
+                            .fill(PortfolixTheme.border)
+                            .frame(width: 0.5, height: PortfolixSpacing.md)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .accessibilityLabel(optionTitle(option))
+                .accessibilityAddTraits(selection == option ? .isSelected : [])
+                .onMoveCommand { moveSelection($0) }
+            }
+        }
+        .padding(PortfolixLayout.controlSelectionInset)
+        .frame(width: width)
+        .portfolixGlassControl(height: height)
+        .fixedSize(horizontal: width == nil, vertical: true)
+        .opacity(isEnabled ? 1 : 0.58)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+
+    private func showsDivider(after option: Value) -> Bool {
+        guard let index = options.firstIndex(of: option), index + 1 < options.count else { return false }
+        return selection != option && selection != options[index + 1]
+    }
+
+    private func moveSelection(_ direction: MoveCommandDirection) {
+        guard let index = options.firstIndex(of: selection) else { return }
+        let next: Int
+        switch direction {
+        case .left: next = index - 1
+        case .right: next = index + 1
+        default: return
+        }
+        guard options.indices.contains(next) else { return }
+        selection = options[next]
+        focusedOption = options[next]
+    }
+}
+
+struct PortfolixGlassMenuPicker<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [Value]
+    let optionTitle: (Value) -> String
+    var selectionTitle: String? = nil
+    var height: CGFloat = PortfolixLayout.glassControlHeight
+    var showsSelectionIndicator = true
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                } label: {
+                    if showsSelectionIndicator && selection == option {
+                        Label(optionTitle(option), systemImage: "checkmark")
+                    } else {
+                        Text(optionTitle(option))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: PortfolixSpacing.sm) {
+                Text(selectionTitle ?? optionTitle(selection))
+                    .fixedSize(horizontal: true, vertical: false)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(PortfolixTypography.captionEmphasis)
+            .padding(.horizontal, PortfolixSpacing.sm)
+            .portfolixGlassControl(height: height)
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .opacity(isEnabled ? 1 : 0.58)
+        .accessibilityLabel(title)
+        .accessibilityValue(selectionTitle ?? optionTitle(selection))
+    }
 }
 
 struct Panel<Content: View>: View {
     let content: Content
-    var padding: CGFloat = PortfolixSpacing.lg
+    var padding: CGFloat = PortfolixLayout.cardPadding
 
-    init(padding: CGFloat = PortfolixSpacing.lg, @ViewBuilder content: () -> Content) {
+    init(padding: CGFloat = PortfolixLayout.cardPadding, @ViewBuilder content: () -> Content) {
         self.padding = padding
         self.content = content()
     }
@@ -224,8 +419,6 @@ struct Panel<Content: View>: View {
             .background {
                 RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                     .fill(PortfolixTheme.panel)
-                RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
-                    .strokeBorder(PortfolixTheme.border.opacity(0.72), lineWidth: 0.5)
             }
     }
 }
@@ -248,18 +441,19 @@ struct SectionHeader<Trailing: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
             if let symbol {
                 Image(systemName: symbol)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(PortfolixTheme.lilac)
-                    .frame(width: 16)
+                    .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
             }
 
             Text(title)
                 .font(PortfolixTypography.sectionTitle)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .lineLimit(1)
+                .frame(height: PortfolixLayout.cardHeaderHeight)
 
             Spacer(minLength: PortfolixSpacing.sm)
             trailing
@@ -334,51 +528,98 @@ struct CapsuleLabel: View {
 }
 
 struct PrimaryButtonStyle: ButtonStyle {
+    var preservesLabelSize = false
+
     func makeBody(configuration: Configuration) -> some View {
-        InteractiveButtonLabel(configuration: configuration, isPrimary: true)
+        InteractiveButtonLabel(configuration: configuration, isPrimary: true, preservesLabelSize: preservesLabelSize)
     }
 }
 
 struct QuietButtonStyle: ButtonStyle {
+    var preservesLabelSize = false
+
     func makeBody(configuration: Configuration) -> some View {
-        InteractiveButtonLabel(configuration: configuration, isPrimary: false)
+        InteractiveButtonLabel(configuration: configuration, isPrimary: false, preservesLabelSize: preservesLabelSize)
     }
+}
+
+@available(macOS 26.0, *)
+struct ButtonGlassBackground: NSViewRepresentable {
+    let tint: Color?
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeNSView(context: Context) -> ButtonGlassView {
+        let view = ButtonGlassView()
+        view.style = .regular
+        view.cornerRadius = PortfolixRadius.compact
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ nsView: ButtonGlassView, context: Context) {
+        nsView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        nsView.tintColor = tint.map { NSColor($0) }
+    }
+}
+
+@available(macOS 26.0, *)
+final class ButtonGlassView: NSGlassEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private struct InteractiveButtonLabel: View {
     let configuration: ButtonStyle.Configuration
     let isPrimary: Bool
+    let preservesLabelSize: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
 
     var body: some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
             .lineLimit(1)
-            .foregroundStyle(isPrimary ? Color(hex: 0x120F20) : PortfolixTheme.secondaryText)
-            .padding(.horizontal, PortfolixSpacing.md)
-            .padding(.vertical, PortfolixSpacing.sm)
+            .foregroundStyle(foregroundColor)
+            .padding(.horizontal, preservesLabelSize ? 0 : PortfolixSpacing.md)
+            .padding(.vertical, preservesLabelSize ? 0 : PortfolixSpacing.sm)
             .background {
-                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                    .fill(isPrimary ? AnyShapeStyle(PortfolixTheme.purpleGradient) : AnyShapeStyle(.regularMaterial))
-                if !isPrimary {
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                        .fill(PortfolixTheme.panelSoft.opacity(isHovering ? 0.54 : 0.38))
+                Group {
+                    if #available(macOS 26.0, *) {
+                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.primaryButtonTint : nil)
+                            .overlay {
+                                if isPrimary && isEnabled {
+                                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                                        .fill(PortfolixTheme.primaryButtonTint.opacity(0.45))
+                                }
+                            }
+                    } else {
+                        RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                            .fill(.regularMaterial)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                                    .fill(isPrimary && isEnabled
+                                        ? PortfolixTheme.primaryButtonTint.opacity(0.88)
+                                        : PortfolixTheme.panelSoft.opacity(0.48))
+                            }
+                    }
                 }
+                    .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                    .shadow(color: PortfolixTheme.buttonShadow, radius: 4, x: 0, y: 2)
+                    .allowsHitTesting(false)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                    .stroke(
-                        isPrimary ? Color.white.opacity(0.16) : PortfolixTheme.border.opacity(0.84),
-                        lineWidth: 1
-                    )
-            }
-            .opacity(configuration.isPressed ? 0.72 : isHovering ? 0.88 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+            .opacity(!isEnabled ? 0.5 : configuration.isPressed ? 0.72 : isHovering ? 0.88 : 1)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
             .onHover { isHovering = $0 }
+    }
+
+    private var foregroundColor: Color {
+        if !isEnabled { return PortfolixTheme.disabledText }
+        if configuration.role == .destructive { return PortfolixTheme.danger }
+        return isPrimary ? PortfolixTheme.primaryButtonText : PortfolixTheme.glassControlText
     }
 }
 

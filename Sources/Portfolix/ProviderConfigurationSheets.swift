@@ -81,13 +81,12 @@ struct LLMConfigurationSheet: View {
 
                     if !availableModels.isEmpty {
                         ProviderFormRow(label: text("模型", "Model"), isRequired: true, isInvalid: shouldHighlight(.llmModel)) {
-                            Picker("", selection: $model) {
-                                ForEach(availableModels, id: \.self) { model in
-                                    Text(model).tag(model)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
+                            PortfolixGlassMenuPicker(
+                                title: text("模型", "Model"),
+                                selection: $model,
+                                options: availableModels,
+                                optionTitle: { $0 }
+                            )
                             .frame(width: valueFieldWidth, alignment: .trailing)
                             .onChange(of: model) { _, _ in
                                 scheduleAPIKeyValidation()

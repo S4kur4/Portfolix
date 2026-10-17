@@ -142,15 +142,15 @@ private struct PortfolioHeroCard: View {
                     HStack(alignment: .center, spacing: PortfolixSpacing.md) {
                         SectionHeader(title: localizedText("组合价值", "Portfolio Value", language: store.appLanguage), symbol: "briefcase.fill")
 
-                        Picker(localizedText("展示币种", "Display Currency", language: store.appLanguage), selection: $store.displayCurrency) {
-                            ForEach(DisplayCurrency.allCases) { currency in
-                                Text(currency.rawValue).tag(currency)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 270, alignment: .trailing)
+                        PortfolixGlassSegmentedPicker(
+                            title: localizedText("展示币种", "Display Currency", language: store.appLanguage),
+                            selection: $store.displayCurrency,
+                            options: DisplayCurrency.allCases,
+                            optionTitle: { $0.rawValue },
+                            width: 270
+                        )
                     }
+                    .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                     Spacer(minLength: 0)
 
@@ -191,7 +191,7 @@ private struct PortfolioHeroCard: View {
                     .foregroundStyle(store.isRefreshing ? PortfolixTheme.lilac : PortfolixTheme.tertiaryText)
                 }
                 .frame(height: PortfolixLayout.dashboardHeroContentHeight, alignment: .topLeading)
-                .padding(PortfolixSpacing.xl)
+                .padding(PortfolixLayout.cardPadding)
             }
             .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
         }
@@ -431,7 +431,7 @@ private struct PriceRefreshButton: View {
     }
 
     private var foregroundStyle: AnyShapeStyle {
-        AnyShapeStyle(isHovering && !store.isRefreshing ? PortfolixTheme.primaryText : PortfolixTheme.secondaryText)
+        AnyShapeStyle(PortfolixTheme.glassControlText)
     }
 }
 
@@ -522,34 +522,28 @@ private struct PerformanceTrendCard: View {
     var body: some View {
         @Bindable var store = store
 
-        Panel(padding: PortfolixSpacing.lg) {
+        Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
                 HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
                     SectionHeader(title: localizedText("收益趋势", "Return Trend", language: store.appLanguage), symbol: "chart.xyaxis.line")
 
-                    HStack(spacing: PortfolixSpacing.md) {
-                        Picker(localizedText("趋势指标", "Metric", language: store.appLanguage), selection: $store.trendMetric) {
-                            ForEach(TrendMetric.allCases) { metric in
-                                Text(metric.title(language: store.appLanguage)).tag(metric)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
+                    HStack(spacing: PortfolixLayout.controlSpacing) {
+                        PortfolixGlassSegmentedPicker(
+                            title: localizedText("趋势指标", "Metric", language: store.appLanguage),
+                            selection: $store.trendMetric,
+                            options: TrendMetric.allCases,
+                            optionTitle: { $0.title(language: store.appLanguage) }
+                        )
 
-                        Picker(localizedText("时间范围", "Range", language: store.appLanguage), selection: $store.trendRange) {
-                            ForEach(TrendRange.allCases) { range in
-                                Text(range.title(language: store.appLanguage)).tag(range)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
+                        PortfolixGlassSegmentedPicker(
+                            title: localizedText("时间范围", "Range", language: store.appLanguage),
+                            selection: $store.trendRange,
+                            options: TrendRange.allCases,
+                            optionTitle: { $0.title(language: store.appLanguage) }
+                        )
                     }
                 }
-                .padding(.trailing, PortfolixSpacing.xs)
+                .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 HStack(alignment: .lastTextBaseline, spacing: PortfolixSpacing.sm) {
                     Text(latestValueText)
@@ -566,7 +560,7 @@ private struct PerformanceTrendCard: View {
 
                 if snapshots.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无历史快照", "No snapshots yet", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, minHeight: 172)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     Chart(snapshots) { snapshot in
                         AreaMark(
@@ -644,7 +638,7 @@ private struct PerformanceTrendCard: View {
                         AxisMarks(values: xAxisDates) { value in
                             AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
                                 .foregroundStyle(PortfolixTheme.border)
-                            AxisValueLabel {
+                            AxisValueLabel(anchor: value.as(Date.self) == xAxisDates.last ? .topTrailing : .top) {
                                 if let date = value.as(Date.self) {
                                     Text(axisDateLabel(date))
                                         .foregroundStyle(PortfolixTheme.tertiaryText)
@@ -666,7 +660,7 @@ private struct PerformanceTrendCard: View {
                             }
                         }
                     }
-                    .frame(height: 172)
+                    .frame(maxHeight: .infinity)
                 }
             }
             .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
@@ -806,6 +800,7 @@ private struct AssetAllocationCard: View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 SectionHeader(title: localizedText("资产配置", "Asset Allocation", language: store.appLanguage), symbol: "chart.pie.fill")
+                    .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 if items.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无资产配置", "No allocation yet", language: store.appLanguage))
@@ -841,6 +836,7 @@ private struct CurrencyDistributionCard: View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 SectionHeader(title: localizedText("计价币种分布", "Currency Exposure", language: store.appLanguage), symbol: "banknote.fill")
+                    .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 if items.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无币种分布", "No currency exposure yet", language: store.appLanguage))
@@ -889,6 +885,7 @@ private struct AssetMixBarCard: View {
                         .foregroundStyle(PortfolixTheme.secondaryText)
                         .lineLimit(1)
                 }
+                .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 if items.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无持仓占比", "No holding mix yet", language: store.appLanguage))
@@ -1136,8 +1133,8 @@ private struct RecentPositionsCard: View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 SectionHeader(title: localizedText("主要持仓", "Top Holdings", language: store.appLanguage), symbol: "list.bullet.rectangle") {
-                    PortfolixGlassGroup(spacing: PortfolixSpacing.md) {
-                        HStack(spacing: PortfolixSpacing.md) {
+                    PortfolixGlassGroup(spacing: PortfolixLayout.controlSpacing) {
+                        HStack(spacing: PortfolixLayout.controlSpacing) {
                             PrimaryPositionLimitMenu(
                                 selection: Binding(
                                     get: { displayLimit },
@@ -1155,6 +1152,7 @@ private struct RecentPositionsCard: View {
                         }
                     }
                 }
+                .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 if primaryPositions.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无持仓", "No holdings yet", language: store.appLanguage))
@@ -1292,7 +1290,6 @@ private struct PrimaryPositionLimitMenu: View {
         } label: {
             DashboardGlassCapsuleLabel(
                 title: selection.title(language: language),
-                symbol: "line.3.horizontal.decrease",
                 showsChevron: true
             )
         }
@@ -1308,41 +1305,34 @@ private struct DashboardGlassCapsuleButton: View {
 
     var body: some View {
         Button(action: action) {
-            DashboardGlassCapsuleLabel(title: title, symbol: symbol)
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: PortfolixLayout.glassControlHeight)
+                .portfolixGlassControl()
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 
 private struct DashboardGlassCapsuleLabel: View {
     let title: String
-    let symbol: String
     var showsChevron = false
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.sm) {
-            Image(systemName: symbol)
             Text(title)
                 .fixedSize(horizontal: true, vertical: false)
             if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
             }
         }
         .font(PortfolixTypography.captionEmphasis)
         .lineLimit(1)
-        .foregroundStyle(PortfolixTheme.secondaryText)
+        .foregroundStyle(PortfolixTheme.glassControlText)
         .padding(.horizontal, PortfolixSpacing.sm)
-        .padding(.vertical, PortfolixSpacing.xs)
-        .frame(height: PortfolixLayout.dashboardCompactControlHeight)
-        .portfolixGlass(
-            in: Capsule(),
-            fallbackTint: PortfolixTheme.panelSoft,
-            fallbackOpacity: 0.48,
-            interactive: true
-        )
-        .contentShape(Capsule())
+        .portfolixGlassControl()
     }
 }
 
@@ -1621,12 +1611,13 @@ private struct InvestmentProfileCard: View {
     }
 
     var body: some View {
-        Panel(padding: PortfolixSpacing.xl) {
+        Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
                 InvestmentProfileHeader(
                     language: store.appLanguage,
                     helpText: store.investmentProfileHelpText
                 )
+                .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
                 if store.positions.isEmpty {
                     DashboardEmptyState(title: localizedText("添加持仓后生成画像", "Add holdings to generate a profile", language: store.appLanguage))
@@ -1656,16 +1647,17 @@ private struct InvestmentProfileHeader: View {
     let helpText: String
 
     var body: some View {
-        HStack(spacing: PortfolixSpacing.sm) {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
             Image(systemName: "person.text.rectangle")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(PortfolixTheme.lilac)
-                .frame(width: 16)
+                .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
 
             Text(localizedText("投资画像", "Investment Profile", language: language))
                 .font(PortfolixTypography.sectionTitle)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .lineLimit(1)
+                .frame(height: PortfolixLayout.cardHeaderHeight)
 
             HelpIcon(
                 text: helpText
@@ -2112,32 +2104,32 @@ private struct DailyProfitCard: View {
                         chartView
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 192, maxHeight: 192)
-                .offset(y: PortfolixSpacing.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
         }
     }
 
     private var header: some View {
-        HStack(spacing: PortfolixSpacing.sm) {
+        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
             HStack(spacing: PortfolixSpacing.sm) {
                 Image(systemName: "calendar.badge.clock")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(PortfolixTheme.lilac)
-                    .frame(width: 16)
+                    .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
 
-                Text(localizedText("每日盈亏", "Daily P&L", language: store.appLanguage))
+                Text(localizedText("盈亏日历", "P&L Calendar", language: store.appLanguage))
                     .font(PortfolixTypography.sectionTitle)
                     .foregroundStyle(PortfolixTheme.primaryText)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                    .frame(height: PortfolixLayout.cardHeaderHeight)
             }
             .layoutPriority(1)
 
-            Spacer(minLength: PortfolixSpacing.xs)
+            Spacer(minLength: 0)
 
-            HStack(spacing: PortfolixSpacing.md) {
+            HStack(spacing: PortfolixLayout.controlSpacing) {
                 HStack(spacing: 0) {
                     Button {
                         moveMonth(by: -1)
@@ -2146,15 +2138,15 @@ private struct DailyProfitCard: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canMoveBackward ? PortfolixTheme.secondaryText : PortfolixTheme.tertiaryText)
+                    .foregroundStyle(canMoveBackward ? PortfolixTheme.glassControlText : PortfolixTheme.disabledText)
                     .disabled(!canMoveBackward)
                     .accessibilityLabel(localizedText("上个月", "Previous month", language: store.appLanguage))
 
                     Text(monthTitle)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.glassControlText)
                         .monospacedDigit()
-                        .frame(width: 56)
+                        .fixedSize(horizontal: true, vertical: false)
 
                     Button {
                         moveMonth(by: 1)
@@ -2163,40 +2155,31 @@ private struct DailyProfitCard: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canMoveForward ? PortfolixTheme.secondaryText : PortfolixTheme.tertiaryText)
+                    .foregroundStyle(canMoveForward ? PortfolixTheme.glassControlText : PortfolixTheme.disabledText)
                     .disabled(!canMoveForward)
                     .accessibilityLabel(localizedText("下个月", "Next month", language: store.appLanguage))
                 }
-                .padding(.horizontal, PortfolixSpacing.sm)
-                .padding(.vertical, PortfolixSpacing.xs)
-                .frame(height: PortfolixLayout.dashboardCompactControlHeight)
-                .portfolixGlass(
-                    in: Capsule(),
-                    fallbackTint: PortfolixTheme.panelSoft,
-                    fallbackOpacity: 0.48,
-                    interactive: true
-                )
-                .contentShape(Capsule())
+                .padding(.horizontal, PortfolixSpacing.xs)
+                .portfolixGlassControl()
 
-                Picker(
-                    localizedText("显示方式", "Display mode", language: store.appLanguage),
-                    selection: $displayMode
-                ) {
-                    ForEach(DailyProfitDisplayMode.allCases) { mode in
-                        Image(systemName: mode.symbol).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(height: PortfolixLayout.dashboardCompactControlHeight)
+                PortfolixGlassSegmentedPicker(
+                    title: localizedText("显示方式", "Display mode", language: store.appLanguage),
+                    selection: $displayMode,
+                    options: DailyProfitDisplayMode.allCases,
+                    optionTitle: { mode in
+                        mode == .calendar
+                            ? localizedText("日历", "Calendar", language: store.appLanguage)
+                            : localizedText("柱状图", "Bar chart", language: store.appLanguage)
+                    },
+                    optionSymbol: { $0.symbol }
+                )
                 .onChange(of: displayMode) { _, _ in
                     highlightedDate = nil
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, PortfolixSpacing.xs)
+        .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
     }
 
     private var summary: some View {
@@ -2228,7 +2211,6 @@ private struct DailyProfitCard: View {
         }
         .font(.system(size: 12, weight: .medium))
         .frame(height: 16)
-        .padding(.trailing, PortfolixSpacing.xs)
     }
 
     private var calendarView: some View {
@@ -2338,7 +2320,7 @@ private struct DailyProfitCard: View {
                 Text(compactCellAmount(amount))
                     .font(.system(size: 7, weight: .medium))
                     .monospacedDigit()
-                    .foregroundStyle(profitColor(amount))
+                    .foregroundStyle(PortfolixTheme.performanceStatusText(for: amount))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }

@@ -28,34 +28,42 @@ struct RiskQuestionnaireSheet: View {
 
             Form {
                 Section(localizedText("投资背景", "Investment Background", language: store.appLanguage)) {
-                    Picker(localizedText("预计持有周期", "Expected holding period", language: store.appLanguage), selection: $investmentHorizon) {
-                        Text(localizedText("< 1 年", "< 1 year", language: store.appLanguage)).tag("< 1 年")
-                        Text(localizedText("1-3 年", "1-3 years", language: store.appLanguage)).tag("1-3 年")
-                        Text(localizedText("3-5 年", "3-5 years", language: store.appLanguage)).tag("3-5 年")
-                        Text(localizedText("> 5 年", "> 5 years", language: store.appLanguage)).tag("> 5 年")
+                    LabeledContent(localizedText("预计持有周期", "Expected holding period", language: store.appLanguage)) {
+                        PortfolixGlassMenuPicker(
+                            title: localizedText("预计持有周期", "Expected holding period", language: store.appLanguage),
+                            selection: $investmentHorizon,
+                            options: ["< 1 年", "1-3 年", "3-5 年", "> 5 年"],
+                            optionTitle: optionTitle
+                        )
                     }
 
-                    Picker(localizedText("投资经验", "Investment experience", language: store.appLanguage), selection: $investmentExperience) {
-                        Text(localizedText("初次接触", "New investor", language: store.appLanguage)).tag("初次接触")
-                        Text(localizedText("1-3 年", "1-3 years", language: store.appLanguage)).tag("1-3 年")
-                        Text(localizedText("3-5 年", "3-5 years", language: store.appLanguage)).tag("3-5 年")
-                        Text(localizedText("> 5 年", "> 5 years", language: store.appLanguage)).tag("> 5 年")
+                    LabeledContent(localizedText("投资经验", "Investment experience", language: store.appLanguage)) {
+                        PortfolixGlassMenuPicker(
+                            title: localizedText("投资经验", "Investment experience", language: store.appLanguage),
+                            selection: $investmentExperience,
+                            options: ["初次接触", "1-3 年", "3-5 年", "> 5 年"],
+                            optionTitle: optionTitle
+                        )
                     }
 
-                    Picker(localizedText("遇到明显波动时的反应", "Response to volatility", language: store.appLanguage), selection: $volatilityResponse) {
-                        Text(localizedText("优先降低波动", "Reduce volatility first", language: store.appLanguage)).tag("优先降低波动")
-                        Text(localizedText("观察并复核", "Observe and review", language: store.appLanguage)).tag("观察并复核")
-                        Text(localizedText("可接受较大波动", "Accept higher volatility", language: store.appLanguage)).tag("可接受较大波动")
+                    LabeledContent(localizedText("遇到明显波动时的反应", "Response to volatility", language: store.appLanguage)) {
+                        PortfolixGlassMenuPicker(
+                            title: localizedText("遇到明显波动时的反应", "Response to volatility", language: store.appLanguage),
+                            selection: $volatilityResponse,
+                            options: ["优先降低波动", "观察并复核", "可接受较大波动"],
+                            optionTitle: optionTitle
+                        )
                     }
                 }
 
                 Section(localizedText("风险承受边界", "Risk Limits", language: store.appLanguage)) {
-                    Picker(localizedText("可接受的阶段性最大回撤", "Maximum drawdown", language: store.appLanguage), selection: $drawdown) {
-                        Text("5%").tag("5%")
-                        Text("10%").tag("10%")
-                        Text("20%").tag("20%")
-                        Text("30%").tag("30%")
-                        Text("> 30%").tag("> 30%")
+                    LabeledContent(localizedText("可接受的阶段性最大回撤", "Maximum drawdown", language: store.appLanguage)) {
+                        PortfolixGlassMenuPicker(
+                            title: localizedText("可接受的阶段性最大回撤", "Maximum drawdown", language: store.appLanguage),
+                            selection: $drawdown,
+                            options: ["5%", "10%", "20%", "30%", "> 30%"],
+                            optionTitle: { $0 }
+                        )
                     }
 
                     ThresholdPicker(
@@ -119,6 +127,21 @@ struct RiskQuestionnaireSheet: View {
             PortfolixSheetBackground()
         }
         .onAppear(perform: syncCurrentThresholds)
+    }
+
+    private func optionTitle(_ value: String) -> String {
+        guard store.appLanguage == .english else { return value }
+        switch value {
+        case "< 1 年": return "< 1 year"
+        case "1-3 年": return "1-3 years"
+        case "3-5 年": return "3-5 years"
+        case "> 5 年": return "> 5 years"
+        case "初次接触": return "New investor"
+        case "优先降低波动": return "Reduce volatility first"
+        case "观察并复核": return "Observe and review"
+        case "可接受较大波动": return "Accept higher volatility"
+        default: return value
+        }
     }
 
     private func saveQuestionnaire() {
@@ -186,10 +209,13 @@ private struct ThresholdPicker: View {
     let language: AppLanguage
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            ForEach(options, id: \.self) { option in
-                Text(option == "自定义" ? localizedText("自定义", "Custom", language: language) : option).tag(option)
-            }
+        LabeledContent(title) {
+            PortfolixGlassMenuPicker(
+                title: title,
+                selection: $selection,
+                options: options,
+                optionTitle: { $0 == "自定义" ? localizedText("自定义", "Custom", language: language) : $0 }
+            )
         }
 
         if selection == "自定义" {

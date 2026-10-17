@@ -175,10 +175,13 @@ struct PositionEditorSheet: View {
 
             Form {
                 Section {
-                    Picker(sheetText("资产类别", "Asset Type"), selection: $category) {
-                        ForEach(AssetCategory.allCases) { category in
-                            Text(category.title(language: language)).tag(category)
-                        }
+                    LabeledContent(sheetText("资产类别", "Asset Type")) {
+                        PortfolixGlassMenuPicker(
+                            title: sheetText("资产类别", "Asset Type"),
+                            selection: $category,
+                            options: AssetCategory.allCases,
+                            optionTitle: { $0.title(language: language) }
+                        )
                     }
                     .disabled(locksAssetIdentity || !isManualAssetEntry)
                     .onChange(of: category) { _, _ in
@@ -196,9 +199,7 @@ struct PositionEditorSheet: View {
                             Button(sheetText("改为手工录入", "Use Manual Entry")) {
                                 switchToManualEntry()
                             }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(PortfolixTheme.lilac)
+                            .buttonStyle(QuietButtonStyle())
                         }
                     }
 
@@ -270,12 +271,15 @@ struct PositionEditorSheet: View {
                     validationMessage = nil
                 }
 
-                Picker(sheetText("成本录入方式", "Cost Input Method"), selection: $costMode) {
-                    ForEach(CostEntryMode.allCases) { mode in
-                        Text(mode.title(language: language)).tag(mode)
-                    }
+                LabeledContent(sheetText("成本录入方式", "Cost Input Method")) {
+                    PortfolixGlassSegmentedPicker(
+                        title: sheetText("成本录入方式", "Cost Input Method"),
+                        selection: $costMode,
+                        options: CostEntryMode.allCases,
+                        optionTitle: { $0.title(language: language) },
+                        width: PositionEditorLayout.valueFieldWidth
+                    )
                 }
-                .pickerStyle(.segmented)
                 .disabled(usesFixedCashPricing)
 
                 editorTextField(
@@ -291,12 +295,15 @@ struct PositionEditorSheet: View {
                     validationMessage = nil
                 }
 
-                Picker(sheetText("计价与成本币种", "Price and Cost Currency"), selection: $costCurrency) {
-                    ForEach(DisplayCurrency.allCases) { currency in
-                        Text(currency.rawValue).tag(currency)
-                    }
+                LabeledContent(sheetText("计价与成本币种", "Price and Cost Currency")) {
+                    PortfolixGlassSegmentedPicker(
+                        title: sheetText("计价与成本币种", "Price and Cost Currency"),
+                        selection: $costCurrency,
+                        options: DisplayCurrency.allCases,
+                        optionTitle: { $0.rawValue },
+                        width: PositionEditorLayout.valueFieldWidth
+                    )
                 }
-                .pickerStyle(.segmented)
                 .disabled(locksAssetIdentity || !isManualAssetEntry)
 
                 LabeledContent(sheetText("当前价格", "Current Price")) {
@@ -1079,9 +1086,8 @@ private struct AssetCandidateButton: View {
             }
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, 7)
-            .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: 7))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(QuietButtonStyle(preservesLabelSize: true))
     }
 
     private var sourceLabel: String {

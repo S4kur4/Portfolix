@@ -84,7 +84,7 @@ struct RootView: View {
             .ignoresSafeArea(edges: .top)
         }
         .background(PortfolixTheme.canvas)
-        .tint(PortfolixTheme.violet)
+        .tint(PortfolixTheme.controlAccent)
         .sheet(item: $store.positionEditorPresentation) { presentation in
             PositionEditorSheet(presentation: presentation)
                 .environment(store)
@@ -136,8 +136,6 @@ struct RootView: View {
     private struct SidebarResizeHandle: View {
         @Binding var width: CGFloat
         @State private var dragStartWidth: CGFloat?
-        @State private var isHovering = false
-        @State private var isDragging = false
 
         private let hitWidth: CGFloat = 12
         private let minimumSidebarWidth: CGFloat = 178
@@ -149,34 +147,20 @@ struct RootView: View {
                 .frame(width: hitWidth)
                 .frame(maxHeight: .infinity)
                 .background(ResizeCursorArea())
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(PortfolixTheme.border.opacity(isActive ? 1 : 0.72))
-                        .frame(width: isActive ? 2 : 1)
-                }
                 .ignoresSafeArea(edges: .vertical)
                 .contentShape(Rectangle())
-                .onHover { hovering in
-                    isHovering = hovering
-                }
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .global)
                         .onChanged { value in
                             let start = dragStartWidth ?? width
                             dragStartWidth = start
-                            isDragging = true
                             setWidth(start + value.translation.width)
                         }
                         .onEnded { _ in
                             dragStartWidth = nil
-                            isDragging = false
                         }
                 )
                 .help("拖动调整侧边栏宽度")
-        }
-
-        private var isActive: Bool {
-            isHovering || isDragging
         }
 
         private func setWidth(_ proposedWidth: CGFloat) {
