@@ -681,8 +681,12 @@ final class PortfolioStore {
     )
 
     var selection: SidebarSection = .overview
-    var displayCurrency: DisplayCurrency = .cny
-    var appearanceMode: AppearanceMode = .system
+    var displayCurrency: DisplayCurrency = .cny {
+        didSet { persistDisplayPreference(displayCurrency, for: .displayCurrency) }
+    }
+    var appearanceMode: AppearanceMode = .system {
+        didSet { persistDisplayPreference(appearanceMode, for: .appearanceMode) }
+    }
     var appLanguage: AppLanguage = .chinese {
         didSet {
             UserDefaults.standard.set(appLanguage.rawValue, forKey: Self.appLanguageDefaultsKey)
@@ -694,9 +698,26 @@ final class PortfolioStore {
     var positionEditorPresentation: PositionEditorPresentation?
     var searchText = ""
     var selectedPositionID: Position.ID?
-    var trendMetric: TrendMetric = .profitValue
+    var investmentCloudMode: InvestmentCloudMode = .defaultMode {
+        didSet { persistDisplayPreference(investmentCloudMode, for: .investmentCloudMode) }
+    }
+    var dailyProfitDisplayMode: DailyProfitDisplayMode = .calendar {
+        didSet { persistDisplayPreference(dailyProfitDisplayMode, for: .dailyProfitDisplayMode) }
+    }
+    var primaryPositionSortField: PrimaryPositionSortField = .marketValue {
+        didSet { persistDisplayPreference(primaryPositionSortField, for: .primaryPositionSortField) }
+    }
+    var primaryPositionSortDirection: PrimaryPositionSortDirection = .descending {
+        didSet { persistDisplayPreference(primaryPositionSortDirection, for: .primaryPositionSortDirection) }
+    }
+    var trendMetric: TrendMetric = .profitValue {
+        didSet { persistDisplayPreference(trendMetric, for: .trendMetric) }
+    }
     var trendRange: TrendRange = .month {
-        didSet { rebuildVisibleSnapshots() }
+        didSet {
+            persistDisplayPreference(trendRange, for: .trendRange)
+            rebuildVisibleSnapshots()
+        }
     }
     var riskLevel = "未配置"
     var riskProfileConfigured = false
@@ -740,6 +761,7 @@ final class PortfolioStore {
     var aiConfiguration: AIProviderConfiguration = AIProviderConfigurationStore.loadLLM() {
         didSet {
             AIProviderConfigurationStore.saveLLM(aiConfiguration)
+            if !aiConfiguration.isEnabled { cancelInvestmentDistributionUpdate() }
         }
     }
     private(set) var availableLLMModels = AIProviderConfigurationStore.availableDeepSeekModels()
@@ -776,6 +798,8 @@ final class PortfolioStore {
             switch provider {
             case .parallel:
                 true
+            case .deepseek:
+                hasLLMAPIKey && llmAPIKeyValidationState != .invalid
             case .tavily:
                 hasTavilyAPIKey && tavilyAPIKeyValidationState != .invalid
             case .bocha:
@@ -798,9 +822,13 @@ final class PortfolioStore {
             pruneAIAnalysisChatHistory()
         }
     }
-    private var aiInvestmentProfile: AIInvestmentProfile?
-    private var isGeneratingInvestmentProfile = false
     @ObservationIgnored var investmentProfileExposureCache: [AssetExposureProfile] = []
+    private var aiInvestmentDistribution: AIInvestmentDistribution?
+    private(set) var isUpdatingInvestmentDistribution = false
+    @ObservationIgnored private var investmentDistributionTask: Task<Void, Never>?
+    @ObservationIgnored private var activeDistributionRequest: String?
+    @ObservationIgnored private var activeDistributionRequestID: UUID?
+    @ObservationIgnored private var lastDistributionAttempt: String?
 
     var positions: [Position] {
         didSet { derivedMetrics = PortfolioDerivedMetrics(positions: positions) }
@@ -968,6 +996,14 @@ final class PortfolioStore {
         snapshotHistory = loadedSnapshots
         dailyProfitHistory = loadedDailyProfitHistory
         self.positionRepository = activeRepository
+        displayCurrency = PortfolioDisplayPreferenceKey.displayCurrency.load(from: activeRepository, default: DisplayCurrency.cny)
+        appearanceMode = PortfolioDisplayPreferenceKey.appearanceMode.load(from: activeRepository, default: AppearanceMode.system)
+        trendMetric = PortfolioDisplayPreferenceKey.trendMetric.load(from: activeRepository, default: TrendMetric.profitValue)
+        trendRange = PortfolioDisplayPreferenceKey.trendRange.load(from: activeRepository, default: TrendRange.month)
+        investmentCloudMode = PortfolioDisplayPreferenceKey.investmentCloudMode.load(from: activeRepository, default: InvestmentCloudMode.defaultMode)
+        dailyProfitDisplayMode = PortfolioDisplayPreferenceKey.dailyProfitDisplayMode.load(from: activeRepository, default: DailyProfitDisplayMode.calendar)
+        primaryPositionSortField = PortfolioDisplayPreferenceKey.primaryPositionSortField.load(from: activeRepository, default: PrimaryPositionSortField.marketValue)
+        primaryPositionSortDirection = PortfolioDisplayPreferenceKey.primaryPositionSortDirection.load(from: activeRepository, default: PrimaryPositionSortDirection.descending)
         analyticsWorker = activeRepository.map { PortfolioAnalyticsWorker(databaseURL: $0.storageURL) }
         derivedMetrics = PortfolioDerivedMetrics(positions: positions)
         rebuildVisibleSnapshots()
@@ -979,8 +1015,14 @@ final class PortfolioStore {
         }
         removePersistedAIAnalysisReportIfExpired(cutoff: savedChatRetentionPeriod.cutoffDate())
         aiAnalysisChatItems = loadedChatItems
-        aiInvestmentProfile = Self.savedAIInvestmentProfile()
-        investmentProfileExposureCache = aiInvestmentProfile?.assetExposures ?? []
+        // Reuse only historical asset exposure evidence; the retired radar scores are never requested.
+        investmentProfileExposureCache = Self.savedAIInvestmentProfile()?.assetExposures ?? []
+        if let json = try? activeRepository?.appSetting(for: InvestmentDistributionEngine.cacheKey),
+           json.utf8.count <= 1_000_000, let data = json.data(using: .utf8) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            aiInvestmentDistribution = try? decoder.decode(AIInvestmentDistribution.self, from: data)
+        }
         seedAIAnalysisChatIfNeeded()
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
         refreshProviderCredentialState()
@@ -1409,6 +1451,7 @@ final class PortfolioStore {
         llmAPIKeyValidationState = hasLLMKey ? ((try? credentialStore.readValidationState(kind: .llm)) ?? .unknown) : .unknown
         tavilyAPIKeyValidationState = hasTavilyKey ? ((try? credentialStore.readValidationState(kind: .tavily)) ?? .unknown) : .unknown
         bochaAPIKeyValidationState = hasBochaKey ? ((try? credentialStore.readValidationState(kind: .bocha)) ?? .unknown) : .unknown
+        if !canAnalyzeInvestmentDistribution { cancelInvestmentDistributionUpdate() }
     }
 
     func refreshDeepSeekModelCatalog(client: any LLMModelListing = LLMProviderClient.shared) {
@@ -2453,122 +2496,112 @@ final class PortfolioStore {
         return String(trimmed.prefix(360))
     }
 
-    func refreshInvestmentProfileIfNeeded(force: Bool = false) {
-        Task { await generateInvestmentProfileIfNeeded(force: force) }
+    var investmentDistributionItems: [InvestmentDistributionItem] {
+        let assets = usableInvestmentDistributionAssets
+        return InvestmentDistributionEngine.items(positions: positions, assets: assets)
     }
 
-    func generateInvestmentProfileForTesting(force: Bool = true) async {
-        await generateInvestmentProfileIfNeeded(force: force)
+    var investmentDistributionRefreshID: String {
+        [
+            distributionRequestFingerprint, String(aiConfiguration.isEnabled),
+            String(hasLLMAPIKey), llmAPIKeyValidationState.rawValue,
+        ].joined(separator: "|")
     }
 
-    private func generateInvestmentProfileIfNeeded(force: Bool) async {
-        refreshProviderCredentialState()
-        guard !isGeneratingInvestmentProfile else { return }
-        guard !positions.isEmpty else { return }
-        guard aiConfiguration.isEnabled, hasLLMAPIKey, llmAPIKeyValidationState != .invalid else { return }
-
-        let fingerprint = investmentProfileInputFingerprint
-        guard force || currentAIInvestmentProfile(fingerprint: fingerprint) == nil else { return }
-
-        isGeneratingInvestmentProfile = true
-        defer { isGeneratingInvestmentProfile = false }
-
-        do {
-            let profile = try await aiAgent.generateInvestmentProfile(
-                positions: positions,
-                localScores: localInvestmentProfileScoresForAI,
-                storeContext: makeAIStoreContext(),
-                llmConfiguration: aiConfiguration,
-                searchConfiguration: searchConfiguration,
-                cachedExposures: investmentProfileExposureCache,
-                inputFingerprint: fingerprint
-            )
-            aiInvestmentProfile = profile
-            investmentProfileExposureCache = profile.assetExposures ?? investmentProfileExposureCache
-            persistAIInvestmentProfile(profile)
-        } catch {
-            return
-        }
+    private var canAnalyzeInvestmentDistribution: Bool {
+        aiConfiguration.isEnabled && hasLLMAPIKey && llmAPIKeyValidationState != .invalid
     }
 
-    private func currentAIInvestmentProfile(fingerprint: String? = nil) -> AIInvestmentProfile? {
-        guard aiConfiguration.isEnabled, llmAPIKeyValidationState != .invalid else { return nil }
-        let activeFingerprint = fingerprint ?? investmentProfileInputFingerprint
-        guard
-            let profile = aiInvestmentProfile,
-            profile.profileDate == Self.investmentProfileDayString(from: .now),
-            profile.model == aiConfiguration.model,
-            profile.riskProfileVersion == riskProfileVersion,
-            profile.inputFingerprint == activeFingerprint
-        else {
-            return nil
-        }
-        return profile
+    private var distributionRequestFingerprint: String {
+        InvestmentDistributionEngine.requestFingerprint(
+            positions: positions, model: aiConfiguration.model, search: searchConfiguration
+        )
     }
 
-    var investmentProfileAIScoresForDisplay: [String: Double] {
-        guard let profile = currentAIInvestmentProfile() else { return [:] }
-        return profile.dimensions.reduce(into: [:]) { result, dimension in
-            result[dimension.id] = dimension.score
-        }
+    private var usableInvestmentDistributionAssets: [AssetInvestmentDistribution] {
+        guard canAnalyzeInvestmentDistribution, let distribution = aiInvestmentDistribution,
+              distribution.version == InvestmentDistributionEngine.version,
+              distribution.model == aiConfiguration.model else { return [] }
+        let identities = Set(positions.map(InvestmentDistributionEngine.identityFingerprint))
+        let assets = distribution.assets.filter { identities.contains($0.identityFingerprint) }
+        return (try? InvestmentDistributionEngine.validatedAssets(assets, positions: positions)) ?? []
     }
 
-    var investmentProfileHelpText: String {
+    var investmentDistributionHelpText: String {
         localizedText(
-            "投资画像由 AI 结合你的持仓情况生成，仅供参考。",
-            "Your investment profile is generated by AI based on your holdings and is for reference only.",
+            "投资分布功能由AI分析计算，仅供参考。",
+            "Investment distribution is analyzed by AI and is for reference only.",
             language: appLanguage
         )
     }
 
-    private var investmentProfileInputFingerprint: String {
-        let totalValue = max(positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }, 0.001)
-        let positionParts = positions
-            .sorted {
-                if $0.symbol == $1.symbol {
-                    return $0.id.uuidString < $1.id.uuidString
+    func refreshInvestmentDistributionIfNeeded(force: Bool = false) {
+        refreshProviderCredentialState()
+        guard canAnalyzeInvestmentDistribution, positions.contains(where: { $0.marketValueCNY > 0 }) else {
+            cancelInvestmentDistributionUpdate()
+            return
+        }
+        let fingerprint = distributionRequestFingerprint
+        guard activeDistributionRequest != fingerprint else { return }
+        guard force || (aiInvestmentDistribution?.requestFingerprint != fingerprint
+            && lastDistributionAttempt != fingerprint) else { return }
+        investmentDistributionTask?.cancel()
+        let requestID = UUID()
+        activeDistributionRequest = fingerprint
+        activeDistributionRequestID = requestID
+        lastDistributionAttempt = fingerprint
+        isUpdatingInvestmentDistribution = true
+        let requestPositions = positions
+        let configuration = aiConfiguration
+        let search = searchConfiguration
+        let exposures = Dictionary(grouping: aiInvestmentDistribution?.researchedExposures ?? investmentProfileExposureCache, by: \.positionRef)
+            .compactMap { $0.value.first }
+        investmentDistributionTask = Task { [weak self, aiAgent] in
+            do {
+                let distribution = try await aiAgent.generateInvestmentDistribution(
+                    positions: requestPositions, llmConfiguration: configuration,
+                    searchConfiguration: search, cachedExposures: exposures,
+                    requestFingerprint: fingerprint
+                )
+                guard let self, !Task.isCancelled,
+                      self.canAnalyzeInvestmentDistribution,
+                      self.distributionRequestFingerprint == fingerprint else {
+                    self?.finishInvestmentDistributionRequest(requestID)
+                    return
                 }
-                return $0.symbol < $1.symbol
+                self.aiInvestmentDistribution = distribution
+                Self.aiAnalysisLogger.info("Investment distribution updated")
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                if let data = try? encoder.encode(distribution), let json = String(data: data, encoding: .utf8) {
+                    try? self.positionRepository?.setAppSetting(key: InvestmentDistributionEngine.cacheKey, value: json)
+                }
+            } catch {
+                // Keep the last matching classification, or the local category fallback.
+                let code = AIAnalysisAgent.distributionFailureCode(error)
+                Self.aiAnalysisLogger.error("Investment distribution fallback: \(code, privacy: .public)")
             }
-            .map { position in
-                let allocation = position.marketValueCNY.doubleValue / totalValue * 100
-                return [
-                    position.id.uuidString,
-                    position.symbol,
-                    position.category.rawValue,
-                    position.quoteCurrency.rawValue,
-                    stableFingerprintNumber(position.quantity.doubleValue, decimals: 4),
-                    stableFingerprintNumber(position.averageCost.doubleValue, decimals: 4),
-                    stableFingerprintNumber(position.latestPrice.doubleValue, decimals: 4),
-                    stableFingerprintNumber(allocation, decimals: 1),
-                    stableFingerprintNumber(position.profitRate.doubleValue, decimals: 1),
-                    position.priceDateText(language: .chinese),
-                ].joined(separator: ":")
-            }
-            .joined(separator: "|")
-        return [
-            "v6-external-search",
-            InvestmentProfileEngine.resolverVersion,
-            aiConfiguration.model,
-            searchConfiguration.isEnabled
-                ? "external-search:\(searchConfiguration.orderedEnabledProviders.map(\.rawValue).joined(separator: ","))"
-                : "basic-mode",
-            String(riskProfileVersion),
-            stableFingerprintNumber(positionLimit, decimals: 0),
-            stableFingerprintNumber(cryptoLimit, decimals: 0),
-            stableFingerprintNumber(foreignCurrencyLimit, decimals: 0),
-            stableFingerprintNumber(liquidityMinimum, decimals: 0),
-            positionParts,
-        ].joined(separator: "#")
+            self?.finishInvestmentDistributionRequest(requestID)
+        }
     }
 
-    private func stableFingerprintNumber(_ value: Double, decimals: Int) -> String {
-        String(format: "%.\(decimals)f", value)
+    private func finishInvestmentDistributionRequest(_ requestID: UUID) {
+        guard activeDistributionRequestID == requestID else { return }
+        activeDistributionRequest = nil
+        activeDistributionRequestID = nil
+        isUpdatingInvestmentDistribution = false
     }
 
-    private static func investmentProfileDayString(from date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", components.year ?? 1970, components.month ?? 1, components.day ?? 1)
+    private func cancelInvestmentDistributionUpdate() {
+        investmentDistributionTask?.cancel()
+        if lastDistributionAttempt == activeDistributionRequest { lastDistributionAttempt = nil }
+        activeDistributionRequest = nil
+        activeDistributionRequestID = nil
+        isUpdatingInvestmentDistribution = false
+    }
+
+    func waitForInvestmentDistributionUpdate() async {
+        await investmentDistributionTask?.value
     }
 
     private static func savedAIInvestmentProfile() -> AIInvestmentProfile? {
@@ -2578,13 +2611,6 @@ final class PortfolioStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(AIInvestmentProfile.self, from: data)
-    }
-
-    private func persistAIInvestmentProfile(_ profile: AIInvestmentProfile) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(profile) else { return }
-        UserDefaults.standard.set(data, forKey: Self.latestAIInvestmentProfileDefaultsKey)
     }
 
     func synchronizePersistedMarketDataIfNeeded() {
@@ -2597,6 +2623,7 @@ final class PortfolioStore {
             positions = persistedPositions
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+            refreshInvestmentDistributionIfNeeded()
         } catch {
             return
         }
@@ -2717,7 +2744,7 @@ final class PortfolioStore {
     }
 
     @discardableResult
-    private func refreshLatestPrices(refreshInvestmentProfile: Bool = true) async -> Int {
+    private func refreshLatestPrices() async -> Int {
         guard !isRefreshing else { return 0 }
         guard !positions.isEmpty else {
             persistCurrentSnapshot()
@@ -2806,9 +2833,7 @@ final class PortfolioStore {
             persistenceErrorMessage = error.localizedDescription
             return 0
         }
-        if refreshInvestmentProfile {
-            refreshInvestmentProfileIfNeeded()
-        }
+        refreshInvestmentDistributionIfNeeded()
         return replacements.count
     }
 
@@ -2832,7 +2857,7 @@ final class PortfolioStore {
             } else {
                 persistCurrentSnapshot()
             }
-            refreshInvestmentProfileIfNeeded(force: true)
+            refreshInvestmentDistributionIfNeeded(force: true)
         } catch {
             persistenceErrorMessage = "更新 \(position.name) 失败：\(error.localizedDescription)"
         }
@@ -3154,6 +3179,11 @@ final class PortfolioStore {
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }
+    }
+
+    private func persistDisplayPreference<Value: RawRepresentable>(_ value: Value, for key: PortfolioDisplayPreferenceKey)
+        where Value.RawValue == String {
+        persistAppSetting(key: key.rawValue, value: value.rawValue)
     }
 
     private func persistAppSetting(key: String, value: String) {

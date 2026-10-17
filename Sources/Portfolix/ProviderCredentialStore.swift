@@ -314,6 +314,7 @@ enum LLMOutputTokenPolicy {
 
 enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
     case parallel = "Parallel"
+    case deepseek = "DeepSeek"
     case tavily = "Tavily"
     case bocha = "BochaAI"
 
@@ -322,12 +323,14 @@ enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
     var credentialKind: ProviderCredentialKind? {
         switch self {
         case .parallel: nil
+        case .deepseek: .llm
         case .tavily: .tavily
         case .bocha: .bocha
         }
     }
 
     var requiresAPIKey: Bool { credentialKind != nil }
+    static let independentlyConfiguredProviders: [SearchProviderOption] = [.tavily, .bocha]
 
     func usableAPIKey(from store: ProviderCredentialStoring) throws -> String? {
         guard let credentialKind else { return "" }
@@ -339,6 +342,7 @@ enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
     func title(language: AppLanguage) -> String {
         switch (self, language) {
         case (.parallel, _): "Parallel Search"
+        case (.deepseek, _): "DeepSeek Search"
         case (.tavily, _): "Tavily"
         case (.bocha, .chinese): "博查"
         case (.bocha, .english): "Bocha"
@@ -494,6 +498,7 @@ enum AIProviderConfigurationStore {
     private static let searchQualityKey = "portfolix.ai.search.quality"
     private static let bochaEnabledKey = "portfolix.ai.bocha.enabled"
     private static let parallelEnabledKey = "portfolix.ai.parallel.enabled"
+    private static let deepseekSearchEnabledKey = "portfolix.ai.deepseekSearch.enabled"
 
     static func loadLLM(defaults: UserDefaults = .standard) -> AIProviderConfiguration {
         let fallback = AIProviderConfiguration.default
@@ -578,11 +583,15 @@ enum AIProviderConfigurationStore {
             .flatMap(SearchProviderOption.init(rawValue:)) ?? fallback.provider
         var enabledProviders = Set<SearchProviderOption>()
         let hasPersistedProviderSelection = defaults.object(forKey: parallelEnabledKey) != nil
+            || defaults.object(forKey: deepseekSearchEnabledKey) != nil
             || defaults.object(forKey: tavilyEnabledKey) != nil
             || defaults.object(forKey: bochaEnabledKey) != nil
         if defaults.object(forKey: parallelEnabledKey) != nil,
            defaults.bool(forKey: parallelEnabledKey) {
             enabledProviders.insert(.parallel)
+        }
+        if defaults.bool(forKey: deepseekSearchEnabledKey) {
+            enabledProviders.insert(.deepseek)
         }
         if defaults.object(forKey: tavilyEnabledKey) != nil,
            defaults.bool(forKey: tavilyEnabledKey) {
@@ -617,6 +626,7 @@ enum AIProviderConfigurationStore {
         defaults.set(configuration.provider.rawValue, forKey: searchProviderKey)
         defaults.set(configuration.quality.rawValue, forKey: searchQualityKey)
         defaults.set(configuration.isProviderEnabled(.parallel), forKey: parallelEnabledKey)
+        defaults.set(configuration.isProviderEnabled(.deepseek), forKey: deepseekSearchEnabledKey)
         defaults.set(configuration.isProviderEnabled(.tavily), forKey: tavilyEnabledKey)
         defaults.set(configuration.isProviderEnabled(.bocha), forKey: bochaEnabledKey)
     }

@@ -572,6 +572,8 @@ struct AIReportView: View {
             switch provider {
             case .parallel:
                 .ready
+            case .deepseek:
+                AIReportReadiness.credential(isConfigured: store.hasLLMAPIKey, validationState: store.llmAPIKeyValidationState)
             case .tavily:
                 AIReportReadiness.credential(
                     isConfigured: store.hasTavilyAPIKey,
@@ -912,8 +914,7 @@ private struct AIReportHeaderMenuTag<Option: Hashable>: View {
             selection: $selection,
             options: options,
             optionTitle: optionTitle,
-            selectionTitle: title,
-            showsSelectionIndicator: false
+            selectionTitle: title
         )
         .disabled(!isEnabled)
     }
@@ -2004,7 +2005,7 @@ private struct AIReportChatComposer: View {
     @FocusState private var isComposerFocused: Bool
 
     var body: some View {
-        HStack(alignment: .center, spacing: PortfolixSpacing.md) {
+        HStack(alignment: .center, spacing: AIReportComposerMetrics.controlSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 ZStack {
                     TextField(placeholder, text: draftTextBinding)
@@ -2055,23 +2056,19 @@ private struct AIReportChatComposer: View {
             }
             .layoutPriority(1)
 
-            AIReportSendButton(
-                isEnabled: canSubmitFollowUp,
-                help: localizedText("发送问题", "Send question", language: language)
+            AIReportComposerActionButton(
+                mode: composerAction,
+                title: composerAction.title(hasReport: hasReport, language: language),
+                isEnabled: canPerformComposerAction
             ) {
-                queueFollowUpSubmission()
-            }
-
-            AIReportGenerateButton(
-                title: hasReport
-                    ? localizedText("重新分析", "Analyze Again", language: language)
-                    : localizedText("生成分析", "Generate", language: language),
-                isEnabled: canGenerate
-            ) {
-                generate()
+                guard canPerformComposerAction else { return }
+                switch composerAction {
+                case .send: queueFollowUpSubmission()
+                case .analyze: generate()
+                }
             }
         }
-        .padding(.horizontal, PortfolixSpacing.lg)
+        .padding(.horizontal, PortfolixLayout.chatComposerHorizontalInset)
         .padding(.top, PortfolixLayout.chatComposerTopInset)
         .padding(.bottom, PortfolixLayout.chatComposerBottomInset)
         .onAppear { configureVoiceRecorder() }
@@ -2109,9 +2106,21 @@ private struct AIReportChatComposer: View {
     }
 
     private var canSubmitFollowUp: Bool {
-        canSendFollowUp
-            && !isSubmitting
-            && hasDraftText
+        hasDraftText && AIReportComposerAction.send.isEnabled(
+            canGenerate: canGenerate, canSendFollowUp: canSendFollowUp,
+            isSubmitting: isSubmitting, isAwaitingResponse: isAwaitingResponse, isVoiceActive: isVoiceActive
+        )
+    }
+
+    private var composerAction: AIReportComposerAction {
+        AIReportComposerAction(hasDraftText: hasDraftText)
+    }
+
+    private var canPerformComposerAction: Bool {
+        composerAction.isEnabled(
+            canGenerate: canGenerate, canSendFollowUp: canSendFollowUp,
+            isSubmitting: isSubmitting, isAwaitingResponse: isAwaitingResponse, isVoiceActive: isVoiceActive
+        )
     }
 
     private var isVoiceActive: Bool {
@@ -2152,8 +2161,7 @@ private struct AIReportChatComposer: View {
     }
 
     private func queueFollowUpSubmission() {
-        guard canSendFollowUp,
-              !isSubmitting,
+        guard canSubmitFollowUp,
               let question = draftBuffer.submissionText else { return }
 
         // Let AppKit finish the current text-input command before the chat tree changes.
@@ -2170,9 +2178,35 @@ private struct AIReportChatComposer: View {
     }
 }
 
-private enum AIReportComposerMetrics {
+enum AIReportComposerMetrics {
     static let controlHeight: CGFloat = PortfolixSpacing.xxxl
-    static let sendButtonWidth: CGFloat = PortfolixSpacing.xxxl
+    static let controlSpacing: CGFloat = PortfolixLayout.chatComposerHorizontalInset
+}
+
+enum AIReportComposerAction: CaseIterable {
+    case analyze
+    case send
+
+    init(hasDraftText: Bool) {
+        self = hasDraftText ? .send : .analyze
+    }
+
+    var symbol: String { self == .send ? "arrow.up" : "sparkles" }
+
+    func title(hasReport: Bool, language: AppLanguage) -> String {
+        switch self {
+        case .send: localizedText("发送问题", "Send question", language: language)
+        case .analyze: hasReport
+            ? localizedText("重新分析", "Analyze Again", language: language)
+            : localizedText("生成分析", "Generate", language: language)
+        }
+    }
+
+    func isEnabled(canGenerate: Bool, canSendFollowUp: Bool, isSubmitting: Bool,
+                   isAwaitingResponse: Bool, isVoiceActive: Bool) -> Bool {
+        guard !isSubmitting, !isAwaitingResponse, !isVoiceActive else { return false }
+        return self == .send ? canSendFollowUp : canGenerate
+    }
 }
 
 enum AIReportComposerFocusPolicy {
@@ -2207,44 +2241,26 @@ final class AIReportComposerDraftBuffer {
     }
 }
 
-private struct AIReportGenerateButton: View {
+struct AIReportComposerActionButton: View {
+    let mode: AIReportComposerAction
     let title: String
     let isEnabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: "sparkles")
+            Image(systemName: mode.symbol)
                 .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .padding(.horizontal, PortfolixSpacing.md)
-                .frame(height: AIReportComposerMetrics.controlHeight)
-                .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                .frame(width: AIReportComposerMetrics.controlHeight, height: AIReportComposerMetrics.controlHeight)
+                .contentShape(Circle())
         }
-        .buttonStyle(PrimaryButtonStyle(preservesLabelSize: true))
+        .buttonStyle(PrimaryButtonStyle(
+            preservesLabelSize: true, cornerRadius: AIReportComposerMetrics.controlHeight / 2
+        ))
         .disabled(!isEnabled)
         .fixedSize(horizontal: true, vertical: false)
-    }
-}
-
-private struct AIReportSendButton: View {
-    let isEnabled: Bool
-    let help: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "paperplane.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .frame(
-                    width: AIReportComposerMetrics.sendButtonWidth,
-                    height: AIReportComposerMetrics.controlHeight
-                )
-                .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-        }
-        .buttonStyle(PrimaryButtonStyle(preservesLabelSize: true))
-        .disabled(!isEnabled)
-        .accessibilityLabel(help)
+        .accessibilityLabel(title)
+        .help(title)
     }
 }
 
@@ -3972,6 +3988,8 @@ struct SettingsView: View {
             switch provider {
             case .parallel:
                 .ready
+            case .deepseek:
+                AIReportReadiness.credential(isConfigured: store.hasLLMAPIKey, validationState: store.llmAPIKeyValidationState)
             case .tavily:
                 AIReportReadiness.credential(
                     isConfigured: store.hasTavilyAPIKey,

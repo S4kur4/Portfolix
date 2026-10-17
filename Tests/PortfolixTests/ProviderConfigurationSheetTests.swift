@@ -14,6 +14,20 @@ struct ProviderConfigurationSheetTests {
     }
 
     @Test
+    func providerValidationNoticesUseConsistentSymbolsAndColors() {
+        let validating = ProviderConnectionStatus.validating("正在验证 API 配置")
+        let success = ProviderConnectionStatus.success("API 已验证")
+        let failure = ProviderConnectionStatus.failure("API 验证失败")
+
+        #expect(validating.symbol == "clock.arrow.circlepath")
+        #expect(validating.color == PortfolixTheme.lilac)
+        #expect(success.symbol == "checkmark.circle.fill")
+        #expect(success.color == PortfolixTheme.mint)
+        #expect(failure.symbol == "xmark.circle.fill")
+        #expect(failure.color == PortfolixTheme.danger)
+    }
+
+    @Test
     func emptyAPIKeyIsImmediatelyEditableWithoutRevealingItFirst() {
         #expect(ProviderAPIKeyPresentation.displaysEditableText(isVisible: false, text: ""))
         #expect(ProviderAPIKeyPresentation.shouldRevealWhenEditing(isVisible: false, text: ""))

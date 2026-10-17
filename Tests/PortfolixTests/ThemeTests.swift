@@ -125,6 +125,24 @@ struct ThemeTests {
     func chatComposerUsesEqualInsetsOnEverySide() {
         #expect(PortfolixLayout.chatComposerTopInset == PortfolixSpacing.lg)
         #expect(PortfolixLayout.chatComposerBottomInset == PortfolixSpacing.lg)
+        #expect(PortfolixLayout.chatComposerHorizontalInset == PortfolixSpacing.lg)
+        #expect(AIReportComposerMetrics.controlSpacing == PortfolixLayout.chatComposerHorizontalInset)
+    }
+
+    @Test(arguments: [5, 6])
+    func profitCalendarRowsFillAvailableHeightWithoutExtraBottomSpace(rows: Int) {
+        for height: CGFloat in [196, 212, 248] {
+            let cellHeight = DailyProfitCalendarLayout.cellHeight(in: height, rows: rows)
+            let usedHeight = DailyProfitCalendarLayout.weekdayHeight
+                + PortfolixLayout.dataTileSpacing * CGFloat(rows) + cellHeight * CGFloat(rows)
+            #expect(abs(usedHeight - height) < 0.000001)
+            #expect(cellHeight >= 26)
+        }
+        #expect(DailyProfitCalendarLayout.cellHeight(in: 0, rows: rows) == 0)
+        #expect(DailyProfitCalendarLayout.cellHeight(in: .infinity, rows: rows) == 0)
+        #expect(DailyProfitCalendarLayout.cellHeight(in: 212, rows: 0) == 0)
+        #expect(PortfolixLayout.cardPadding == 16)
+        #expect(PortfolixLayout.dataTileSpacing == 4)
     }
 
     @Test
@@ -277,8 +295,7 @@ struct ThemeTests {
             selection: .constant("deepseek-flash"),
             options: ["deepseek-flash"],
             optionTitle: { $0 },
-            height: height,
-            showsSelectionIndicator: false
+            height: height
         ))
         #expect(segmented.fittingSize.height == height)
         #expect(segmented.fittingSize.width == 240)
@@ -301,6 +318,21 @@ struct ThemeTests {
         #expect(enabled.height == PortfolixLayout.glassControlHeight)
         #expect(enabled.width > 100)
         #expect(disabled == enabled)
+    }
+
+    @Test(arguments: [AppLanguage.chinese, .english])
+    func chatActionButtonsKeepTheirNewSizesAcrossEnabledStates(language: AppLanguage) {
+        for enabled in [true, false] {
+            for mode in AIReportComposerAction.allCases {
+                let button = NSHostingView(rootView: AIReportComposerActionButton(
+                    mode: mode, title: mode.title(hasReport: true, language: language),
+                    isEnabled: enabled, action: {}
+                ))
+                #expect(button.fittingSize == CGSize(width: 32, height: 32))
+            }
+        }
+        #expect(PrimaryButtonStyle().cornerRadius == PortfolixRadius.compact)
+        #expect(PortfolixLayout.chatComposerTopInset == PortfolixLayout.chatComposerBottomInset)
     }
 
     @Test(arguments: [AppLanguage.chinese, .english])

@@ -1082,125 +1082,6 @@ struct AIAnalysisAgent: Sendable {
         return String(cleaned.prefix(180))
     }
 
-    func generateInvestmentProfile(
-        positions: [Position],
-        localScores: [AIInvestmentProfileScore],
-        storeContext: AIAnalysisStoreContext,
-        llmConfiguration: AIProviderConfiguration,
-        searchConfiguration: SearchConfiguration = .default,
-        cachedExposures: [AssetExposureProfile] = [],
-        inputFingerprint: String,
-        generatedAt: Date = Date()
-    ) async throws -> AIInvestmentProfile {
-        guard !positions.isEmpty else { throw AIAnalysisAgentError.emptyPortfolio }
-        guard llmConfiguration.isEnabled else { throw AIAnalysisAgentError.llmDisabled }
-        guard let llmKey = try credentialStore.read(kind: .llm), !llmKey.isEmpty else {
-            throw AIAnalysisAgentError.missingLLMKey
-        }
-
-        var profileSearchKeys: [SearchProviderOption: String] = [:]
-        for provider in searchConfiguration.orderedEnabledProviders {
-            if let key = try provider.usableAPIKey(from: credentialStore) {
-                profileSearchKeys[provider] = key
-            }
-        }
-        let research = await InvestmentProfileHarness(llm: llm, search: search).enrich(
-            positions: positions,
-            cachedExposures: cachedExposures,
-            llmConfiguration: llmConfiguration,
-            searchConfiguration: searchConfiguration,
-            llmKey: llmKey,
-            searchKeys: profileSearchKeys,
-            now: generatedAt
-        )
-        let scoreResult = InvestmentProfileEngine.score(
-            positions: positions,
-            exposures: research.exposures,
-            context: storeContext
-        )
-        let hasEnrichedEvidence = research.exposures.contains { profile in
-            profile.evidence.contains { $0.source != "portfolix_native_resolver" }
-        }
-        let calibrationScores = hasEnrichedEvidence ? scoreResult.scores : localScores
-
-        let input = Self.makeInput(
-            positions: positions,
-            context: storeContext,
-            configuration: llmConfiguration,
-            trigger: .scheduled,
-            generatedAt: generatedAt
-        )
-        let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
-        let localScoresJSON = String(data: try Self.encoder.encode(calibrationScores), encoding: .utf8) ?? "[]"
-        let calibrationContext = InvestmentProfileCalibrationContext(
-            snapshot: scoreResult.snapshot,
-            assetExposures: research.exposures,
-            searchedAssetCount: research.searchedAssetCount,
-            limitations: research.limitations
-        )
-        let exposureJSON = String(
-            data: try Self.inputEncoder.encode(calibrationContext),
-            encoding: .utf8
-        ) ?? "{}"
-        let evidenceSourceCount = Set(
-            research.exposures.flatMap { $0.evidence }.compactMap { $0.url }
-        ).count
-        do {
-            let raw = try await llm.completeJSON(
-                systemPrompt: AIAnalysisPromptText.investmentProfileSystem,
-                userPrompt: AIAnalysisPromptText.investmentProfileUser(
-                    localScoresJSON: localScoresJSON,
-                    inputJSON: inputJSON,
-                    exposureJSON: exposureJSON
-                ),
-                configuration: llmConfiguration,
-                apiKey: llmKey
-            )
-            guard let payload = Self.decodeInvestmentProfilePayload(raw) else {
-                throw AIAnalysisAgentError.invalidReport
-            }
-            return try Self.investmentProfile(
-                from: payload,
-                localScores: calibrationScores,
-                generatedAt: generatedAt,
-                model: llmConfiguration.model,
-                riskProfileVersion: storeContext.riskProfileVersion,
-                inputFingerprint: inputFingerprint,
-                exposureCoverage: scoreResult.snapshot.evidenceCoverage,
-                unknownExposurePercent: scoreResult.snapshot.unknownExposurePercent,
-                evidenceSourceCount: evidenceSourceCount,
-                assetExposures: research.exposures
-            )
-        } catch {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            let confidence: String
-            if scoreResult.snapshot.evidenceCoverage >= 0.8 {
-                confidence = "high"
-            } else if scoreResult.snapshot.evidenceCoverage >= 0.5 {
-                confidence = "medium"
-            } else {
-                confidence = "low"
-            }
-            return AIInvestmentProfile(
-                generatedAt: generatedAt,
-                profileDate: Self.dayString(from: generatedAt),
-                model: llmConfiguration.model,
-                promptVersion: AIAnalysisPromptText.investmentProfileVersion,
-                riskProfileVersion: storeContext.riskProfileVersion,
-                inputFingerprint: inputFingerprint,
-                dimensions: calibrationScores,
-                summary: "画像已根据持仓及底层资产暴露生成，AI 解释暂时不可用。",
-                confidence: confidence,
-                exposureCoverage: scoreResult.snapshot.evidenceCoverage,
-                unknownExposurePercent: scoreResult.snapshot.unknownExposurePercent,
-                evidenceSourceCount: evidenceSourceCount,
-                assetExposures: research.exposures
-            )
-        }
-    }
-
     fileprivate func makeToolPlan(
         input: AIAnalysisInput,
         evidenceLedger: AIEvidenceLedger,
@@ -2153,6 +2034,7 @@ struct AIAnalysisAgent: Sendable {
             let identityNumbers = Set(allowedTerms.flatMap { Self.numberTokens(in: $0) })
             guard
                 (8...180).contains(query.count),
+                provider != .deepseek || query.unicodeScalars.count <= 128,
                 isGeneralQuery || (1...3).contains(refs.count),
                 refs.allSatisfy({ allowedRefs.contains($0) }),
                 isGeneralQuery || queryNamesEveryRef,

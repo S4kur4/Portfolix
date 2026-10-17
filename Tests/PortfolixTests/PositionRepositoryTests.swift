@@ -3238,8 +3238,9 @@ struct PositionRepositoryTests {
                 positionsJSON: "[]",
                 reportJSON: "{}"
             ),
-            AIAnalysisPromptText.investmentProfileSystem,
-            AIAnalysisPromptText.investmentProfileUser(localScoresJSON: "[]", inputJSON: "{}"),
+            AIAnalysisPromptText.investmentDistributionSystem,
+            AIAnalysisPromptText.investmentProfilePlanningSystem,
+            AIAnalysisPromptText.investmentProfileExposureSystem,
             AIAnalysisPromptText.toolPlanningSystem,
             AIAnalysisPromptText.toolPlanningUser(inputJSON: "{}"),
             AIAnalysisPromptText.reportSystem,
@@ -3256,7 +3257,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v17-external-search")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v18-deepseek-search")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
@@ -3826,66 +3827,6 @@ struct PositionRepositoryTests {
         #expect(message.contains("BTC 近期走势"))
         #expect(!message.contains("Search API"))
         #expect(await llm.webSearchEnabledValues() == [true])
-    }
-
-    @MainActor
-    @Test
-    func aiAgentGeneratesInvestmentProfileScores() async throws {
-        let store = try makeStore()
-        try store.addPosition(
-            name: "腾讯控股",
-            symbol: "0700.HK",
-            category: .hkStock,
-            quantity: 10,
-            averageCost: 320,
-            quoteCurrency: .hkd,
-            latestPrice: 420,
-            source: "东方财富",
-            freshness: .updated
-        )
-        try store.addPosition(
-            name: "现金人民币",
-            symbol: "CNY",
-            category: .cash,
-            quantity: 10_000,
-            averageCost: 1,
-            quoteCurrency: .cny,
-            latestPrice: 1
-        )
-        let llm = MockLLMCompleter(responses: [
-            """
-            {
-              "dimensions": [
-                {"id":"growth","score":72,"reason":"组合包含权益资产，成长属性中等偏高"},
-                {"id":"global","score":58,"reason":"存在港股和非人民币敞口"},
-                {"id":"diversification","score":46,"reason":"持仓数量较少，分散度有限"},
-                {"id":"defense","score":61,"reason":"现金提供一定防守缓冲"},
-                {"id":"cashflow","score":54,"reason":"现金占比带来流动性"},
-                {"id":"activity","score":63,"reason":"权益资产使组合具备一定活跃度"}
-              ],
-              "summary": "画像用于描述组合特征，不构成投资建议",
-              "confidence": "medium"
-            }
-            """,
-        ])
-        let agent = AIAnalysisAgent(
-            llm: llm,
-            tavily: MockTavilySearcher(),
-            credentialStore: MockCredentialStore(keys: [.llm: "llm-key"])
-        )
-
-        let profile = try await agent.generateInvestmentProfile(
-            positions: store.positions,
-            localScores: makeLocalInvestmentProfileScores(),
-            storeContext: makeAIContext(from: store),
-            llmConfiguration: AIProviderConfiguration.default,
-            inputFingerprint: "test-fingerprint"
-        )
-
-        #expect(profile.dimensions.count == 6)
-        #expect(profile.dimensions.first { $0.id == "growth" }?.score == 72)
-        #expect(profile.inputFingerprint == "test-fingerprint")
-        #expect(await llm.requestCount() == 1)
     }
 
     @Test
@@ -4824,8 +4765,8 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test
-    func aiFollowUpUsesModelSelectedProviderThenFallsBackToAnotherEnabledProvider() async throws {
+    @Test(arguments: [SearchProviderOption.bocha, .deepseek])
+    func aiFollowUpUsesModelSelectedProviderThenFallsBackToAnotherEnabledProvider(firstProvider: SearchProviderOption) async throws {
         let store = try makeStore()
         try store.addPosition(
             name: "Apple",
@@ -4854,7 +4795,7 @@ struct PositionRepositoryTests {
         let position = try #require(store.positions.first)
         let positionRef = "position_\(position.id.uuidString)"
         let llm = MockLLMCompleter(responses: [
-            #"{"tool_calls":[{"id":"web_search_1","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"],"provider":"BochaAI"}],"status":"continue","limitations":[]}"#,
+            #"{"tool_calls":[{"id":"web_search_1","query":"Apple AAPL latest company announcement","position_refs":["\#(positionRef)"],"provider":"\#(firstProvider.rawValue)"}],"status":"continue","limitations":[]}"#,
         ], completionResults: [
             LLMCompletionResult(
                 content: #"{"answer":"内建搜索补充了近期公开信息，可以结合当前持仓集中度继续复核风险。","limitations":[]}"#,
@@ -4903,7 +4844,7 @@ struct PositionRepositoryTests {
             llmConfiguration: unsupportedConfiguration,
             searchConfiguration: SearchConfiguration(
                 isEnabled: true,
-                enabledProviders: [.tavily, .bocha],
+                enabledProviders: [.tavily, firstProvider],
                 preferredProvider: .tavily,
                 quality: .basic
             )
@@ -4913,8 +4854,8 @@ struct PositionRepositoryTests {
         #expect(result.loopTurnCount == 1)
         #expect(result.toolCallCount == 1)
         #expect(result.toolResultCount == 1)
-        #expect(result.toolPlanJSON.contains("BochaAI"))
-        #expect(await searcher.searchedProviders() == [.bocha, .tavily])
+        #expect(result.toolPlanJSON.contains(firstProvider.rawValue))
+        #expect(await searcher.searchedProviders() == [firstProvider, .tavily])
         #expect(await llm.requestCount() == 2)
     }
 

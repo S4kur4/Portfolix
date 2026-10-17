@@ -12,23 +12,18 @@ struct DashboardView: View {
                 GoldenRatioDashboardRow(spacing: PortfolixSpacing.md) {
                     PortfolioHeroCard()
                 } trailing: {
-                    InvestmentProfileCard()
+                    DailyProfitCard(contentHeight: PortfolixLayout.dashboardHeroContentHeight)
                 }
                 .frame(maxWidth: .infinity)
 
                 GoldenRatioDashboardRow(spacing: PortfolixSpacing.md) {
                     PerformanceTrendCard()
                 } trailing: {
-                    DailyProfitCard()
+                    InvestmentCloudCard(contentHeight: PortfolixLayout.dashboardTrendContentHeight)
                 }
                 .frame(maxWidth: .infinity)
 
                 AssetMixBarCard()
-
-                HStack(alignment: .top, spacing: PortfolixSpacing.md) {
-                    AssetAllocationCard(items: store.categoryAllocation)
-                    CurrencyDistributionCard(items: store.currencyAllocation)
-                }
 
                 RecentPositionsCard()
             }
@@ -611,14 +606,7 @@ private struct PerformanceTrendCard: View {
                                     Text(valueText(for: snapshot))
                                         .foregroundStyle(PortfolixTheme.primaryText)
                                 }
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 5)
-                                    .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                                            .stroke(PortfolixTheme.borderStrong, lineWidth: 1)
-                                    }
+                                    .portfolixChartTooltip()
                             }
                         }
                     }
@@ -791,84 +779,16 @@ private struct PerformanceTrendCard: View {
     }
 }
 
-private struct AssetAllocationCard: View {
-    @Environment(PortfolioStore.self) private var store
-    let items: [AllocationItem]
-    @State private var highlightedItemID: AllocationItem.ID?
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("资产配置", "Asset Allocation", language: store.appLanguage), symbol: "chart.pie.fill")
-                    .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
-
-                if items.isEmpty {
-                    DashboardEmptyState(title: localizedText("暂无资产配置", "No allocation yet", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, minHeight: 142)
-                } else {
-                    HStack(spacing: PortfolixSpacing.xxl) {
-                        InteractiveDistributionChart(items: items, highlightedItemID: $highlightedItemID)
-                            .frame(width: 142, height: 142)
-                            .accessibilityLabel(localizedText("资产配置", "Asset Allocation", language: store.appLanguage))
-
-                        VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                            ForEach(items) { item in
-                                DistributionLegendRow(item: item, highlightedItemID: highlightedItemID)
-                            }
-                        }
-                        .frame(width: 152, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-            }
-            .frame(height: PortfolixLayout.distributionContentHeight, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private struct CurrencyDistributionCard: View {
-    @Environment(PortfolioStore.self) private var store
-    let items: [AllocationItem]
-    @State private var highlightedItemID: AllocationItem.ID?
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("计价币种分布", "Currency Exposure", language: store.appLanguage), symbol: "banknote.fill")
-                    .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
-
-                if items.isEmpty {
-                    DashboardEmptyState(title: localizedText("暂无币种分布", "No currency exposure yet", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, minHeight: 142)
-                } else {
-                    HStack(spacing: PortfolixSpacing.xxl) {
-                        InteractiveDistributionChart(items: items, highlightedItemID: $highlightedItemID)
-                            .frame(width: 142, height: 142)
-                            .accessibilityLabel(localizedText("计价币种分布", "Currency Exposure", language: store.appLanguage))
-
-                        VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                            ForEach(items) { item in
-                                DistributionLegendRow(item: item, highlightedItemID: highlightedItemID)
-                            }
-                        }
-                        .frame(width: 152, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-            }
-            .frame(height: PortfolixLayout.distributionContentHeight, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 private struct AssetMixBarCard: View {
     @Environment(PortfolioStore.self) private var store
     @State private var highlightedItemID: PositionShareItem.ID?
 
     private var items: [PositionShareItem] {
         store.positionShareItems
+    }
+
+    private var displayedAmountCNY: Decimal {
+        items.first { $0.id == highlightedItemID }?.amountCNY ?? store.totalValueCNY
     }
 
     var body: some View {
@@ -879,7 +799,7 @@ private struct AssetMixBarCard: View {
 
                     Spacer(minLength: PortfolixSpacing.sm)
 
-                    Text(formatMoney(store.converted(store.totalValueCNY), currency: store.displayCurrency))
+                    Text(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
                         .font(.system(size: 13, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(PortfolixTheme.secondaryText)
@@ -908,6 +828,9 @@ private struct AssetMixBarCard: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .onChange(of: items.map(\.id)) { _, ids in
+            if let highlightedItemID, !ids.contains(highlightedItemID) { self.highlightedItemID = nil }
+        }
     }
 }
 
@@ -917,26 +840,24 @@ private struct AssetMixSegmentBar: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let spacing = CGFloat(max(items.count - 1, 0)) * 2
-            let availableWidth = max(proxy.size.width - spacing, 0)
+            let rectangles = PortfolioChartLayout.barSegments(weights: items.map(\.value), size: proxy.size)
 
-            HStack(spacing: 2) {
-                ForEach(items) { item in
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(item.color.gradient)
-                        .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.32)
-                        .frame(width: max(availableWidth * item.value / 100, item.value > 0 ? 4 : 0))
+            ZStack(alignment: .leading) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if index < rectangles.count {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(item.color.gradient)
+                            .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.32)
+                            .frame(width: rectangles[index].width, height: rectangles[index].height)
+                            .offset(x: rectangles[index].minX)
+                    }
                 }
             }
-            .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(PortfolixTheme.border, lineWidth: 1)
-            }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
-                updateHighlightedItem(for: phase, totalWidth: proxy.size.width)
+                updateHighlightedItem(for: phase, rectangles: rectangles)
             }
         }
         .animation(.easeOut(duration: 0.16), value: highlightedItemID)
@@ -944,25 +865,11 @@ private struct AssetMixSegmentBar: View {
         .accessibilityLabel("Asset mix")
     }
 
-    private func updateHighlightedItem(for phase: HoverPhase, totalWidth: CGFloat) {
+    private func updateHighlightedItem(for phase: HoverPhase, rectangles: [CGRect]) {
         switch phase {
         case let .active(location):
-            guard totalWidth > 0, location.x >= 0, location.x <= totalWidth else {
-                highlightedItemID = nil
-                return
-            }
-            let total = items.reduce(0) { $0 + $1.value }
-            guard total > 0 else {
-                highlightedItemID = nil
-                return
-            }
-
-            let selectedValue = Double(location.x / totalWidth) * total
-            var upperBound = 0.0
-            highlightedItemID = items.first { item in
-                upperBound += item.value
-                return selectedValue <= upperBound
-            }?.id
+            highlightedItemID = rectangles.enumerated().first { $0.element.contains(location) }
+                .flatMap { items.indices.contains($0.offset) ? items[$0.offset].id : nil }
         case .ended:
             highlightedItemID = nil
         }
@@ -996,124 +903,19 @@ private struct AssetMixLegendItem: View {
 }
 
 private struct PositionShareItem: Identifiable {
-    let id: Position.ID
+    let id: String
     let name: String
+    let amountCNY: Decimal
     let value: Double
     let color: Color
-}
-
-private struct InteractiveDistributionChart: View {
-    let items: [AllocationItem]
-    @Binding var highlightedItemID: AllocationItem.ID?
-
-    private var highlightedItem: AllocationItem? {
-        items.first { $0.id == highlightedItemID }
-    }
-
-    var body: some View {
-        ZStack {
-            Chart(items) { item in
-                SectorMark(
-                    angle: .value("占比", item.value),
-                    innerRadius: .ratio(0.62),
-                    outerRadius: .ratio(item.id == highlightedItemID ? 1 : 0.94),
-                    angularInset: 1.5
-                )
-                .cornerRadius(3)
-                .foregroundStyle(item.color.gradient)
-                .opacity(highlightedItemID == nil || item.id == highlightedItemID ? 1 : 0.38)
-            }
-            .chartLegend(.hidden)
-            .chartOverlay { _ in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            updateHighlightedItem(for: phase, size: geometry.size)
-                        }
-                }
-            }
-
-            if let highlightedItem {
-                VStack(spacing: PortfolixSpacing.xs) {
-                    Text(highlightedItem.name)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
-                    Text(String(format: "%.1f%%", highlightedItem.value))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.primaryText)
-                        .monospacedDigit()
-                }
-                .font(.system(size: 10, weight: .medium))
-                .lineLimit(1)
-                .allowsHitTesting(false)
-            }
-        }
-        .animation(.easeOut(duration: 0.16), value: highlightedItemID)
-    }
-
-    private func updateHighlightedItem(for phase: HoverPhase, size: CGSize) {
-        switch phase {
-        case let .active(location):
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let offset = CGPoint(x: location.x - center.x, y: location.y - center.y)
-            let radius = min(size.width, size.height) / 2
-            let distance = hypot(offset.x, offset.y)
-
-            guard distance >= radius * 0.56, distance <= radius else {
-                highlightedItemID = nil
-                return
-            }
-
-            var angle = atan2(offset.x, -offset.y)
-            if angle < 0 {
-                angle += 2 * .pi
-            }
-
-            let total = items.reduce(0) { $0 + $1.value }
-            let selectedValue = angle / (2 * .pi) * total
-            var upperBound = 0.0
-            highlightedItemID = items.first { item in
-                upperBound += item.value
-                return selectedValue <= upperBound
-            }?.id
-        case .ended:
-            highlightedItemID = nil
-        }
-    }
-}
-
-private struct DistributionLegendRow: View {
-    let item: AllocationItem
-    let highlightedItemID: AllocationItem.ID?
-
-    var body: some View {
-        HStack(spacing: PortfolixSpacing.sm) {
-            Circle()
-                .fill(item.color)
-                .frame(width: 8, height: 8)
-            Text(item.name)
-                .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
-                .lineLimit(1)
-            Spacer()
-            Text(String(format: "%.1f%%", item.value))
-                .font(PortfolixTypography.captionEmphasis)
-                .monospacedDigit()
-                .foregroundStyle(PortfolixTheme.primaryText)
-        }
-        .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.42)
-        .animation(.easeOut(duration: 0.16), value: highlightedItemID)
-        .accessibilityElement(children: .combine)
-    }
 }
 
 private struct RecentPositionsCard: View {
     @Environment(PortfolioStore.self) private var store
     @AppStorage("dashboard_primary_positions_limit")
     private var displayLimitRawValue = PrimaryPositionDisplayLimit.top10Percent.rawValue
-    @State private var sortField: PrimaryPositionSortField = .marketValue
-    @State private var sortDirection: PrimaryPositionSortDirection = .descending
+    private var sortField: PrimaryPositionSortField { store.primaryPositionSortField }
+    private var sortDirection: PrimaryPositionSortDirection { store.primaryPositionSortDirection }
 
     private var displayLimit: PrimaryPositionDisplayLimit {
         PrimaryPositionDisplayLimit(rawValue: displayLimitRawValue) ?? .top10Percent
@@ -1159,8 +961,8 @@ private struct RecentPositionsCard: View {
                         .frame(maxWidth: .infinity, minHeight: 82)
                 } else {
                     PositionHeaderRow(
-                        sortField: $sortField,
-                        sortDirection: $sortDirection
+                        sortField: Binding(get: { sortField }, set: { store.primaryPositionSortField = $0 }),
+                        sortDirection: Binding(get: { sortDirection }, set: { store.primaryPositionSortDirection = $0 })
                     )
 
                     ForEach(primaryPositions) { position in
@@ -1212,13 +1014,13 @@ enum PrimaryPositionDisplayLimit: String, CaseIterable, Identifiable {
     }
 }
 
-enum PrimaryPositionSortField: Hashable {
+enum PrimaryPositionSortField: String, Hashable {
     case marketValue
     case profitRate
     case todayProfit
 }
 
-enum PrimaryPositionSortDirection: Hashable {
+enum PrimaryPositionSortDirection: String, Hashable {
     case ascending
     case descending
 
@@ -1603,420 +1405,25 @@ private struct PositionSparkline: View {
     }
 }
 
-private struct InvestmentProfileCard: View {
-    @Environment(PortfolioStore.self) private var store
-
-    private var dimensions: [InvestmentProfileDimension] {
-        store.investmentProfileDimensions
-    }
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-                InvestmentProfileHeader(
-                    language: store.appLanguage,
-                    helpText: store.investmentProfileHelpText
-                )
-                .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
-
-                if store.positions.isEmpty {
-                    DashboardEmptyState(title: localizedText("添加持仓后生成画像", "Add holdings to generate a profile", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                } else {
-                    InvestmentRadarChart(dimensions: dimensions, language: store.appLanguage)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .onAppear {
-                            store.refreshInvestmentProfileIfNeeded()
-                        }
-                }
-            }
-            .frame(height: PortfolixLayout.dashboardHeroContentHeight, alignment: .topLeading)
-        }
-    }
-}
-
-struct InvestmentProfileDimension: Identifiable {
-    let id: String
-    let title: String
-    let value: Double
-    let color: Color
-}
-
-private struct InvestmentProfileHeader: View {
-    let language: AppLanguage
-    let helpText: String
-
-    var body: some View {
-        HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
-            Image(systemName: "person.text.rectangle")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.lilac)
-                .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
-
-            Text(localizedText("投资画像", "Investment Profile", language: language))
-                .font(PortfolixTypography.sectionTitle)
-                .foregroundStyle(PortfolixTheme.primaryText)
-                .lineLimit(1)
-                .frame(height: PortfolixLayout.cardHeaderHeight)
-
-            HelpIcon(
-                text: helpText
-            )
-
-            Spacer(minLength: PortfolixSpacing.sm)
-        }
-    }
-}
-
-private struct InvestmentRadarChart: View {
-    let dimensions: [InvestmentProfileDimension]
-    let language: AppLanguage
-    @State private var highlightedDimensionID: InvestmentProfileDimension.ID?
-
-    private struct RadarGeometry {
-        let center: CGPoint
-        let radius: CGFloat
-        let labelRadius: CGFloat
-    }
-
-    private var highlightedDimension: InvestmentProfileDimension? {
-        dimensions.first { $0.id == highlightedDimensionID }
-    }
-
-    private let gridStroke = StrokeStyle(lineWidth: 0.5, dash: [3, 4])
-
-    var body: some View {
-        GeometryReader { proxy in
-            let geometry = radarGeometry(size: proxy.size)
-
-            ZStack {
-                Canvas { context, _ in
-                    guard dimensions.count >= 3 else { return }
-
-                    for level in [0.25, 0.5, 0.75, 1.0] {
-                        let rect = CGRect(
-                            x: geometry.center.x - geometry.radius * level,
-                            y: geometry.center.y - geometry.radius * level,
-                            width: geometry.radius * 2 * level,
-                            height: geometry.radius * 2 * level
-                        )
-                        context.stroke(
-                            Path(ellipseIn: rect),
-                            with: .color(PortfolixTheme.border),
-                            style: gridStroke
-                        )
-                    }
-
-                    for index in dimensions.indices {
-                        var axis = Path()
-                        axis.move(to: geometry.center)
-                        axis.addLine(to: radarPoint(
-                            center: geometry.center,
-                            radius: geometry.radius,
-                            index: index,
-                            count: dimensions.count,
-                            scale: 1
-                        ))
-                        context.stroke(
-                            axis,
-                            with: .color(PortfolixTheme.border),
-                            style: gridStroke
-                        )
-                    }
-
-                    let valuePath = radarValuePath(
-                        dimensions: dimensions,
-                        center: geometry.center,
-                        radius: geometry.radius,
-                        value: \.value
-                    )
-                    context.fill(valuePath, with: .color(PortfolixTheme.lilac.opacity(0.24)))
-                    context.stroke(
-                        valuePath,
-                        with: .color(PortfolixTheme.lilac),
-                        lineWidth: DashboardChartStyle.dataLineWidth
-                    )
-
-                    for (index, dimension) in dimensions.enumerated() {
-                        let scale = max(0, min(dimension.value / 100, 1))
-                        let point = radarPoint(
-                            center: geometry.center,
-                            radius: geometry.radius,
-                            index: index,
-                            count: dimensions.count,
-                            scale: scale
-                        )
-                        let isHighlighted = dimension.id == highlightedDimensionID
-                        let size: CGFloat = isHighlighted ? 8 : 6
-                        let rect = CGRect(
-                            x: point.x - size / 2,
-                            y: point.y - size / 2,
-                            width: size,
-                            height: size
-                        )
-                        context.fill(Path(ellipseIn: rect), with: .color(isHighlighted ? PortfolixTheme.primaryText : PortfolixTheme.lilac))
-                    }
-                }
-
-                ForEach(Array(dimensions.enumerated()), id: \.element.id) { index, dimension in
-                    let point = radarPoint(
-                        center: geometry.center,
-                        radius: geometry.labelRadius,
-                        index: index,
-                        count: dimensions.count,
-                        scale: 1
-                    )
-                    RadarAxisLabel(dimension: dimension)
-                        .position(point)
-                }
-
-                if
-                    let highlightedDimension,
-                    let highlightedIndex = dimensions.firstIndex(where: { $0.id == highlightedDimension.id })
-                {
-                    let point = radarPoint(
-                        center: geometry.center,
-                        radius: geometry.radius,
-                        index: highlightedIndex,
-                        count: dimensions.count,
-                        scale: max(0, min(highlightedDimension.value / 100, 1))
-                    )
-                    RadarValueBadge(dimension: highlightedDimension)
-                        .position(x: point.x, y: point.y - 20)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                }
-
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        updateHighlightedDimension(for: phase, geometry: geometry)
-                    }
-            }
-        }
-        .animation(.easeOut(duration: 0.16), value: highlightedDimensionID)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Investment profile radar")
-    }
-
-    private func radarGeometry(size: CGSize) -> RadarGeometry {
-        let labelInset: CGFloat = 8
-        let horizontalLabelReserve = max(24, min(size.width * 0.09, 40))
-        let availableHorizontalRadius = max((size.width - horizontalLabelReserve * 2) / 2, 48)
-        let availableVerticalRadius = max(size.height / 2 - labelInset, 48)
-        let radius = min(availableHorizontalRadius, availableVerticalRadius) * 0.94
-        let labelRadius = radius + PortfolixSpacing.xs
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        return RadarGeometry(center: center, radius: radius, labelRadius: labelRadius)
-    }
-
-    private func updateHighlightedDimension(for phase: HoverPhase, geometry: RadarGeometry) {
-        switch phase {
-        case let .active(location):
-            guard dimensions.count >= 3 else {
-                highlightedDimensionID = nil
-                return
-            }
-            let offset = CGPoint(x: location.x - geometry.center.x, y: location.y - geometry.center.y)
-            let distance = hypot(offset.x, offset.y)
-            guard distance <= geometry.labelRadius + 18 else {
-                highlightedDimensionID = nil
-                return
-            }
-
-            let locationAngle = normalizedAngle(atan2(offset.y, offset.x))
-            highlightedDimensionID = dimensions.enumerated().min { lhs, rhs in
-                let lhsAngle = normalizedAngle(-Double.pi / 2 + Double(lhs.offset) / Double(dimensions.count) * 2 * Double.pi)
-                let rhsAngle = normalizedAngle(-Double.pi / 2 + Double(rhs.offset) / Double(dimensions.count) * 2 * Double.pi)
-                return angularDistance(lhsAngle, locationAngle) < angularDistance(rhsAngle, locationAngle)
-            }?.element.id
-        case .ended:
-            highlightedDimensionID = nil
-        }
-    }
-
-    private func normalizedAngle(_ angle: Double) -> Double {
-        var value = angle.truncatingRemainder(dividingBy: 2 * Double.pi)
-        if value < 0 {
-            value += 2 * Double.pi
-        }
-        return value
-    }
-
-    private func angularDistance(_ lhs: Double, _ rhs: Double) -> Double {
-        let difference = abs(lhs - rhs)
-        return min(difference, 2 * Double.pi - difference)
-    }
-
-    private func radarValuePath(
-        dimensions: [InvestmentProfileDimension],
-        center: CGPoint,
-        radius: CGFloat,
-        value: KeyPath<InvestmentProfileDimension, Double>
-    ) -> Path {
-        let points = dimensions.enumerated().map { index, dimension in
-            let scale = max(0, min(dimension[keyPath: value] / 100, 1))
-            return radarPoint(center: center, radius: radius, index: index, count: dimensions.count, scale: scale)
-        }
-        guard points.count >= 3 else { return Path() }
-
-        var path = Path()
-        for (index, point) in points.enumerated() {
-            if index == points.startIndex {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-        path.closeSubpath()
-        return path
-    }
-
-    private func radarPoint(
-        center: CGPoint,
-        radius: CGFloat,
-        index: Int,
-        count: Int,
-        scale: Double
-    ) -> CGPoint {
-        let angle = -Double.pi / 2 + Double(index) / Double(count) * 2 * Double.pi
-        return CGPoint(
-            x: center.x + cos(angle) * radius * scale,
-            y: center.y + sin(angle) * radius * scale
-        )
-    }
-}
-
-private struct RadarAxisLabel: View {
-    let dimension: InvestmentProfileDimension
-
-    var body: some View {
-        Text(dimension.title)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(PortfolixTheme.secondaryText)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .accessibilityHidden(true)
-    }
-}
-
-private struct RadarValueBadge: View {
-    let dimension: InvestmentProfileDimension
-
-    var body: some View {
-        Text("\(Int(round(dimension.value)))")
-        .font(PortfolixTypography.captionEmphasis)
-        .monospacedDigit()
-        .foregroundStyle(dimension.color)
-        .padding(.horizontal, PortfolixSpacing.sm)
-        .padding(.vertical, PortfolixSpacing.xs)
-        .background(PortfolixTheme.panelSoft.opacity(0.86), in: Capsule())
-    }
-}
-
 extension PortfolioStore {
-    private var otherPositionShareID: Position.ID {
-        UUID(uuidString: "00000000-0000-0000-0000-000000000011")!
-    }
-
     fileprivate var positionShareItems: [PositionShareItem] {
-        let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
-        guard totalValue > 0 else { return [] }
-        let maximumVisibleHoldingCount = 10
-
         let palette = [
-            PortfolixTheme.lilac,
-            PortfolixTheme.mint,
-            PortfolixTheme.rose,
-            PortfolixTheme.blue,
-            PortfolixTheme.amber,
-            PortfolixTheme.violet,
+            PortfolixTheme.lilac, PortfolixTheme.mint, PortfolixTheme.rose,
+            PortfolixTheme.blue, PortfolixTheme.amber, PortfolixTheme.violet,
         ]
-
-        let sortedPositions = positions
-            .sorted {
-                if $0.marketValueCNY == $1.marketValueCNY {
-                    return $0.name.localizedCompare($1.name) == .orderedAscending
-                }
-                return $0.marketValueCNY > $1.marketValueCNY
-            }
-
-        var items = sortedPositions
-            .prefix(maximumVisibleHoldingCount)
-            .enumerated()
-            .map { index, position in
+        return HoldingShareEngine.groups(positions: positions, language: appLanguage)
+            .enumerated().map { index, group in
                 PositionShareItem(
-                    id: position.id,
-                    name: position.name,
-                    value: position.marketValueCNY.doubleValue / totalValue * 100,
-                    color: palette[index % palette.count]
+                    id: group.id, name: group.name, amountCNY: group.amountCNY,
+                    value: group.percentage,
+                    color: group.id == "other_holdings" ? PortfolixTheme.tertiaryText : palette[index % palette.count]
                 )
             }
-
-        let otherValue = sortedPositions
-            .dropFirst(maximumVisibleHoldingCount)
-            .reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
-        if otherValue > 0 {
-            items.append(
-                PositionShareItem(
-                    id: otherPositionShareID,
-                    name: localizedText("其他", "Other", language: appLanguage),
-                    value: otherValue / totalValue * 100,
-                    color: PortfolixTheme.tertiaryText
-                )
-            )
-        }
-
-        return items
     }
 
-    var investmentProfileDimensions: [InvestmentProfileDimension] {
-        let aiScores = investmentProfileAIScoresForDisplay
-        return localInvestmentProfileScoresForAI.map { score in
-            return InvestmentProfileDimension(
-                id: score.id,
-                title: investmentProfileTitle(for: score.id),
-                value: min(max(aiScores[score.id] ?? score.score, 0), 100),
-                color: PortfolixTheme.lilac
-            )
-        }
-    }
-
-    var localInvestmentProfileScoresForAI: [AIInvestmentProfileScore] {
-        let context = AIAnalysisStoreContext(
-            displayCurrency: displayCurrency,
-            convertedTotalValue: totalValueCNY,
-            convertedTotalProfit: totalProfitCNY,
-            totalProfitRate: totalProfitRate,
-            riskProfileConfigured: riskProfileConfigured,
-            riskProfileVersion: riskProfileVersion,
-            riskLevel: riskLevel,
-            positionLimit: positionLimit,
-            cryptoLimit: cryptoLimit,
-            foreignCurrencyLimit: foreignCurrencyLimit,
-            liquidityMinimum: liquidityMinimum,
-            riskConstraintEvaluation: riskConstraintEvaluation
-        )
-        let exposures = InvestmentProfileEngine.merge(
-            positions: positions,
-            cached: investmentProfileExposureCache
-        )
-        return InvestmentProfileEngine.score(positions: positions, exposures: exposures, context: context).scores
-    }
-
-    private func investmentProfileTitle(for id: String) -> String {
-        switch id {
-        case "growth": localizedText("成长", "Growth", language: appLanguage)
-        case "global": localizedText("全球化", "Global", language: appLanguage)
-        case "diversification": localizedText("分散", "Diversified", language: appLanguage)
-        case "defense": localizedText("防守", "Defense", language: appLanguage)
-        case "cashflow": localizedText("现金流", "Cash Flow", language: appLanguage)
-        default: localizedText("活跃", "Activity", language: appLanguage)
-        }
-    }
 }
 
-private enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
+enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
     case calendar
     case chart
 
@@ -2032,7 +1439,8 @@ private enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
 
 private struct DailyProfitCard: View {
     @Environment(PortfolioStore.self) private var store
-    @State private var displayMode: DailyProfitDisplayMode = .calendar
+    var contentHeight: CGFloat = PortfolixLayout.dashboardTrendContentHeight
+    private var displayMode: DailyProfitDisplayMode { store.dailyProfitDisplayMode }
     @State private var selectedMonth = Calendar.current.dateInterval(of: .month, for: .now)?.start ?? .now
     @State private var highlightedDate: Date?
 
@@ -2106,7 +1514,7 @@ private struct DailyProfitCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
+            .frame(height: contentHeight, alignment: .topLeading)
         }
     }
 
@@ -2164,7 +1572,7 @@ private struct DailyProfitCard: View {
 
                 PortfolixGlassSegmentedPicker(
                     title: localizedText("显示方式", "Display mode", language: store.appLanguage),
-                    selection: $displayMode,
+                    selection: Binding(get: { displayMode }, set: { store.dailyProfitDisplayMode = $0 }),
                     options: DailyProfitDisplayMode.allCases,
                     optionTitle: { mode in
                         mode == .calendar
@@ -2214,26 +1622,31 @@ private struct DailyProfitCard: View {
     }
 
     private var calendarView: some View {
-        VStack(spacing: PortfolixSpacing.xs) {
-            LazyVGrid(columns: calendarColumns, spacing: 0) {
-                ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
-                    Text(weekday)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(PortfolixTheme.tertiaryText)
-                        .frame(maxWidth: .infinity, minHeight: 12)
+        GeometryReader { geometry in
+            let cellHeight = DailyProfitCalendarLayout.cellHeight(in: geometry.size.height, rows: calendarRowCount)
+            VStack(spacing: PortfolixLayout.dataTileSpacing) {
+                LazyVGrid(columns: calendarColumns, spacing: 0) {
+                    ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
+                        Text(weekday)
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: DailyProfitCalendarLayout.weekdayHeight)
+                    }
                 }
-            }
 
-            LazyVGrid(columns: calendarColumns, spacing: PortfolixSpacing.xs) {
-                ForEach(calendarSlots) { slot in
-                    if let date = slot.date {
-                        calendarCell(for: date)
-                    } else {
-                        Color.clear
-                            .frame(height: calendarCellHeight)
+                LazyVGrid(columns: calendarColumns, spacing: PortfolixLayout.dataTileSpacing) {
+                    ForEach(calendarSlots) { slot in
+                        if let date = slot.date {
+                            calendarCell(for: date, height: cellHeight)
+                        } else {
+                            Color.clear
+                                .frame(height: cellHeight)
+                        }
                     }
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
     }
 
@@ -2305,7 +1718,7 @@ private struct DailyProfitCard: View {
     }
 
     @ViewBuilder
-    private func calendarCell(for date: Date) -> some View {
+    private func calendarCell(for date: Date, height: CGFloat) -> some View {
         let point = pointsByDay[calendar.startOfDay(for: date)]
         let amount = point?.amountCNY
         let isToday = calendar.isDateInToday(date)
@@ -2325,7 +1738,8 @@ private struct DailyProfitCard: View {
                     .minimumScaleFactor(0.75)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: calendarCellHeight, maxHeight: calendarCellHeight)
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
         .background(cellBackground(amount), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
             if isToday || isHighlighted {
@@ -2341,7 +1755,7 @@ private struct DailyProfitCard: View {
     }
 
     private var calendarColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: PortfolixSpacing.xs), count: 7)
+        Array(repeating: GridItem(.flexible(), spacing: PortfolixLayout.dataTileSpacing), count: 7)
     }
 
     private var weekdayTitles: [String] {
@@ -2369,10 +1783,6 @@ private struct DailyProfitCard: View {
 
     private var calendarRowCount: Int {
         max(calendarSlots.count / 7, 5)
-    }
-
-    private var calendarCellHeight: CGFloat {
-        calendarRowCount == 6 ? 26 : 32
     }
 
     private var monthTitle: String {
@@ -2469,10 +1879,7 @@ private struct DailyProfitCard: View {
     }
 
     private func cellBackground(_ amount: Decimal?) -> Color {
-        guard let amount else { return .clear }
-        if amount > 0 { return PortfolixTheme.mint.opacity(0.13) }
-        if amount < 0 { return PortfolixTheme.danger.opacity(0.13) }
-        return PortfolixTheme.panelSoft.opacity(0.55)
+        PortfolixTheme.dailyProfitTileFill(for: amount)
     }
 
     private func dayTitle(_ date: Date) -> String {
@@ -2503,6 +1910,17 @@ private struct DailyProfitCard: View {
         formatter.dateFormat = "MMM d"
         return formatter
     }()
+}
+
+enum DailyProfitCalendarLayout {
+    static let weekdayHeight: CGFloat = 12
+
+    static func cellHeight(in availableHeight: CGFloat, rows: Int) -> CGFloat {
+        guard availableHeight.isFinite, rows > 0 else { return 0 }
+        let spacing = PortfolixLayout.dataTileSpacing
+        let reservedHeight = weekdayHeight + spacing * CGFloat(rows)
+        return max(availableHeight - reservedHeight, 0) / CGFloat(rows)
+    }
 }
 
 private struct DailyProfitCalendarSlot: Identifiable {

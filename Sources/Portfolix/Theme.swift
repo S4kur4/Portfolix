@@ -56,6 +56,13 @@ enum PortfolixTheme {
         return secondaryText
     }
 
+    static func dailyProfitTileFill(for amount: Decimal?) -> Color {
+        guard let amount else { return .clear }
+        if amount > 0 { return mint.opacity(0.13) }
+        if amount < 0 { return danger.opacity(0.13) }
+        return panelSoft.opacity(0.55)
+    }
+
     static let userMessageText = Color(hex: 0x120F20)
     static let userMessageGradientColors = [
         adaptive(light: 0xAF9AFF, dark: 0xC3B1FF),
@@ -97,6 +104,7 @@ enum PortfolixRadius {
 }
 
 enum PortfolixLayout {
+    static let dataTileSpacing: CGFloat = PortfolixSpacing.xs
     static let cardPadding: CGFloat = PortfolixSpacing.lg
     static let cardHeaderHeight: CGFloat = 24
     static let dashboardHeroContentHeight: CGFloat = 268
@@ -106,6 +114,7 @@ enum PortfolixLayout {
     static let settingsControlHeight: CGFloat = 30
     static let chatComposerTopInset: CGFloat = PortfolixSpacing.lg
     static let chatComposerBottomInset: CGFloat = PortfolixSpacing.lg
+    static let chatComposerHorizontalInset: CGFloat = PortfolixSpacing.lg
     static let controlSpacing: CGFloat = PortfolixSpacing.sm
     static let controlSelectionInset: CGFloat = 2
     static let distributionContentHeight: CGFloat = 180
@@ -368,7 +377,6 @@ struct PortfolixGlassMenuPicker<Value: Hashable>: View {
     let optionTitle: (Value) -> String
     var selectionTitle: String? = nil
     var height: CGFloat = PortfolixLayout.glassControlHeight
-    var showsSelectionIndicator = true
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -377,11 +385,7 @@ struct PortfolixGlassMenuPicker<Value: Hashable>: View {
                 Button {
                     selection = option
                 } label: {
-                    if showsSelectionIndicator && selection == option {
-                        Label(optionTitle(option), systemImage: "checkmark")
-                    } else {
-                        Text(optionTitle(option))
-                    }
+                    Text(optionTitle(option))
                 }
             }
         } label: {
@@ -426,17 +430,20 @@ struct Panel<Content: View>: View {
 struct SectionHeader<Trailing: View>: View {
     let title: String
     var symbol: String? = nil
+    let helpText: String?
     let trailing: Trailing
 
-    init(title: String, symbol: String? = nil, @ViewBuilder trailing: () -> Trailing) {
+    init(title: String, symbol: String? = nil, helpText: String? = nil, @ViewBuilder trailing: () -> Trailing) {
         self.title = title
         self.symbol = symbol
+        self.helpText = helpText
         self.trailing = trailing()
     }
 
-    init(title: String, symbol: String? = nil) where Trailing == EmptyView {
+    init(title: String, symbol: String? = nil, helpText: String? = nil) where Trailing == EmptyView {
         self.title = title
         self.symbol = symbol
+        self.helpText = helpText
         self.trailing = EmptyView()
     }
 
@@ -455,9 +462,33 @@ struct SectionHeader<Trailing: View>: View {
                 .lineLimit(1)
                 .frame(height: PortfolixLayout.cardHeaderHeight)
 
+            if let helpText {
+                HelpIcon(text: helpText)
+            }
+
             Spacer(minLength: PortfolixSpacing.sm)
             trailing
         }
+    }
+}
+
+struct PortfolixChartTooltipStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
+            .overlay {
+                RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+                    .stroke(PortfolixTheme.borderStrong, lineWidth: 1)
+            }
+    }
+}
+
+extension View {
+    func portfolixChartTooltip() -> some View {
+        modifier(PortfolixChartTooltipStyle())
     }
 }
 
@@ -529,9 +560,10 @@ struct CapsuleLabel: View {
 
 struct PrimaryButtonStyle: ButtonStyle {
     var preservesLabelSize = false
+    var cornerRadius: CGFloat = PortfolixRadius.compact
 
     func makeBody(configuration: Configuration) -> some View {
-        InteractiveButtonLabel(configuration: configuration, isPrimary: true, preservesLabelSize: preservesLabelSize)
+        InteractiveButtonLabel(configuration: configuration, isPrimary: true, preservesLabelSize: preservesLabelSize, cornerRadius: cornerRadius)
     }
 }
 
@@ -546,12 +578,13 @@ struct QuietButtonStyle: ButtonStyle {
 @available(macOS 26.0, *)
 struct ButtonGlassBackground: NSViewRepresentable {
     let tint: Color?
+    var cornerRadius: CGFloat = PortfolixRadius.compact
     @Environment(\.colorScheme) private var colorScheme
 
     func makeNSView(context: Context) -> ButtonGlassView {
         let view = ButtonGlassView()
         view.style = .regular
-        view.cornerRadius = PortfolixRadius.compact
+        view.cornerRadius = cornerRadius
         view.setAccessibilityElement(false)
         return view
     }
@@ -559,6 +592,7 @@ struct ButtonGlassBackground: NSViewRepresentable {
     func updateNSView(_ nsView: ButtonGlassView, context: Context) {
         nsView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         nsView.tintColor = tint.map { NSColor($0) }
+        nsView.cornerRadius = cornerRadius
     }
 }
 
@@ -571,6 +605,7 @@ private struct InteractiveButtonLabel: View {
     let configuration: ButtonStyle.Configuration
     let isPrimary: Bool
     let preservesLabelSize: Bool
+    var cornerRadius: CGFloat = PortfolixRadius.compact
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
@@ -586,29 +621,29 @@ private struct InteractiveButtonLabel: View {
             .background {
                 Group {
                     if #available(macOS 26.0, *) {
-                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.primaryButtonTint : nil)
+                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.primaryButtonTint : nil, cornerRadius: cornerRadius)
                             .overlay {
                                 if isPrimary && isEnabled {
-                                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                                         .fill(PortfolixTheme.primaryButtonTint.opacity(0.45))
                                 }
                             }
                     } else {
-                        RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .fill(.regularMaterial)
                             .overlay {
-                                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                                     .fill(isPrimary && isEnabled
                                         ? PortfolixTheme.primaryButtonTint.opacity(0.88)
                                         : PortfolixTheme.panelSoft.opacity(0.48))
                             }
                     }
                 }
-                    .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     .shadow(color: PortfolixTheme.buttonShadow, radius: 4, x: 0, y: 2)
                     .allowsHitTesting(false)
             }
-            .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .opacity(!isEnabled ? 0.5 : configuration.isPressed ? 0.72 : isHovering ? 0.88 : 1)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)

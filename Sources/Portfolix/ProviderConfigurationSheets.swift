@@ -358,11 +358,8 @@ struct LLMConfigurationSheet: View {
     }
 
     private var noticeSymbol: String {
-        if case .failure = connectionStatus {
-            return "xmark.circle.fill"
-        }
-        if case .success = connectionStatus {
-            return "checkmark.circle.fill"
+        if let connectionStatus {
+            return connectionStatus.symbol
         }
         return isValidatingAPIKey ? "clock.arrow.circlepath" : "exclamationmark.circle.fill"
     }
@@ -476,6 +473,8 @@ struct SearchConfigurationSheet: View {
     @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var parallelEnabled = false
+    @State private var deepseekEnabled = false
+    @State private var deepseekStatus: ProviderConnectionStatus?
     @State private var tavilyEnabled = false
     @State private var bochaEnabled = false
     @State private var tavilyAPIKey = ""
@@ -487,6 +486,7 @@ struct SearchConfigurationSheet: View {
     @State private var isTavilyAPIKeyVisible = false
     @State private var isBochaAPIKeyVisible = false
     @State private var validatingProviders: Set<SearchProviderOption> = []
+    @State private var validationRequestIDs: [SearchProviderOption: UUID] = [:]
     @State private var activationPromptProviders: Set<SearchProviderOption> = []
     @State private var didLoadConfiguration = false
     @State private var didAttemptSave = false
@@ -504,7 +504,7 @@ struct SearchConfigurationSheet: View {
             primary: validateAndSave
         ) {
             Form {
-                freeProviderSection
+                sharedProviderSection
 
                 providerSection(
                     provider: .tavily,
@@ -532,6 +532,7 @@ struct SearchConfigurationSheet: View {
             store.refreshProviderCredentialState()
             let configuration = store.searchConfiguration
             parallelEnabled = configuration.isProviderEnabled(.parallel)
+            deepseekEnabled = configuration.isProviderEnabled(.deepseek)
             tavilyEnabled = configuration.isProviderEnabled(.tavily)
             bochaEnabled = configuration.isProviderEnabled(.bocha)
             let storedTavilyAPIKey = (try? store.readProviderAPIKey(kind: .tavily)) ?? ""
@@ -551,7 +552,7 @@ struct SearchConfigurationSheet: View {
         }
     }
 
-    private var freeProviderSection: some View {
+    private var sharedProviderSection: some View {
         Section {
             ProviderFormRow(label: SearchProviderOption.parallel.title(language: store.appLanguage)) {
                 Toggle("", isOn: $parallelEnabled)
@@ -560,9 +561,29 @@ struct SearchConfigurationSheet: View {
                     .accessibilityLabel(text("启用 Parallel Search", "Enable Parallel Search"))
             }
 
-            Text(parallelDescription)
-            .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            ProviderFormRow(label: SearchProviderOption.deepseek.title(language: store.appLanguage)) {
+                Toggle("", isOn: Binding(
+                    get: { deepseekEnabled },
+                    set: { enabled in
+                        if enabled {
+                            enable(.deepseek, isEnabled: $deepseekEnabled, field: .llmAPIKey)
+                        } else {
+                            deepseekEnabled = false
+                            validatingProviders.remove(.deepseek)
+                            validationRequestIDs[.deepseek] = nil
+                            deepseekStatus = nil
+                        }
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel(text("启用 DeepSeek Search", "Enable DeepSeek Search"))
+            }
+            if let deepseekStatus {
+                Label(deepseekStatus.message, systemImage: statusSymbol(deepseekStatus))
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(deepseekStatus.color)
+            }
         }
     }
 
@@ -604,6 +625,7 @@ struct SearchConfigurationSheet: View {
                     guard didLoadConfiguration else { return }
                     activationPromptProviders.remove(provider)
                     validatingProviders.remove(provider)
+                    validationRequestIDs[provider] = nil
                     if isEnabled.wrappedValue {
                         isEnabled.wrappedValue = false
                     }
@@ -612,13 +634,19 @@ struct SearchConfigurationSheet: View {
             }
 
             if let status {
-                Label(status.message, systemImage: statusSymbol(status))
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(status.color)
-            } else {
-                Text(providerDescription(provider))
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                if provider == .tavily {
+                    ProviderNoticeRow(
+                        symbol: status.symbol,
+                        title: status.message,
+                        message: nil,
+                        tint: status.color,
+                        titleColor: status.color
+                    )
+                } else {
+                    Label(status.message, systemImage: statusSymbol(status))
+                        .font(PortfolixTypography.caption)
+                        .foregroundStyle(status.color)
+                }
             }
         }
     }
@@ -643,6 +671,7 @@ struct SearchConfigurationSheet: View {
             set: { requestedValue in
                 if !requestedValue {
                     validatingProviders.remove(provider)
+                    validationRequestIDs[provider] = nil
                     activationPromptProviders.remove(provider)
                     isEnabled.wrappedValue = false
                     return
@@ -661,7 +690,9 @@ struct SearchConfigurationSheet: View {
         guard !key.isEmpty else {
             activationPromptProviders.insert(provider)
             setStatus(
-                .failure(text("请先填写 API Key", "Enter an API Key first")),
+                .failure(provider == .deepseek
+                         ? text("请先在 DeepSeek API 中配置密钥", "Configure your key in DeepSeek API first")
+                         : text("请先填写 API Key", "Enter an API Key first")),
                 for: provider
             )
             revealAndFocusAPIKey(for: provider, field: field)
@@ -671,7 +702,11 @@ struct SearchConfigurationSheet: View {
         activationPromptProviders.remove(provider)
         isEnabled.wrappedValue = true
         validatingProviders.insert(provider)
-        setStatus(.validating(text("正在验证 API", "Validating API")), for: provider)
+        let requestID = UUID()
+        validationRequestIDs[provider] = requestID
+        setStatus(.validating(provider == .tavily
+                             ? text("正在验证 API 配置", "Validating API configuration")
+                             : text("正在验证 API", "Validating API")), for: provider)
 
         Task {
             let result: Result<Void, Error>
@@ -682,6 +717,8 @@ struct SearchConfigurationSheet: View {
                 result = .failure(error)
             }
 
+            guard validationRequestIDs[provider] == requestID else { return }
+            validationRequestIDs[provider] = nil
             validatingProviders.remove(provider)
             guard isEnabled.wrappedValue, activeKey(for: provider) == key else { return }
             switch result {
@@ -699,7 +736,7 @@ struct SearchConfigurationSheet: View {
         field: ProviderConfigurationField
     ) {
         switch provider {
-        case .parallel:
+        case .parallel, .deepseek:
             return
         case .tavily:
             isTavilyAPIKeyVisible = true
@@ -716,7 +753,7 @@ struct SearchConfigurationSheet: View {
         let persistedProviders = enabledProviders.filter {
             !$0.requiresAPIKey || !activeKey(for: $0).isEmpty
         }
-        for provider in SearchProviderOption.allCases {
+        for provider in SearchProviderOption.independentlyConfiguredProviders {
             guard let credentialKind = provider.credentialKind else { continue }
             let key = visibleKey(for: provider).trimmingCharacters(in: .whitespacesAndNewlines)
             do {
@@ -748,6 +785,7 @@ struct SearchConfigurationSheet: View {
     private var enabledProviders: Set<SearchProviderOption> {
         var providers = Set<SearchProviderOption>()
         if parallelEnabled { providers.insert(.parallel) }
+        if deepseekEnabled { providers.insert(.deepseek) }
         if tavilyEnabled { providers.insert(.tavily) }
         if bochaEnabled { providers.insert(.bocha) }
         return providers
@@ -765,7 +803,7 @@ struct SearchConfigurationSheet: View {
 
     private func initialKey(for provider: SearchProviderOption) -> String {
         switch provider {
-        case .parallel: ""
+        case .parallel, .deepseek: ""
         case .tavily: initialTavilyAPIKey
         case .bocha: initialBochaAPIKey
         }
@@ -780,6 +818,7 @@ struct SearchConfigurationSheet: View {
     private func visibleKey(for provider: SearchProviderOption) -> String {
         switch provider {
         case .parallel: ""
+        case .deepseek: (try? store.readProviderAPIKey(kind: .llm)) ?? ""
         case .tavily: tavilyAPIKey
         case .bocha: bochaAPIKey
         }
@@ -807,6 +846,8 @@ struct SearchConfigurationSheet: View {
         switch provider {
         case .parallel:
             break
+        case .deepseek:
+            deepseekStatus = status
         case .tavily:
             tavilyStatus = status
         case .bocha:
@@ -822,23 +863,6 @@ struct SearchConfigurationSheet: View {
         }
     }
 
-    private func providerDescription(_ provider: SearchProviderOption) -> String {
-        switch (provider, store.appLanguage) {
-        case (.parallel, _): parallelDescription
-        case (.tavily, .chinese): "更适合国际市场、英文资料与跨市场检索。"
-        case (.tavily, .english): "Best suited to global markets, English sources, and cross-market research."
-        case (.bocha, .chinese): "更适合中文资料、A 股、基金与境内政策信息。"
-        case (.bocha, .english): "Best suited to Chinese sources, A-shares, funds, and domestic policy research."
-        }
-    }
-
-    private var parallelDescription: String {
-        text(
-            "免费的通用网页搜索服务，适合补充市场新闻、公开资料与跨市场信息，仅在联网增强模式下使用。",
-            "A free general web search service for market news, public sources, and cross-market information; used only in Connected mode."
-        )
-    }
-
     private func text(_ chinese: String, _ english: String) -> String {
         localizedText(chinese, english, language: store.appLanguage)
     }
@@ -852,6 +876,14 @@ enum ProviderConnectionStatus: Equatable {
     var message: String {
         switch self {
         case let .success(message), let .failure(message), let .validating(message): message
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .success: "checkmark.circle.fill"
+        case .failure: "xmark.circle.fill"
+        case .validating: "clock.arrow.circlepath"
         }
     }
 

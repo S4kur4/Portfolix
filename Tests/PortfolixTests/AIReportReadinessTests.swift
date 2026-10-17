@@ -3,6 +3,38 @@ import Testing
 
 @Suite("Agent activity policy")
 struct AIAgentActivityPolicyTests {
+    @Test @MainActor
+    func composerActionTracksMeaningfulDraftWithoutChangingItsSize() {
+        let buffer = AIReportComposerDraftBuffer()
+        for (text, expected): (String, AIReportComposerAction) in [
+            ("", .analyze), ("  \n ", .analyze), ("继续分析", .send), (" Gold price? ", .send), ("", .analyze),
+        ] {
+            buffer.replace(with: text)
+            let mode = AIReportComposerAction(hasDraftText: buffer.hasContent)
+            #expect(mode == expected)
+            #expect(mode.symbol == (expected == .send ? "arrow.up" : "sparkles"))
+        }
+        #expect(AIReportComposerAction.analyze.title(hasReport: false, language: .chinese) == "生成分析")
+        #expect(AIReportComposerAction.analyze.title(hasReport: true, language: .chinese) == "重新分析")
+        #expect(AIReportComposerAction.send.title(hasReport: true, language: .english) == "Send question")
+    }
+
+    @Test
+    func composerActionHonorsTheSelectedOperationAndBusyStates() {
+        for mode in AIReportComposerAction.allCases {
+            #expect(mode.isEnabled(canGenerate: true, canSendFollowUp: true,
+                                   isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false))
+            for (submitting, awaiting, voice) in [(true, false, false), (false, true, false), (false, false, true)] {
+                #expect(!mode.isEnabled(canGenerate: true, canSendFollowUp: true,
+                                        isSubmitting: submitting, isAwaitingResponse: awaiting, isVoiceActive: voice))
+            }
+            #expect(mode.isEnabled(canGenerate: true, canSendFollowUp: false,
+                                  isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false) == (mode == .analyze))
+            #expect(mode.isEnabled(canGenerate: false, canSendFollowUp: true,
+                                  isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false) == (mode == .send))
+        }
+    }
+
     @Test
     func keepsOnlyTheLatestDistinctNonemptyLine() {
         var lines: [AIAgentActivityLine] = []
