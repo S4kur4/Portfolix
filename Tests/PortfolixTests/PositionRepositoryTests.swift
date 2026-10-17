@@ -3283,6 +3283,7 @@ struct PositionRepositoryTests {
         #expect(AIAnalysisPromptText.repairUser(rawReport: "{}", inputJSON: "{}").contains("target_report_shape"))
     }
 
+    #if DEBUG
     @MainActor
     @Test
     func captureLiveAgentPromptBeforeLLM() async throws {
@@ -3334,6 +3335,7 @@ struct PositionRepositoryTests {
         }
         print("PORTFOLIX_CAPTURED_PROMPT=\(outputURL.path)")
     }
+    #endif
 
     @Test
     func reportDropsModelClaimedDomainsWithoutVerifiedSearchSources() throws {
