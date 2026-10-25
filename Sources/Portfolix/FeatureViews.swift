@@ -731,7 +731,7 @@ private struct AIReportChatSurface: View {
                         .padding(.top, PortfolixSpacing.lg)
                         .padding(.bottom, PortfolixSpacing.md)
                     }
-                    .scrollIndicators(.hidden)
+                    .scrollIndicators(.never)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .onAppear {
                         scheduleScrollToBottom(proxy, animated: false, delay: 0.08)
@@ -3120,7 +3120,7 @@ struct RiskProfileView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .sheet(isPresented: $isQuestionnairePresented) {
             RiskQuestionnaireSheet()
                 .environment(store)
@@ -3794,7 +3794,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .onAppear {
             store.refreshProviderCredentialState()
         }
