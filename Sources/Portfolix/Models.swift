@@ -2677,8 +2677,11 @@ final class PortfolioStore {
                    self.canAnalyzeInvestmentDistribution {
                     let now = Date()
                     let previous = Dictionary(grouping: InvestmentDistributionEngine.cachedAssets(self.aiInvestmentDistribution, positions: requestPositions), by: \.identityFingerprint)
+                    let underlying = (error as? AIModelRunFailure)?.underlying ?? error
+                    let completed = Dictionary(grouping: (underlying as? InvestmentDistributionPartialFailure)?.completedAssets ?? [], by: \.identityFingerprint)
                     let failures = requestPositions.map { position in
                         let identity = InvestmentDistributionEngine.identityFingerprint(position)
+                        if let asset = completed[identity]?.first { return asset }
                         let local = InvestmentDistributionEngine.localDomain(for: position)
                         return AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: position),
                             identityFingerprint: identity, allocations: local.map { [InvestmentDomainWeight(domain: $0, weight: 1)] } ?? previous[identity]?.first?.allocations ?? [],

@@ -197,6 +197,45 @@ struct InvestmentDistributionTests {
         #expect(InvestmentDistributionEngine.items(positions: positions, assets: result.assets).first?.amountCNY == 2500)
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func laterBatchFailureKeepsCompletedClassificationsAndRetriesOnlyUnfinishedAssets(invalidJSON: Bool) async throws {
+        let positions = (0..<49).map { position(name: "Asset \($0)", symbol: "TEST\($0)", value: 100) }
+        let repository = try repository(positions[0])
+        for holding in positions.dropFirst() { try repository.insert(holding) }
+        let pending = InvestmentDistributionEngine.pendingPositions(positions, cache: nil)
+        let completed = Array(pending.prefix(24))
+        let llm = DistributionMockLLM(responses: [response(completed, allocations: [weight(memory, 1)])]
+            + (invalidJSON ? ["invalid"] : []))
+        let credentials = DistributionCredentials()
+        let store = PortfolioStore(positionRepository: repository, credentialStore: credentials,
+            aiAgent: AIAnalysisAgent(llm: llm, search: DistributionNoSearch(), credentialStore: credentials))
+        store.aiConfiguration = .default
+        store.searchConfiguration = offlineSearch
+        store.refreshInvestmentDistributionIfNeeded()
+        await store.waitForInvestmentDistributionUpdate()
+
+        #expect(await llm.prompts().count == 2)
+        #expect(store.latestAIModelUsage?.calls.count == 2)
+        #expect(store.investmentDistributionItems.first { $0.id == memory.id }?.amountCNY == 2400)
+        let json = try #require(try repository.appSetting(for: InvestmentDistributionEngine.cacheKey))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let cache = try decoder.decode(AIInvestmentDistribution.self, from: Data(json.utf8))
+        let completedIDs = Set(completed.map(InvestmentDistributionEngine.identityFingerprint))
+        #expect(cache.assets.filter { completedIDs.contains($0.identityFingerprint) }.allSatisfy {
+            !$0.allocations.isEmpty && $0.retryAfter == nil
+        })
+        let retried = InvestmentDistributionEngine.pendingPositions(positions, cache: cache,
+            now: Date().addingTimeInterval(InvestmentDistributionEngine.failureRetryInterval + 1))
+        #expect(Set(retried.map(InvestmentDistributionEngine.identityFingerprint)) ==
+            Set(positions.map(InvestmentDistributionEngine.identityFingerprint)).subtracting(completedIDs))
+        store.refreshInvestmentDistributionIfNeeded()
+        await store.waitForInvestmentDistributionUpdate()
+        #expect(await llm.prompts().count == 2)
+        let reopened = PortfolioStore(positionRepository: repository, credentialStore: credentials)
+        #expect(reopened.investmentDistributionItems.first { $0.id == memory.id }?.amountCNY == 2400)
+    }
+
     @Test
     func ambiguousFundUsesBoundedPublicEvidenceAndOneClassificationCall() async throws {
         let fund = position(category: .fund, value: 100)
