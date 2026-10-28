@@ -3257,7 +3257,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v18-deepseek-search")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v22-read-only-data-tools")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
@@ -5115,7 +5115,7 @@ struct PositionRepositoryTests {
 
     @Test
     func aiFollowUpRejectsObviouslyIncompleteAnswer() throws {
-        #expect(throws: AIAnalysisAgentError.self) {
+        #expect(throws: AIFollowUpResponseError.incompleteAnswer) {
             try AIFollowUpGuardrail.validatedAnswer("报告对华夏国证半导体芯片ETF联接A（008887）的建议是")
         }
     }
@@ -6094,7 +6094,7 @@ private actor MockLLMCompleter: LLMCompleting {
         webSearchEnabled: Bool,
         webSearchProgress: LLMWebSearchProgressHandler?
     ) async throws -> LLMCompletionResult {
-        guard !completionResults.isEmpty else {
+        guard !completionResults.isEmpty, !configuration.requestStage.hasSuffix("_planning") else {
             return LLMCompletionResult(
                 content: try await completeJSON(
                     systemPrompt: systemPrompt,

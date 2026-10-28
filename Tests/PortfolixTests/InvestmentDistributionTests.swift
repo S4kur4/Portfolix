@@ -172,6 +172,7 @@ struct InvestmentDistributionTests {
             searchConfiguration: offlineSearch, requestFingerprint: "request"
         )
         #expect(result.assets.count == 1)
+        #expect(result.modelUsage?.calls.first?.reasoningEffort == "none")
         let prompt = try #require(await llm.prompts().first)
         #expect(prompt.contains("Memory maker"))
         #expect(!prompt.contains("1234567"))
@@ -197,32 +198,26 @@ struct InvestmentDistributionTests {
     }
 
     @Test
-    func researchedFundSplitsAcceptOnlyReturnedEvidence() async throws {
+    func ambiguousFundUsesBoundedPublicEvidenceAndOneClassificationCall() async throws {
         let fund = position(category: .fund, value: 100)
         let sourceURL = "https://fund.example.com/quarterly-report"
-        let now = Date()
-        let exposure = AssetExposureProfile(
-            positionRef: InvestmentProfileEngine.positionRef(for: fund), symbol: fund.symbol,
-            category: fund.category.aiCode, resolverVersion: InvestmentProfileEngine.resolverVersion,
-            resolvedAt: now, expiresAt: now.addingTimeInterval(86_400),
-            assetClassWeights: ["equity": 0.75, "commodity": 0.25], regionWeights: ["US": 1],
-            sectorWeights: ["memory": 0.75, "gold": 0.25], growthStyleScore: 0.5,
-            incomeScore: 0.1, volatilityScore: 0.5, benchmarkKey: nil, confidence: 0.9,
-            rationale: "Official report", evidence: [.init(title: "Report", url: sourceURL, source: "fund.example.com")]
-        )
+        let search = DistributionSearch(sources: [AssetResearchSource(title: "TEST 基金公司投资范围", url: sourceURL,
+            domain: "fund.example.com", publishedDate: nil, snippet: "TEST 主要投资美国存储行业。", credibility: .official)])
         let llm = DistributionMockLLM(responses: [
-            response(fund, allocations: [weight(memory, 0.75), weight(gold, 0.25)], urls: [sourceURL]),
+            response(fund, allocations: [weight(memory, 1)], urls: [sourceURL]),
         ])
         let result = try await AIAnalysisAgent(
-            llm: llm, search: DistributionNoSearch(), credentialStore: DistributionCredentials()
+            llm: llm, search: search, credentialStore: DistributionCredentials()
         ).generateInvestmentDistribution(
             positions: [fund], llmConfiguration: .default,
             searchConfiguration: SearchConfiguration(isEnabled: true, provider: .parallel, quality: .basic),
-            cachedExposures: [exposure], requestFingerprint: "researched"
+            requestFingerprint: "researched"
         )
-        #expect(result.assets.first?.allocations.count == 2)
-        #expect(result.researchedExposures.first?.evidence.first?.url == sourceURL)
+        #expect(result.assets.first?.allocations.count == 1)
+        #expect(result.researchedExposures.isEmpty)
         #expect(await llm.prompts().count == 1)
+        #expect(await llm.prompts().first?.replacingOccurrences(of: "\\/", with: "/").contains(sourceURL) == true)
+        #expect(await search.queries().count == 1)
     }
 
     @Test
@@ -235,12 +230,12 @@ struct InvestmentDistributionTests {
                 llm: DistributionMockLLM(responses: [raw]), search: DistributionNoSearch(),
                 credentialStore: DistributionCredentials()
             )
-            await #expect(throws: (any Error).self) {
-                try await agent.generateInvestmentDistribution(
-                    positions: [fund], llmConfiguration: .default,
-                    searchConfiguration: offlineSearch, requestFingerprint: "request"
-                )
-            }
+            let result = try await agent.generateInvestmentDistribution(
+                positions: [fund], llmConfiguration: .default,
+                searchConfiguration: offlineSearch, requestFingerprint: "request"
+            )
+            #expect(result.assets.first?.allocations.isEmpty == true)
+            #expect(result.assets.first?.retryAfter != nil)
         }
     }
 
@@ -298,7 +293,7 @@ struct InvestmentDistributionTests {
         store.searchConfiguration = offlineSearch
         store.refreshInvestmentDistributionIfNeeded()
         await store.waitForInvestmentDistributionUpdate()
-        #expect(store.investmentDistributionItems.first?.domain.titleChinese == "美股")
+        #expect(store.investmentDistributionItems.first?.id == "unclassified")
         store.refreshInvestmentDistributionIfNeeded()
         await store.waitForInvestmentDistributionUpdate()
         #expect(await llm.prompts().count == 1)
@@ -336,7 +331,7 @@ struct InvestmentDistributionTests {
     }
 
     @Test @MainActor
-    func persistedPriceRefreshTriggersDistributionAndUpdatesAmountsImmediately() async throws {
+    func persistedPriceRefreshRevaluesDistributionWithoutReclassifying() async throws {
         let holding = position(value: 100)
         let repository = try repository(holding)
         let llm = DistributionMockLLM(responses: [
@@ -356,11 +351,11 @@ struct InvestmentDistributionTests {
         store.synchronizePersistedMarketDataIfNeeded()
         #expect(store.investmentDistributionItems.reduce(Decimal.zero) { $0 + $1.amountCNY } == 200)
         await store.waitForInvestmentDistributionUpdate()
-        #expect(await llm.prompts().count == 2)
-        #expect(store.investmentDistributionItems.first?.id == "gold")
+        #expect(await llm.prompts().count == 1)
+        #expect(store.investmentDistributionItems.first?.id == "us_memory")
         store.synchronizePersistedMarketDataIfNeeded()
         await store.waitForInvestmentDistributionUpdate()
-        #expect(await llm.prompts().count == 2)
+        #expect(await llm.prompts().count == 1)
     }
 
     @Test(.timeLimit(.minutes(1))) @MainActor
@@ -383,7 +378,7 @@ struct InvestmentDistributionTests {
         await gate.release(1, response: response(holding, allocations: [weight(memory, 1)]))
         for _ in 0..<10 { await Task.yield() }
         #expect(store.isUpdatingInvestmentDistribution)
-        #expect(store.investmentDistributionItems.first?.id.hasPrefix("category_") == true)
+        #expect(store.investmentDistributionItems.first?.id == "unclassified")
         await gate.release(2, response: response(holding, allocations: [weight(gold, 1)]))
         await store.waitForInvestmentDistributionUpdate()
         #expect(store.investmentDistributionItems.first?.id == "gold")
@@ -602,9 +597,218 @@ struct InvestmentDistributionTests {
         SearchConfiguration(isEnabled: false, provider: .parallel, quality: .basic)
     }
 
-    private func position(id: UUID = UUID(), name: String = "Test Asset", category: AssetCategory = .usStock, value: Decimal) -> Position {
+    @Test
+    func assetCacheSurvivesOtherHoldingsModelSearchAndPositionIDChanges() {
+        let now = Date()
+        let first = position(name: "华夏半导体ETF", category: .fund, value: 100)
+        let duplicate = position(name: first.name, category: .fund, value: 250)
+        let second = position(name: "黄金ETF", category: .fund, value: 300)
+        let cached = AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: first),
+            identityFingerprint: InvestmentDistributionEngine.identityFingerprint(first), allocations: [weight(memory, 1)], classifiedAt: now)
+        let cache = AIInvestmentDistribution(version: InvestmentDistributionEngine.version, generatedAt: now,
+            model: "old-model", requestFingerprint: "old", assets: [cached], researchedExposures: [])
+        #expect(InvestmentDistributionEngine.pendingPositions([first, duplicate, second], cache: cache, now: now).map(\.id) == [second.id])
+        let assets = InvestmentDistributionEngine.cachedAssets(cache, positions: [duplicate])
+        #expect(assets.first?.positionRef == InvestmentProfileEngine.positionRef(for: duplicate))
+        #expect(InvestmentDistributionEngine.items(positions: [duplicate], assets: assets).first?.amountCNY == 250)
+        #expect(InvestmentDistributionEngine.requestFingerprint(positions: [first], model: "one", search: offlineSearch)
+            == InvestmentDistributionEngine.requestFingerprint(positions: [duplicate], model: "two", search: .default))
+    }
+
+    @Test
+    func freshnessAndNegativeCacheAreEvaluatedIndividually() {
+        let now = Date()
+        let fresh = position(name: "Fresh", value: 100)
+        let old = position(name: "Expired", value: 100)
+        let unknown = position(name: "Unknown", value: 100)
+        let failed = position(name: "Failed", value: 100)
+        func entry(_ p: Position, days: Double, resolved: Bool, retry: Date? = nil) -> AssetInvestmentDistribution {
+            AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: p),
+                identityFingerprint: InvestmentDistributionEngine.identityFingerprint(p),
+                allocations: resolved ? [weight(memory, 1)] : [], classifiedAt: now.addingTimeInterval(-days * 86400), retryAfter: retry)
+        }
+        let cache = AIInvestmentDistribution(version: InvestmentDistributionEngine.version, generatedAt: now,
+            model: "test", requestFingerprint: "old", assets: [entry(fresh, days: 60, resolved: true),
+                entry(old, days: 91, resolved: true), entry(unknown, days: 6, resolved: false),
+                entry(failed, days: 1, resolved: false, retry: now.addingTimeInterval(3600))], researchedExposures: [])
+        #expect(InvestmentDistributionEngine.pendingPositions([fresh, old, unknown, failed], cache: cache, now: now).map(\.id) == [old.id])
+        #expect(Set(InvestmentDistributionEngine.pendingPositions([fresh, old, unknown, failed], cache: cache,
+            now: now.addingTimeInterval(2 * 86400)).map(\.id)) == Set([old.id, unknown.id, failed.id]))
+    }
+
+    @Test
+    func cacheLimitNeverEvictsActiveHoldingsIntoRepeatedClassification() {
+        let positions = (0..<1001).map { position(name: "Asset \($0)", value: 100) }
+        let now = Date()
+        let assets = positions.map {
+            AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: $0),
+                identityFingerprint: InvestmentDistributionEngine.identityFingerprint($0), allocations: [weight(memory, 1)], classifiedAt: now)
+        }
+        let result = AIInvestmentDistribution(version: InvestmentDistributionEngine.version, generatedAt: now,
+            model: "test", requestFingerprint: "many", assets: assets, researchedExposures: [])
+        let merged = InvestmentDistributionEngine.merging(result, into: nil, positions: positions)
+        #expect(merged.assets.count == 1001)
+        #expect(InvestmentDistributionEngine.pendingPositions(positions, cache: merged, now: now).isEmpty)
+        let pruned = InvestmentDistributionEngine.merging(result, into: merged, positions: Array(positions.prefix(1)))
+        #expect(pruned.assets.count == 101)
+    }
+
+    @Test
+    func cashAndRecognizedCryptoNeedNoModelOrSearchCalls() async throws {
+        let cash = position(name: "人民币现金", category: .cash, value: 100)
+        let btc = position(name: "Bitcoin", symbol: "BTC/USDT", category: .crypto, value: 100)
+        let stable = position(name: "USDC", symbol: "USDC", category: .crypto, value: 100)
+        let llm = DistributionMockLLM(responses: [])
+        let search = DistributionSearch(sources: [])
+        let result = try await AIAnalysisAgent(llm: llm, search: search, credentialStore: DistributionCredentials())
+            .generateInvestmentDistribution(positions: [cash, btc, stable], llmConfiguration: .default,
+                searchConfiguration: .default, requestFingerprint: "local")
+        #expect(Set(result.assets.flatMap(\.allocations).map(\.domain.id)) == Set(["cash_cny", "bitcoin", "stablecoin_cash"]))
+        #expect(await llm.prompts().isEmpty)
+        #expect(await search.queries().isEmpty)
+    }
+
+    @Test
+    func fundWrapperAndInventedPrecisionCannotReplaceUnderlyingExposure() async throws {
+        let fund = position(name: "华夏半导体ETF联接", category: .fund, value: 100)
+        let wrapper = InvestmentDomain(id: "mutual_funds", titleChinese: "公募基金", titleEnglish: "Mutual Funds")
+        #expect(throws: (any Error).self) {
+            try InvestmentDistributionEngine.validatedAssets([asset(fund, allocations: [weight(wrapper, 1)])], positions: [fund])
+        }
+        let llm = DistributionIdentityLLM()
+        let search = DistributionSearch(sources: [])
+        let result = try await AIAnalysisAgent(llm: llm, search: search, credentialStore: DistributionCredentials())
+            .generateInvestmentDistribution(positions: [fund], llmConfiguration: .default,
+                searchConfiguration: SearchConfiguration(isEnabled: true, provider: .parallel, quality: .basic), requestFingerprint: "theme")
+        #expect(result.assets.first?.allocations.first?.domain.id == "cn_semiconductors")
+        #expect(await llm.prompts().count == 1)
+        #expect(await search.queries().isEmpty)
+    }
+
+    @Test
+    func researchIsBoundedAndUnverifiedAmbiguousFundsStayUnclassified() async throws {
+        let funds = (0..<9).map { position(name: "混合基金\($0)", symbol: "FUND\($0)", category: .fund, value: 100) }
+        let llm = DistributionIdentityLLM()
+        let search = DistributionSearch(sources: [AssetResearchSource(title: "Unrelated", url: "https://example.com/other",
+            domain: "example.com", publishedDate: nil, snippet: String(repeating: "x", count: 10_000), credibility: .general)])
+        let result = try await AIAnalysisAgent(llm: llm, search: search, credentialStore: DistributionCredentials())
+            .generateInvestmentDistribution(positions: funds, llmConfiguration: .default,
+                searchConfiguration: SearchConfiguration(isEnabled: true, provider: .parallel, quality: .basic), requestFingerprint: "bounded")
+        #expect(await search.queries().count == 4)
+        #expect(await llm.prompts().count == 1)
+        #expect(result.assets.count == 9)
+        #expect(result.assets.allSatisfy { $0.allocations.isEmpty })
+        #expect(await llm.prompts().first?.contains(String(repeating: "x", count: 100)) == false)
+        #expect(result.assets.filter { $0.researchedAt != nil }.count == 4)
+        let pending = InvestmentDistributionEngine.pendingPositions(funds, cache: result,
+            now: result.generatedAt.addingTimeInterval(InvestmentDistributionEngine.unresolvedLifetime + 1))
+        #expect(Set(pending.prefix(5).map(\.id)) == Set(funds.dropFirst(4).map(\.id)))
+    }
+
+    @Test
+    func oneRejectedAssetDoesNotDiscardAnotherAssetsDomain() async throws {
+        let first = position(name: "Memory maker", value: 100)
+        let second = position(name: "华夏半导体ETF", category: .fund, value: 100)
+        let valid = try #require(try JSONSerialization.jsonObject(with: Data(response(first, allocations: [weight(memory, 1)]).utf8)) as? [String: Any])
+        let invalid = try #require(try JSONSerialization.jsonObject(with: Data(response(second, allocations: [weight(gold, 1)], urls: ["https://fabricated.example.com"]).utf8)) as? [String: Any])
+        let entries = (valid["assets"] as? [[String: Any]] ?? []) + (invalid["assets"] as? [[String: Any]] ?? [])
+        let raw = String(data: try JSONSerialization.data(withJSONObject: ["assets": entries]), encoding: .utf8)!
+        let result = try await AIAnalysisAgent(llm: DistributionMockLLM(responses: [raw]),
+            search: DistributionNoSearch(), credentialStore: DistributionCredentials())
+            .generateInvestmentDistribution(positions: [first, second], llmConfiguration: .default,
+                searchConfiguration: offlineSearch, requestFingerprint: "isolated")
+        #expect(result.assets.first?.allocations.first?.domain.id == "us_memory")
+        #expect(result.assets.last?.allocations.isEmpty == true)
+        #expect(result.assets.last?.retryAfter != nil)
+    }
+
+    @Test(.timeLimit(.minutes(1))) @MainActor
+    func assetAddedDuringARequestQueuesOnlyItsOwnClassification() async throws {
+        let original = position(name: "Memory maker", value: 100)
+        let gate = DistributionGateLLM()
+        let credentials = DistributionCredentials()
+        let store = PortfolioStore(positionRepository: try repository(original), credentialStore: credentials,
+            aiAgent: AIAnalysisAgent(llm: gate, search: DistributionNoSearch(), credentialStore: credentials))
+        store.aiConfiguration = .default
+        store.searchConfiguration = offlineSearch
+        store.refreshInvestmentDistributionIfNeeded()
+        await gate.waitForRequest(1)
+        try store.addPosition(name: "黄金ETF", symbol: "518880", category: .fund, quantity: 100,
+            averageCost: 1, quoteCurrency: .cny, latestPrice: 1)
+        let added = try #require(store.positions.first { $0.symbol == "518880" })
+        store.refreshInvestmentDistributionIfNeeded()
+        await gate.release(1, response: response(original, allocations: [weight(memory, 1)]))
+        await gate.waitForRequest(2)
+        #expect(store.investmentDistributionItems.contains { $0.id == "us_memory" })
+        await gate.release(2, response: response(added, allocations: [weight(gold, 1)]))
+        await store.waitForInvestmentDistributionUpdate()
+        #expect(Set(store.investmentDistributionItems.map(\.id)) == Set(["us_memory", "gold"]))
+    }
+
+    @Test @MainActor
+    func addingAndEditingAssetsClassifiesOnlyTheirChangedPublicIdentity() async throws {
+        let old = position(name: "Memory maker", value: 100)
+        let repository = try repository(old)
+        let llm = DistributionIdentityLLM()
+        let credentials = DistributionCredentials()
+        let agent = AIAnalysisAgent(llm: llm, search: DistributionNoSearch(), credentialStore: credentials)
+        let store = PortfolioStore(positionRepository: repository, credentialStore: credentials, aiAgent: agent)
+        store.aiConfiguration = .default
+        store.searchConfiguration = offlineSearch
+        store.refreshInvestmentDistributionIfNeeded()
+        await store.waitForInvestmentDistributionUpdate()
+        for (name, code) in [("黄金ETF", "518880"), ("华夏半导体ETF", "008887")] {
+            try store.addPosition(name: name, symbol: code, category: .fund, quantity: 100,
+                averageCost: 1, quoteCurrency: .cny, latestPrice: 1)
+        }
+        await store.waitForInvestmentDistributionUpdate()
+        let prompts = await llm.prompts()
+        #expect(prompts.count == 2)
+        #expect(prompts.last?.contains("黄金ETF") == true && prompts.last?.contains("华夏半导体ETF") == true)
+        #expect(prompts.last?.contains("Memory maker") == false)
+        #expect(Set(store.investmentDistributionItems.map(\.id)) == Set(["us_memory", "gold", "cn_semiconductors"]))
+        let restored = PortfolioStore(positionRepository: repository, credentialStore: credentials, aiAgent: agent)
+        restored.aiConfiguration = .default
+        restored.aiConfiguration.model = "another-model"
+        restored.searchConfiguration = SearchConfiguration(isEnabled: true, provider: .parallel, quality: .basic)
+        restored.refreshInvestmentDistributionIfNeeded()
+        await restored.waitForInvestmentDistributionUpdate()
+        #expect(await llm.prompts().count == 2)
+        let fund = try #require(store.positions.first { $0.symbol == "008887" })
+        try store.updatePosition(id: fund.id, name: "华夏半导体ETF联接", symbol: fund.symbol, category: fund.category,
+            quantity: 150, averageCost: 1, quoteCurrency: fund.quoteCurrency, latestPrice: 1)
+        await store.waitForInvestmentDistributionUpdate()
+        #expect(await llm.prompts().count == 3)
+        #expect(await llm.prompts().last?.contains("Memory maker") == false)
+        #expect(store.investmentDistributionItems.reduce(Decimal.zero) { $0 + $1.amountCNY } == 350)
+    }
+
+    @Test @MainActor
+    func failedAttemptSurvivesRestartWithoutRetryingOrLosingLocalCash() async throws {
+        let holding = position(value: 100)
+        let cash = position(name: "现金", symbol: "CNY", category: .cash, value: 50)
+        let repository = try repository(holding)
+        try repository.insert(cash)
+        let llm = DistributionMockLLM(responses: ["invalid"])
+        let credentials = DistributionCredentials()
+        let agent = AIAnalysisAgent(llm: llm, search: DistributionNoSearch(), credentialStore: credentials)
+        let store = PortfolioStore(positionRepository: repository, credentialStore: credentials, aiAgent: agent)
+        store.aiConfiguration = .default
+        store.searchConfiguration = offlineSearch
+        store.refreshInvestmentDistributionIfNeeded()
+        await store.waitForInvestmentDistributionUpdate()
+        #expect(Set(store.investmentDistributionItems.map(\.id)) == Set(["unclassified", "cash_cny"]))
+        let restored = PortfolioStore(positionRepository: repository, credentialStore: credentials, aiAgent: agent)
+        restored.aiConfiguration = .default
+        restored.searchConfiguration = offlineSearch
+        restored.refreshInvestmentDistributionIfNeeded()
+        await restored.waitForInvestmentDistributionUpdate()
+        #expect(await llm.prompts().count == 1)
+    }
+
+    private func position(id: UUID = UUID(), name: String = "Test Asset", symbol: String = "TEST", category: AssetCategory = .usStock, value: Decimal) -> Position {
         Position(
-            id: id, name: name, symbol: "TEST", category: category, quoteCurrency: .cny,
+            id: id, name: name, symbol: symbol, category: category, quoteCurrency: .cny,
             quantity: 10, averageCost: 1, latestPrice: value / 10, marketValueCNY: value,
             profitRate: 0, weeklyTrend: [], source: "manual", quoteTime: "now", freshness: .manual
         )
@@ -640,6 +844,42 @@ struct InvestmentDistributionTests {
         try repository.insert(position)
         return repository
     }
+}
+
+private actor DistributionSearch: WebSearching {
+    let sources: [AssetResearchSource]
+    private var requests: [String] = []
+    init(sources: [AssetResearchSource]) { self.sources = sources }
+    func search(query: String, positions _: [Position], configuration _: SearchConfiguration, apiKey _: String) async throws -> [AssetResearchSource] {
+        requests.append(query)
+        return sources
+    }
+    func queries() -> [String] { requests }
+}
+
+private actor DistributionIdentityLLM: LLMCompleting {
+    private var requests: [String] = []
+    func completeJSON(systemPrompt _: String, userPrompt: String, configuration _: AIProviderConfiguration, apiKey _: String) async throws -> String {
+        requests.append(userPrompt)
+        let start = try #require(userPrompt.range(of: "<asset_identities>")?.upperBound)
+        let end = try #require(userPrompt.range(of: "</asset_identities>")?.lowerBound)
+        let identities = try #require(try JSONSerialization.jsonObject(with: Data(userPrompt[start..<end].utf8)) as? [[String: Any]])
+        let assets = identities.map { identity -> [String: Any] in
+            let name = identity["name"] as? String ?? ""
+            let domain: InvestmentDomain
+            if name.contains("黄金") {
+                domain = InvestmentDomain(id: "gold", titleChinese: "黄金", titleEnglish: "Gold")
+            } else if name.contains("半导体") {
+                domain = InvestmentDomain(id: "cn_semiconductors", titleChinese: "中国半导体芯片", titleEnglish: "China Semiconductors")
+            } else {
+                domain = InvestmentDomain(id: "us_memory", titleChinese: "美股存储", titleEnglish: "US Memory")
+            }
+            return ["position_ref": identity["position_ref"] as? String ?? "", "source_urls": [String](),
+                "allocations": [["domain": ["id": domain.id, "titleChinese": domain.titleChinese, "titleEnglish": domain.titleEnglish], "weight": 1]]]
+        }
+        return String(data: try JSONSerialization.data(withJSONObject: ["assets": assets]), encoding: .utf8)!
+    }
+    func prompts() -> [String] { requests }
 }
 
 private actor DistributionMockLLM: LLMCompleting {

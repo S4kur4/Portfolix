@@ -311,7 +311,7 @@ struct LLMConfigurationSheet: View {
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     isValidatingAPIKey = false
-                    connectionStatus = .success(text("API 已验证", "API validated"))
+                    connectionStatus = .validatedAPI(language: store.appLanguage)
                     connectionStatusFingerprint = fingerprint
                 }
             } catch {
@@ -369,7 +369,7 @@ struct LLMConfigurationSheet: View {
             return connectionStatus.message
         }
         if isValidatingAPIKey {
-            return text("正在验证 API 配置", "Validating API configuration")
+            return ProviderConnectionStatus.validatingAPI(language: store.appLanguage).message
         }
         if !hasBaseURL && !hasAPIKeyForSave {
             return text("请填写 API Base URL 和 API Key", "Enter API Base URL and API Key")
@@ -580,9 +580,7 @@ struct SearchConfigurationSheet: View {
                 .accessibilityLabel(text("启用 DeepSeek Search", "Enable DeepSeek Search"))
             }
             if let deepseekStatus {
-                Label(deepseekStatus.message, systemImage: statusSymbol(deepseekStatus))
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(deepseekStatus.color)
+                ProviderNoticeRow(status: deepseekStatus)
             }
         }
     }
@@ -634,19 +632,7 @@ struct SearchConfigurationSheet: View {
             }
 
             if let status {
-                if provider == .tavily {
-                    ProviderNoticeRow(
-                        symbol: status.symbol,
-                        title: status.message,
-                        message: nil,
-                        tint: status.color,
-                        titleColor: status.color
-                    )
-                } else {
-                    Label(status.message, systemImage: statusSymbol(status))
-                        .font(PortfolixTypography.caption)
-                        .foregroundStyle(status.color)
-                }
+                ProviderNoticeRow(status: status)
             }
         }
     }
@@ -704,9 +690,7 @@ struct SearchConfigurationSheet: View {
         validatingProviders.insert(provider)
         let requestID = UUID()
         validationRequestIDs[provider] = requestID
-        setStatus(.validating(provider == .tavily
-                             ? text("正在验证 API 配置", "Validating API configuration")
-                             : text("正在验证 API", "Validating API")), for: provider)
+        setStatus(.validatingAPI(language: store.appLanguage), for: provider)
 
         Task {
             let result: Result<Void, Error>
@@ -723,7 +707,7 @@ struct SearchConfigurationSheet: View {
             guard isEnabled.wrappedValue, activeKey(for: provider) == key else { return }
             switch result {
             case .success:
-                setStatus(.success(text("API 已验证", "API validated")), for: provider)
+                setStatus(.validatedAPI(language: store.appLanguage), for: provider)
             case let .failure(error):
                 isEnabled.wrappedValue = false
                 setStatus(.failure(error.localizedDescription), for: provider)
@@ -836,7 +820,7 @@ struct SearchConfigurationSheet: View {
         guard !activeKey(for: provider).isEmpty else { return nil }
         let state = (try? store.credentialValidationState(for: credentialKind)) ?? .unknown
         return switch state {
-        case .valid: ProviderConnectionStatus.success(text("API 已验证", "API validated"))
+        case .valid: ProviderConnectionStatus.validatedAPI(language: store.appLanguage)
         case .invalid: ProviderConnectionStatus.failure(text("API 验证失败", "API validation failed"))
         case .unknown: nil
         }
@@ -855,14 +839,6 @@ struct SearchConfigurationSheet: View {
         }
     }
 
-    private func statusSymbol(_ status: ProviderConnectionStatus) -> String {
-        switch status {
-        case .success: "checkmark.circle.fill"
-        case .failure: "xmark.circle.fill"
-        case .validating: "arrow.triangle.2.circlepath"
-        }
-    }
-
     private func text(_ chinese: String, _ english: String) -> String {
         localizedText(chinese, english, language: store.appLanguage)
     }
@@ -872,6 +848,14 @@ enum ProviderConnectionStatus: Equatable {
     case success(String)
     case failure(String)
     case validating(String)
+
+    static func validatingAPI(language: AppLanguage) -> Self {
+        .validating(localizedText("正在验证 API 配置", "Validating API configuration", language: language))
+    }
+
+    static func validatedAPI(language: AppLanguage) -> Self {
+        .success(localizedText("API 已验证", "API validated", language: language))
+    }
 
     var message: String {
         switch self {
@@ -1399,12 +1383,24 @@ private struct ProviderNoticeSection: View {
     }
 }
 
-private struct ProviderNoticeRow: View {
+struct ProviderNoticeRow: View {
     let symbol: String
     let title: String
     let message: String?
     let tint: Color
     let titleColor: Color
+
+    init(status: ProviderConnectionStatus) {
+        self.init(symbol: status.symbol, title: status.message, message: nil, tint: status.color, titleColor: status.color)
+    }
+
+    init(symbol: String, title: String, message: String?, tint: Color, titleColor: Color) {
+        self.symbol = symbol
+        self.title = title
+        self.message = message
+        self.tint = tint
+        self.titleColor = titleColor
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: PortfolixSpacing.md) {

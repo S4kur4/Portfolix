@@ -886,7 +886,8 @@ final class PositionRepository {
         guard sqlite3_step(statement) == SQLITE_ROW else {
             return nil
         }
-        return AIAnalysisArtifactBundle(
+        let trace = try fetchAIAgentRunTrace(runID: runID)
+        let bundle = AIAnalysisArtifactBundle(
             inputJSON: text(at: 0, in: statement),
             toolResultsJSON: text(at: 1, in: statement),
             toolPlanJSON: text(at: 2, in: statement),
@@ -896,8 +897,9 @@ final class PositionRepository {
             repairedReportJSON: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : text(at: 4, in: statement),
             finalReportJSON: text(at: 5, in: statement),
             guardrailResultJSON: text(at: 6, in: statement),
-            trace: try fetchAIAgentRunTrace(runID: runID)
+            trace: trace
         )
+        return trace?.modelUsage.map { bundle.withModelUsage($0) } ?? bundle
     }
 
     func fetchLatestAIAnalysisArtifacts() throws -> AIAnalysisArtifactBundle? {
@@ -920,7 +922,8 @@ final class PositionRepository {
         guard let runID = UUID(uuidString: text(at: 0, in: statement)) else {
             throw PositionRepositoryError.invalidStoredData("无法解析 AI 运行 ID")
         }
-        return AIAnalysisArtifactBundle(
+        let trace = try fetchAIAgentRunTrace(runID: runID)
+        let bundle = AIAnalysisArtifactBundle(
             inputJSON: text(at: 1, in: statement),
             toolResultsJSON: text(at: 2, in: statement),
             toolPlanJSON: text(at: 3, in: statement),
@@ -930,8 +933,9 @@ final class PositionRepository {
             repairedReportJSON: sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : text(at: 5, in: statement),
             finalReportJSON: text(at: 6, in: statement),
             guardrailResultJSON: text(at: 7, in: statement),
-            trace: try fetchAIAgentRunTrace(runID: runID)
+            trace: trace
         )
+        return trace?.modelUsage.map { bundle.withModelUsage($0) } ?? bundle
     }
 
     private func fetchAIAgentRunTrace(runID: UUID) throws -> AIAgentRunTrace? {

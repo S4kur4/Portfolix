@@ -169,11 +169,14 @@ enum AIFollowUpProgress: Equatable, Sendable {
     case reasoning(elapsedSeconds: Int?)
     case outputStarted
     case repairingResponse
+    case readingLocalData
 
     func title(language: AppLanguage) -> String {
         switch self {
         case .analyzing:
             localizedText("正在理解你的问题", "Understanding your question", language: language)
+        case .readingLocalData:
+            localizedText("正在核对你的资产记录", "Checking your portfolio records", language: language)
         case let .replanning(turn, total):
             localizedText("正在调整搜索计划 \(turn)/\(total)", "Refining the search plan \(turn)/\(total)", language: language)
         case let .searching(query, _, _):
@@ -203,6 +206,8 @@ enum AIFollowUpProgress: Equatable, Sendable {
         switch self {
         case .analyzing:
             localizedText("正在结合当前报告与持仓信息进行分析", "Reviewing the current report and holdings", language: language)
+        case .readingLocalData:
+            localizedText("正在按需读取 App 中的最新数据", "Reading the latest relevant records in the app", language: language)
         case let .replanning(turn, total):
             localizedText("根据上一轮结果补充缺失信息（\(turn)/\(total)）", "Filling evidence gaps from the previous turn (\(turn)/\(total))", language: language)
         case let .searching(_, ordinal, total):
@@ -315,6 +320,7 @@ struct AIAgentTraceEvent: Codable, Equatable, Sendable {
 }
 
 struct AIAgentRunTrace: Codable, Equatable, Sendable {
+    var modelUsage: AIModelUsageSummary? = nil
     let schemaVersion: String
     let id: UUID
     let startedAt: Date
@@ -549,6 +555,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     }
 
     struct FollowUpRunSnapshot: Codable, Equatable {
+        var modelUsage: AIModelUsageSummary? = nil
+        var localToolCallCount: Int? = nil
         let searchMode: String
         let toolCallCount: Int
         let toolResultCount: Int
@@ -558,6 +566,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         let guardrailResultJSON: String
 
         init(result: AIAnalysisFollowUpResult) {
+            modelUsage = result.modelUsage
+            localToolCallCount = result.localToolCallCount
             searchMode = result.searchMode
             toolCallCount = result.toolCallCount
             toolResultCount = result.toolResultCount
@@ -576,6 +586,11 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     let runSnapshot: RunSnapshot?
     let followUpRunSnapshot: FollowUpRunSnapshot?
     let citations: [AIMessageCitation]?
+    let modelUsage: AIModelUsageSummary?
+
+    var responseModelUsage: AIModelUsageSummary? {
+        modelUsage ?? followUpRunSnapshot?.modelUsage
+    }
 
     init(
         id: UUID,
@@ -585,7 +600,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         report: AIAnalysisReport?,
         runSnapshot: RunSnapshot?,
         followUpRunSnapshot: FollowUpRunSnapshot? = nil,
-        citations: [AIMessageCitation]? = nil
+        citations: [AIMessageCitation]? = nil,
+        modelUsage: AIModelUsageSummary? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -595,6 +611,7 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         self.runSnapshot = runSnapshot
         self.followUpRunSnapshot = followUpRunSnapshot
         self.citations = citations
+        self.modelUsage = modelUsage
     }
 
     var content: AIReportChatContent {
@@ -616,14 +633,15 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         AIReportChatItem(id: UUID(), createdAt: createdAt, kind: .user, text: text, report: nil, runSnapshot: nil)
     }
 
-    static func report(_ report: AIAnalysisReport, _ run: AIAnalysisRun) -> AIReportChatItem {
+    static func report(_ report: AIAnalysisReport, _ run: AIAnalysisRun, modelUsage: AIModelUsageSummary? = nil) -> AIReportChatItem {
         AIReportChatItem(
             id: report.id,
             createdAt: report.generatedAt,
             kind: .report,
             text: nil,
             report: report,
-            runSnapshot: RunSnapshot(run: run)
+            runSnapshot: RunSnapshot(run: run),
+            modelUsage: modelUsage
         )
     }
 
@@ -631,7 +649,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         _ text: String,
         createdAt: Date = .now,
         followUpRunSnapshot: FollowUpRunSnapshot? = nil,
-        citations: [AIMessageCitation] = []
+        citations: [AIMessageCitation] = [],
+        modelUsage: AIModelUsageSummary? = nil
     ) -> AIReportChatItem {
         AIReportChatItem(
             id: UUID(),
@@ -641,7 +660,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             report: nil,
             runSnapshot: nil,
             followUpRunSnapshot: followUpRunSnapshot,
-            citations: citations.isEmpty ? nil : citations
+            citations: citations.isEmpty ? nil : citations,
+            modelUsage: modelUsage
         )
     }
 
@@ -672,7 +692,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             report: report,
             runSnapshot: runSnapshot,
             followUpRunSnapshot: followUpRunSnapshot,
-            citations: citations
+            citations: citations,
+            modelUsage: modelUsage
         )
     }
 }
@@ -693,6 +714,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
     let finalReportJSON: String
     let guardrailResultJSON: String
     let trace: AIAgentRunTrace?
+    var modelUsage: AIModelUsageSummary? = nil
 
     init(
         inputJSON: String,
@@ -719,7 +741,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
     }
 
     func withTrace(_ trace: AIAgentRunTrace?) -> AIAnalysisArtifactBundle {
-        AIAnalysisArtifactBundle(
+        var copy = AIAnalysisArtifactBundle(
             inputJSON: inputJSON,
             toolResultsJSON: toolResultsJSON,
             toolPlanJSON: toolPlanJSON,
@@ -731,10 +753,24 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
             guardrailResultJSON: guardrailResultJSON,
             trace: trace
         )
+        copy.modelUsage = modelUsage ?? trace?.modelUsage
+        return copy
+    }
+
+    func withModelUsage(_ usage: AIModelUsageSummary) -> AIAnalysisArtifactBundle {
+        var copy = self
+        copy.modelUsage = usage
+        if var trace = copy.trace {
+            trace.modelUsage = usage
+            copy = copy.withTrace(trace)
+        }
+        return copy
     }
 }
 
 struct AIAnalysisFollowUpResult: Equatable {
+    var modelUsage: AIModelUsageSummary? = nil
+    var localToolCallCount = 0
     let answer: String
     let citations: [AIMessageCitation]
     let guardrailResultJSON: String

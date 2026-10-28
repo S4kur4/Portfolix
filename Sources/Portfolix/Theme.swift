@@ -3,12 +3,12 @@ import SwiftUI
 
 enum PortfolixTheme {
     // Keep large surfaces neutral so brand color is reserved for meaning and interaction.
-    static let canvas = adaptive(light: 0xE7E9ED, dark: 0x000000)
-    private static let primarySurface = adaptive(light: 0xF2F3F5, dark: 0x0B0C0E)
+    static let canvas = adaptive(light: 0xE8E8E8, dark: 0x000000)
+    private static let primarySurface = adaptive(light: 0xF3F3F3, dark: 0x080808)
     static let sidebar = primarySurface
     static let panel = primarySurface
-    static let panelElevated = adaptive(light: 0xE7E9ED, dark: 0x17181B)
-    static let panelSoft = adaptive(light: 0xDDE0E5, dark: 0x1E2024)
+    static let panelElevated = adaptive(light: 0xE8E8E8, dark: 0x141414)
+    static let panelSoft = adaptive(light: 0xE0E0E0, dark: 0x1A1A1A)
     static let selectionFill = adaptive(light: 0xE2DDF1, dark: 0x18151F)
     static let selectionText = adaptive(light: 0x513AB6, dark: 0xC5BAF8)
     static let controlSelectionFill = adaptive(light: 0xDCD7E7, dark: 0x3F3B4B)
@@ -38,28 +38,27 @@ enum PortfolixTheme {
     static let primaryButtonText = adaptive(light: lightGlassText, dark: 0x120F20)
     static let buttonShadow = Color.black.opacity(0.12)
 
-    static func performanceColor(for value: Decimal) -> Color {
-        if value > 0 { return mint }
-        if value < 0 { return danger }
+    static func performanceColor(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
+        if value > 0 { return scheme == .greenUpRedDown ? mint : danger }
+        if value < 0 { return scheme == .greenUpRedDown ? danger : mint }
         return secondaryText
     }
 
-    static func performanceColor(for value: Double) -> Color {
-        if value > 0 { return mint }
-        if value < 0 { return danger }
+    static func performanceColor(for value: Double, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
+        if value > 0 { return scheme == .greenUpRedDown ? mint : danger }
+        if value < 0 { return scheme == .greenUpRedDown ? danger : mint }
         return secondaryText
     }
 
-    static func performanceStatusText(for value: Decimal) -> Color {
-        if value > 0 { return positiveStatusText }
-        if value < 0 { return negativeStatusText }
+    static func performanceStatusText(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
+        if value > 0 { return scheme == .greenUpRedDown ? positiveStatusText : negativeStatusText }
+        if value < 0 { return scheme == .greenUpRedDown ? negativeStatusText : positiveStatusText }
         return secondaryText
     }
 
-    static func dailyProfitTileFill(for amount: Decimal?) -> Color {
+    static func dailyProfitTileFill(for amount: Decimal?, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
         guard let amount else { return .clear }
-        if amount > 0 { return mint.opacity(0.13) }
-        if amount < 0 { return danger.opacity(0.13) }
+        if amount != 0 { return performanceColor(for: amount, scheme: scheme).opacity(0.13) }
         return panelSoft.opacity(0.55)
     }
 
@@ -107,8 +106,10 @@ enum PortfolixLayout {
     static let dataTileSpacing: CGFloat = PortfolixSpacing.xs
     static let cardPadding: CGFloat = PortfolixSpacing.lg
     static let cardHeaderHeight: CGFloat = 24
-    static let dashboardHeroContentHeight: CGFloat = 268
-    static let dashboardTrendContentHeight: CGFloat = 252
+    static let dashboardRowContentHeight: CGFloat = 252
+    static let dashboardHeroContentHeight = dashboardRowContentHeight
+    static let dashboardTrendContentHeight = dashboardRowContentHeight
+    static let accentLineWidth: CGFloat = 2
     static let glassControlHeight: CGFloat = 24
     static let positionsToolbarControlHeight: CGFloat = 30
     static let settingsControlHeight: CGFloat = 30
@@ -288,6 +289,7 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
     let options: [Value]
     let optionTitle: (Value) -> String
     var optionSymbol: ((Value) -> String)? = nil
+    var optionAttributedTitle: ((Value) -> AttributedString)? = nil
     var width: CGFloat? = nil
     var height: CGFloat = PortfolixLayout.glassControlHeight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -304,6 +306,8 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                         if let optionSymbol {
                             Image(systemName: optionSymbol(option))
                                 .frame(width: 14)
+                        } else if let optionAttributedTitle {
+                            Text(optionAttributedTitle(option))
                         } else {
                             Text(optionTitle(option))
                         }
@@ -489,6 +493,35 @@ struct PortfolixChartTooltipStyle: ViewModifier {
 extension View {
     func portfolixChartTooltip() -> some View {
         modifier(PortfolixChartTooltipStyle())
+    }
+
+    func portfolixNumericTransition<Value: Equatable>(_ value: Value) -> some View {
+        modifier(PortfolixNumericTextStyle(value: value))
+    }
+}
+
+private struct PortfolixNumericTextStyle<Value: Equatable>: ViewModifier {
+    let value: Value
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: value)
+    }
+}
+
+extension PerformanceColorScheme {
+    func selectorTitle(language: AppLanguage) -> AttributedString {
+        var title = AttributedString(self.title(language: language) + " ")
+        var up = AttributedString("↑")
+        up.foregroundColor = PortfolixTheme.performanceColor(for: Decimal(1), scheme: self)
+        var down = AttributedString("↓")
+        down.foregroundColor = PortfolixTheme.performanceColor(for: Decimal(-1), scheme: self)
+        title += up
+        title += down
+        return title
     }
 }
 

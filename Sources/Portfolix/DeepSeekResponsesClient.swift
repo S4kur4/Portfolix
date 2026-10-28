@@ -21,19 +21,25 @@ struct LLMCompletionResult: Equatable, Sendable {
     let webSearchQueries: [String]
     let citations: [LLMWebCitation]
     let diagnostics: LLMCompletionDiagnostics
+    let functionCalls: [LLMFunctionCall]
+    let continuationItems: [AIJSONValue]
 
     init(
         content: String,
         webSearchCallCount: Int = 0,
         webSearchQueries: [String] = [],
         citations: [LLMWebCitation] = [],
-        diagnostics: LLMCompletionDiagnostics = .empty
+        diagnostics: LLMCompletionDiagnostics = .empty,
+        functionCalls: [LLMFunctionCall] = [],
+        continuationItems: [AIJSONValue] = []
     ) {
         self.content = content
         self.webSearchCallCount = webSearchCallCount
         self.webSearchQueries = webSearchQueries
         self.citations = citations
         self.diagnostics = diagnostics
+        self.functionCalls = functionCalls
+        self.continuationItems = continuationItems
     }
 }
 
@@ -153,6 +159,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         let requestStartedAt = Date()
         do {
             let (bytes, response) = try await session.bytes(for: request)
+            defer { bytes.task.cancel() }
             let responseHeaderAt = Date()
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw LLMClientError.invalidResponse
@@ -238,11 +245,17 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             DeepSeekResponseRequest(
                 model: LLMProviderOption.canonicalDeepSeekModel(configuration.model),
                 instructions: instructions,
-                input: input,
+                input: configuration.functionInputItems.map(AIJSONValue.array) ?? .string(input),
                 stream: stream,
                 maxOutputTokens: configuration.maxOutputTokens,
                 reasoning: DeepSeekResponseReasoning(effort: reasoningEffort),
-                text: expectsJSON ? DeepSeekResponseText(format: DeepSeekResponseTextFormat(type: "json_object")) : nil
+                text: expectsJSON ? DeepSeekResponseText(format: DeepSeekResponseTextFormat(
+                    type: configuration.responseSchema == nil ? "json_object" : "json_schema",
+                    name: configuration.responseSchema?.rawValue,
+                    schema: configuration.responseSchema?.schema
+                )) : nil,
+                tools: configuration.functionTools.isEmpty ? nil : configuration.functionTools,
+                toolChoice: configuration.functionToolChoice
             )
         )
         return request
@@ -264,6 +277,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         var currentEvent: String?
         var receivedByteCount = 0
         var completionObject: [String: Any]?
+        var completedResult: LLMCompletionResult?
         var reasoningCharacterCount = 0
         var firstReasoningAt: Date?
         var firstSearchAt: Date?
@@ -272,6 +286,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         let reasoningActivityInterval: TimeInterval = 4
 
         for try await line in bytes.lines {
+            try Task.checkCancellation()
             receivedByteCount += line.utf8.count + 1
             guard receivedByteCount <= maximumResponseBytes else {
                 throw LLMClientError.invalidResponse
@@ -344,10 +359,13 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             }
         }
 
+        guard completionObject != nil else { throw LLMClientError.invalidResponse }
         if let completionObject {
             let completedData = try JSONSerialization.data(withJSONObject: completionObject)
             let completed = try Self.parseResponseObject(completedData)
-            if content.isEmpty { content = completed.content }
+            completedResult = completed
+            // Deltas are provisional; the completed response is the authoritative text.
+            if !completed.content.isEmpty { content = completed.content }
             for citation in completed.citations where seenCitationURLs.insert(citation.url).inserted {
                 citations.append(citation)
             }
@@ -359,7 +377,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             }
         }
 
-        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(completedResult?.functionCalls.isEmpty ?? true) else {
             throw LLMClientError.emptyFinalContent(reasoningCharacters: reasoningCharacterCount, finishReason: nil)
         }
         let completedAt = Date()
@@ -384,7 +402,9 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 reasoningTokenCount: outputDetails?["reasoning_tokens"] as? Int,
                 responseID: completionObject?["id"] as? String,
                 responseModel: completionObject?["model"] as? String
-            )
+            ),
+            functionCalls: completedResult?.functionCalls ?? [],
+            continuationItems: completedResult?.continuationItems ?? []
         )
     }
 
@@ -394,6 +414,24 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         }
         if let error = object["error"] as? [String: Any] {
             throw LLMClientError.requestFailed(error["message"] as? String ?? "DeepSeek Responses API returned an error")
+        }
+        let output = object["output"] as? [[String: Any]] ?? []
+        var callIDs = Set<String>()
+        let functionCalls = try output.filter { $0["type"] as? String == "function_call" }.map { item in
+            guard let callID = item["call_id"] as? String, !callID.isEmpty, callID.count <= 128,
+                  callIDs.insert(callID).inserted,
+                  let name = item["name"] as? String, !name.isEmpty, name.count <= 128,
+                  let arguments = item["arguments"] as? String, arguments.utf8.count <= 16_000 else {
+                throw LLMClientError.invalidResponse
+            }
+            return LLMFunctionCall(callID: callID, name: name, arguments: arguments)
+        }
+        // Keep continuation items only in memory while resolving this turn's tool calls.
+        let continuationItems: [AIJSONValue] = try functionCalls.isEmpty ? [] : output.compactMap { item in
+            guard let type = item["type"] as? String, ["message", "reasoning", "function_call"].contains(type) else { return nil }
+            let allowedKeys = Set(["type", "role", "content", "call_id", "name", "arguments"])
+            let filtered = item.filter { allowedKeys.contains($0.key) }
+            return try JSONDecoder().decode(AIJSONValue.self, from: JSONSerialization.data(withJSONObject: filtered))
         }
         let texts = allDictionaries(in: object).compactMap { dictionary -> String? in
             guard dictionary["type"] as? String == "output_text" else { return nil }
@@ -426,7 +464,9 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 reasoningTokenCount: outputDetails?["reasoning_tokens"] as? Int,
                 responseID: object["id"] as? String,
                 responseModel: object["model"] as? String
-            )
+            ),
+            functionCalls: functionCalls,
+            continuationItems: continuationItems
         )
     }
 
@@ -547,15 +587,19 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
 private struct DeepSeekResponseRequest: Encodable {
     let model: String
     let instructions: String
-    let input: String
+    let input: AIJSONValue
     let stream: Bool
     let maxOutputTokens: Int
     let reasoning: DeepSeekResponseReasoning
     let text: DeepSeekResponseText?
+    let tools: [LLMFunctionTool]?
+    let toolChoice: AIJSONValue?
 
     enum CodingKeys: String, CodingKey {
         case model, instructions, input, stream, reasoning, text
         case maxOutputTokens = "max_output_tokens"
+        case tools
+        case toolChoice = "tool_choice"
     }
 }
 
@@ -576,4 +620,6 @@ private struct DeepSeekResponseText: Encodable {
 
 private struct DeepSeekResponseTextFormat: Encodable {
     let type: String
+    var name: String? = nil
+    var schema: AIJSONValue? = nil
 }

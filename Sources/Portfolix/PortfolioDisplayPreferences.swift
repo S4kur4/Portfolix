@@ -3,6 +3,7 @@ import Foundation
 enum PortfolioDisplayPreferenceKey: String, CaseIterable {
     case displayCurrency = "display_currency"
     case appearanceMode = "appearance_mode"
+    case performanceColorScheme = "performance_color_scheme"
     case trendMetric = "dashboard_trend_metric"
     case trendRange = "dashboard_trend_range"
     case investmentCloudMode = "dashboard_investment_cloud_mode"

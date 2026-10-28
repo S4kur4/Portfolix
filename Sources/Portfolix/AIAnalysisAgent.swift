@@ -31,6 +31,7 @@ enum AIAnalysisAgentError: LocalizedError, Equatable {
 }
 
 struct AIAnalysisPipelineError: LocalizedError, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    var modelUsage: AIModelUsageSummary? = nil
     let stage: AIAnalysisProgress
     let underlyingDescription: String
     let partialArtifacts: AIAnalysisArtifactBundle?
@@ -313,7 +314,7 @@ struct AIAnalysisAgent: Sendable {
         search: WebSearching = SearchProviderClient.shared,
         credentialStore: ProviderCredentialStoring = ProviderCredentialStore.shared
     ) {
-        self.llm = llm
+        self.llm = AIUsageTrackingLLM(base: llm)
         self.search = search
         self.credentialStore = credentialStore
     }
@@ -358,27 +359,67 @@ struct AIAnalysisAgent: Sendable {
         previousReport: AIAnalysisReport? = nil,
         progress: AIAnalysisProgressHandler? = nil
     ) async throws -> AIAnalysisAgentResult {
-        try await AIAnalysisHarness(agent: self).execute(
-            request: AIAnalysisHarnessRequest(
-                positions: positions,
-                storeContext: storeContext,
-                llmConfiguration: llmConfiguration,
-                searchConfiguration: searchConfiguration,
-                trigger: trigger,
-                outputLanguage: outputLanguage,
-                previousReport: previousReport,
-                progress: progress
-            )
-        )
+        do {
+            let (result, usage) = try await AIModelRun.tracked(kind: "report", maximumCalls: 4) {
+                try await AIAnalysisHarness(agent: self).execute(
+                    request: AIAnalysisHarnessRequest(
+                        positions: positions,
+                        storeContext: storeContext,
+                        llmConfiguration: llmConfiguration,
+                        searchConfiguration: searchConfiguration,
+                        trigger: trigger,
+                        outputLanguage: outputLanguage,
+                        previousReport: previousReport,
+                        progress: progress
+                    )
+                )
+            }
+            return AIAnalysisAgentResult(report: result.report, artifacts: result.artifacts.withModelUsage(usage))
+        } catch let failure as AIModelRunFailure {
+            if var pipelineError = failure.underlying as? AIAnalysisPipelineError {
+                if var trace = pipelineError.trace {
+                    trace.modelUsage = failure.usage
+                    pipelineError = pipelineError.attachingTrace(trace)
+                }
+                pipelineError.modelUsage = failure.usage
+                throw pipelineError
+            }
+            throw failure
+        }
     }
 
     func answerFollowUp(
         question: String,
-        report: AIAnalysisReport,
+        report: AIAnalysisReport?,
         artifacts: AIAnalysisArtifactBundle?,
         chatHistory: [AIReportChatItem] = [],
         positions: [Position],
         portfolioContext: AIFollowUpPortfolioContext? = nil,
+        localToolHandler: AIPortfolioToolHandler? = nil,
+        llmConfiguration: AIProviderConfiguration,
+        searchConfiguration: SearchConfiguration,
+        runtimeRunID: UUID? = nil,
+        progress: AIFollowUpProgressHandler? = nil
+    ) async throws -> AIAnalysisFollowUpResult {
+        var (result, usage) = try await AIModelRun.tracked(kind: "follow_up", maximumCalls: 5) {
+            try await answerFollowUpImpl(
+                question: question, report: report, artifacts: artifacts, chatHistory: chatHistory,
+                positions: positions, portfolioContext: portfolioContext, localToolHandler: localToolHandler, llmConfiguration: llmConfiguration,
+                searchConfiguration: searchConfiguration, runtimeRunID: runtimeRunID, progress: progress
+            )
+        }
+        result.modelUsage = usage
+        return result
+    }
+
+    private func answerFollowUpImpl(
+        question: String,
+        report: AIAnalysisReport?,
+        artifacts: AIAnalysisArtifactBundle?,
+        chatHistory: [AIReportChatItem] = [],
+        positions: [Position],
+        portfolioContext: AIFollowUpPortfolioContext? = nil,
+        localToolHandler: AIPortfolioToolHandler? = nil,
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
         runtimeRunID: UUID? = nil,
@@ -411,13 +452,15 @@ struct AIAnalysisAgent: Sendable {
 
         let normalizedQuestion = try AIFollowUpGuardrail.normalizedQuestion(question)
         let responseLanguage = AIResponseLanguage.detecting(from: normalizedQuestion)
-        let reportJSON = String(data: try Self.encoder.encode(report), encoding: .utf8) ?? "{}"
-        let artifactSummary = artifacts.map(Self.followUpArtifactSummary) ?? "没有可用的持久化审计摘要。"
+        let usesPortfolioContext = AIContextProjection.needsPortfolio(normalizedQuestion, positions: positions, chatHistory: chatHistory)
+        let reportJSON = AIContextProjection.reportJSON(usesPortfolioContext ? report : nil)
+        let artifactSummary = ""
         let contextStartedAt = Date()
         let conversationContext = AIFollowUpContextOrchestrator.make(
             question: normalizedQuestion,
             items: chatHistory,
-            excludingItemIDs: [report.id]
+            excludingItemIDs: Set(report.map { [$0.id] } ?? []),
+            recentLimit: 6, relevantLimit: 3, characterBudget: 8_000, tokenBudget: 2_500
         )
         let conversationHistoryJSON = AIFollowUpContextOrchestrator.encodedJSON(conversationContext)
         AIAgentRuntimeDiagnostics.event(
@@ -430,7 +473,8 @@ struct AIAnalysisAgent: Sendable {
                 "source_count": String(conversationContext.sourceItemCount),
             ]
         )
-        let portfolioContextJSON = Self.followUpPortfolioContextJSON(portfolioContext)
+        let portfolioContextJSON = usesPortfolioContext
+            ? AIContextProjection.portfolioJSON(portfolioContext, question: normalizedQuestion) : "{}"
         let usesConnectedSearch = searchConfiguration.isEnabled && !searchKeys.isEmpty
         var searchMode = usesConnectedSearch ? "connected_search_available" : "disabled"
         var toolCallCount = 0
@@ -452,7 +496,7 @@ struct AIAnalysisAgent: Sendable {
                     portfolioContextJSON: portfolioContextJSON,
                     loopTurn: 1,
                     maxLoopTurns: 1,
-                    positions: positions,
+                    positions: usesPortfolioContext ? positions : [],
                     enabledProviders: searchConfiguration.orderedEnabledProviders,
                     configuration: followUpConfiguration,
                     apiKey: llmKey
@@ -507,9 +551,7 @@ struct AIAnalysisAgent: Sendable {
                 "tool_result_count": String(toolResults.count),
             ]
         )
-        let completion = try await llm.completeJSONResult(
-            systemPrompt: AIAnalysisPromptText.followUpSystem,
-            userPrompt: AIAnalysisPromptText.followUpUser(
+        let answerPrompt = AIAnalysisPromptText.followUpUser(
                 question: normalizedQuestion,
                 reportJSON: reportJSON,
                 conversationHistoryJSON: conversationHistoryJSON,
@@ -518,13 +560,10 @@ struct AIAnalysisAgent: Sendable {
                 searchMode: searchMode,
                 toolResultsJSON: toolResultsJSON,
                 citationCatalogJSON: citationCatalogJSON,
-                responseLanguage: responseLanguage
-            ),
-            configuration: followUpConfiguration,
-            apiKey: llmKey,
-            webSearchEnabled: false,
-            reasoningEffort: .low,
-            webSearchProgress: { event in
+                responseLanguage: responseLanguage,
+                localDataAvailabilityJSON: "{\"holding_count\":\(positions.count),\"latest_report_available\":\(report != nil)}"
+            )
+        let modelProgress: LLMWebSearchProgressHandler = { event in
                 switch event {
                 case .reasoningStarted:
                     await progress?(.reasoning(elapsedSeconds: nil))
@@ -538,6 +577,10 @@ struct AIAnalysisAgent: Sendable {
                     await progress?(.outputStarted)
                 }
             }
+        let (completion, localToolCallCount, localToolRounds) = try await completeFollowUpWithDataTools(
+            prompt: answerPrompt, configuration: followUpConfiguration, apiKey: llmKey,
+            snapshot: AIPortfolioToolSnapshot(positions: positions, portfolioContext: portfolioContext, report: report),
+            handler: localToolHandler, runtimeRunID: runID, progress: progress, modelProgress: modelProgress
         )
         let raw = completion.content
         AIAgentRuntimeDiagnostics.event(
@@ -549,12 +592,13 @@ struct AIAnalysisAgent: Sendable {
             ].merging(Self.completionDiagnosticMetadata(completion.diagnostics)) { _, new in new }
         )
         let validationStartedAt = Date()
-        var validated = try await validatedFollowUpResponse(
+        let validated = try await validatedFollowUpResponse(
             raw,
             question: normalizedQuestion,
             responseLanguage: responseLanguage,
             configuration: followUpConfiguration,
             apiKey: llmKey,
+            runtimeRunID: runID,
             progress: progress
         )
         AIAgentRuntimeDiagnostics.event(
@@ -565,29 +609,6 @@ struct AIAnalysisAgent: Sendable {
                 "repair_used": String(validated.usedRepair),
             ]
         )
-        var usedExpansion = false
-        if Self.shouldExpandGeneralMarketFollowUpAnswer(
-            validated.answer,
-            searchMode: searchMode,
-            toolResults: toolResults
-        ), let expanded = try? await expandedFollowUpResponse(
-            originalAnswer: validated.answer,
-            question: normalizedQuestion,
-            reportJSON: reportJSON,
-            conversationHistoryJSON: conversationHistoryJSON,
-            artifactSummary: artifactSummary,
-            portfolioContextJSON: portfolioContextJSON,
-            searchMode: searchMode,
-            toolResultsJSON: toolResultsJSON,
-            citationCatalogJSON: citationCatalogJSON,
-            responseLanguage: responseLanguage,
-            configuration: followUpConfiguration,
-            apiKey: llmKey,
-            progress: progress
-        ), expanded.answer.count > validated.answer.count {
-            validated = expanded
-            usedExpansion = true
-        }
         let payload = validated.payload
         let sanitizedAnswer = AIUserFacingTextSanitizer.sanitize(validated.answer, language: responseLanguage)
         let citedAnswer = AIMessageCitationResolver.resolve(sanitizedAnswer, catalog: citationCatalog)
@@ -600,22 +621,23 @@ struct AIAnalysisAgent: Sendable {
                     checkedAt: ISO8601DateFormatter().string(from: .now),
                     notes: payload.limitations
                         + (validated.usedRepair ? ["follow_up_response_repaired"] : [])
-                        + (usedExpansion ? ["follow_up_response_expanded"] : [])
+                        + (validated.repairReason.map { ["follow_up_repair_reason:\($0)"] } ?? [])
                 )
             ),
             encoding: .utf8
         ) ?? #"{"status":"passed"}"#
-        let result = AIAnalysisFollowUpResult(
+        var result = AIAnalysisFollowUpResult(
             answer: answer,
             citations: citedAnswer.citations,
             guardrailResultJSON: guardrailResultJSON,
             searchMode: searchMode,
             toolCallCount: toolCallCount,
             toolResultCount: toolResults.count,
-            loopTurnCount: loopTurnCount,
+            loopTurnCount: loopTurnCount + localToolRounds,
             toolPlanJSON: toolPlanJSON,
             toolResultsJSON: toolResultsJSON
         )
+        result.localToolCallCount = localToolCallCount
         AIAgentRuntimeDiagnostics.event(
             "agent_follow_up_finished",
             runID: runID,
@@ -629,18 +651,80 @@ struct AIAnalysisAgent: Sendable {
         return result
     }
 
+    private func completeFollowUpWithDataTools(
+        prompt: String, configuration: AIProviderConfiguration, apiKey: String,
+        snapshot: AIPortfolioToolSnapshot, handler: AIPortfolioToolHandler?, runtimeRunID: UUID,
+        progress: AIFollowUpProgressHandler?, modelProgress: LLMWebSearchProgressHandler?
+    ) async throws -> (LLMCompletionResult, Int, Int) {
+        var items: [AIJSONValue] = [.object(["role": .string("user"), "content": .string(prompt)])]
+        var seenIDs = Set<String>()
+        var count = 0
+        for round in 0...AIFunctionCallPolicy.maximumRounds {
+            try Task.checkCancellation()
+            let canCallTools = round < AIFunctionCallPolicy.maximumRounds && count < AIFunctionCallPolicy.maximumCalls
+            let requestConfiguration = configuration.forStage("follow_up_answer").withFunctions(
+                canCallTools ? AIPortfolioDataToolExecutor.definitions : [],
+                inputItems: round == 0 ? nil : items,
+                choice: canCallTools ? nil : .string("none")
+            )
+            let completion = try await llm.completeJSONResult(
+                systemPrompt: AIAnalysisPromptText.followUpSystem, userPrompt: prompt,
+                configuration: requestConfiguration, apiKey: apiKey, webSearchEnabled: false,
+                reasoningEffort: .low, webSearchProgress: modelProgress
+            )
+            guard !completion.functionCalls.isEmpty else { return (completion, count, round) }
+            guard canCallTools, completion.functionCalls.count <= AIFunctionCallPolicy.maximumCalls - count else { throw AIModelBudgetError.exhausted }
+            for call in completion.functionCalls {
+                guard !call.callID.isEmpty, seenIDs.insert(call.callID).inserted else { throw LLMClientError.invalidResponse }
+            }
+            if completion.continuationItems.isEmpty {
+                items += completion.functionCalls.map { .object([
+                    "type": .string("function_call"), "call_id": .string($0.callID),
+                    "name": .string($0.name), "arguments": .string($0.arguments),
+                ]) }
+            } else {
+                items += completion.continuationItems
+            }
+            await progress?(.readingLocalData)
+            for call in completion.functionCalls {
+                try Task.checkCancellation()
+                count += 1
+                let output: String
+                if let request = try? AIPortfolioToolRequest(call: call) {
+                    output = await handler?(request) ?? AIPortfolioDataToolExecutor.execute(request, snapshot: snapshot)
+                } else {
+                    output = AIPortfolioDataToolExecutor.error("invalid_arguments_or_tool")
+                }
+                try Task.checkCancellation()
+                let bounded = output.utf8.count <= AIFunctionCallPolicy.maximumResultBytes
+                    ? output : AIPortfolioDataToolExecutor.error("result_too_large_narrow_query")
+                items.append(.object(["type": .string("function_call_output"), "call_id": .string(call.callID), "output": .string(bounded)]))
+                AIAgentRuntimeDiagnostics.event("local_data_tool_completed", runID: runtimeRunID,
+                    metadata: ["tool": AIPortfolioDataTool(rawValue: call.name)?.rawValue ?? "rejected", "ordinal": String(count)])
+            }
+            await progress?(.composing)
+        }
+        throw AIModelBudgetError.exhausted
+    }
+
     private func validatedFollowUpResponse(
         _ raw: String,
         question: String,
         responseLanguage: AIResponseLanguage,
         configuration: AIProviderConfiguration,
         apiKey: String,
+        runtimeRunID: UUID,
         progress: AIFollowUpProgressHandler?
-    ) async throws -> (payload: LLMFollowUpPayload, answer: String, usedRepair: Bool) {
-        if let validated = try? Self.validatedFollowUpPayload(raw, responseLanguage: responseLanguage) {
-            return (validated.payload, validated.answer, false)
+    ) async throws -> (payload: LLMFollowUpPayload, answer: String, usedRepair: Bool, repairReason: String?) {
+        let repairReason: String
+        do {
+            let validated = try Self.validatedFollowUpPayload(raw, responseLanguage: responseLanguage)
+            return (validated.payload, validated.answer, false, nil)
+        } catch {
+            try AIInformationSecurityGuardrail.validateGeneratedText(raw)
+            repairReason = (error as? AIFollowUpResponseError)?.rawValue ?? "invalid_structure"
         }
-        try AIInformationSecurityGuardrail.validateGeneratedText(raw)
+        AIAgentRuntimeDiagnostics.event("follow_up_validation_issue", runID: runtimeRunID, metadata: ["reason": repairReason])
         await progress?(.repairingResponse)
         let repairedCompletion = try await llm.completeJSONResult(
             systemPrompt: AIAnalysisPromptText.followUpRepairSystem,
@@ -649,7 +733,7 @@ struct AIAnalysisAgent: Sendable {
                 question: question,
                 responseLanguage: responseLanguage
             ),
-            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
+            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair).forStage("follow_up_repair"),
             apiKey: apiKey,
             webSearchEnabled: false,
             reasoningEffort: .low,
@@ -670,74 +754,7 @@ struct AIAnalysisAgent: Sendable {
         guard let validated = try? Self.validatedFollowUpPayload(repaired, responseLanguage: responseLanguage) else {
             throw AIAnalysisAgentError.invalidReport
         }
-        return (validated.payload, validated.answer, true)
-    }
-
-    private func expandedFollowUpResponse(
-        originalAnswer: String,
-        question: String,
-        reportJSON: String,
-        conversationHistoryJSON: String,
-        artifactSummary: String,
-        portfolioContextJSON: String,
-        searchMode: String,
-        toolResultsJSON: String,
-        citationCatalogJSON: String,
-        responseLanguage: AIResponseLanguage,
-        configuration: AIProviderConfiguration,
-        apiKey: String,
-        progress: AIFollowUpProgressHandler?
-    ) async throws -> (payload: LLMFollowUpPayload, answer: String, usedRepair: Bool) {
-        await progress?(.composing)
-        let completion = try await llm.completeJSONResult(
-            systemPrompt: AIAnalysisPromptText.followUpExpansionSystem,
-            userPrompt: AIAnalysisPromptText.followUpExpansionUser(
-                originalAnswer: originalAnswer,
-                question: question,
-                reportJSON: reportJSON,
-                conversationHistoryJSON: conversationHistoryJSON,
-                artifactSummary: artifactSummary,
-                portfolioContextJSON: portfolioContextJSON,
-                searchMode: searchMode,
-                toolResultsJSON: toolResultsJSON,
-                citationCatalogJSON: citationCatalogJSON,
-                responseLanguage: responseLanguage
-            ),
-            configuration: configuration,
-            apiKey: apiKey,
-            webSearchEnabled: false,
-            reasoningEffort: .low,
-            webSearchProgress: { event in
-                switch event {
-                case .reasoningStarted:
-                    await progress?(.reasoning(elapsedSeconds: nil))
-                case let .reasoningActivity(elapsedSeconds):
-                    await progress?(.reasoning(elapsedSeconds: elapsedSeconds))
-                case .outputStarted:
-                    await progress?(.outputStarted)
-                case .searching, .completed:
-                    break
-                }
-            }
-        )
-        return try await validatedFollowUpResponse(
-            completion.content,
-            question: question,
-            responseLanguage: responseLanguage,
-            configuration: configuration,
-            apiKey: apiKey,
-            progress: progress
-        )
-    }
-
-    private static func shouldExpandGeneralMarketFollowUpAnswer(
-        _ answer: String,
-        searchMode: String,
-        toolResults: [AIWebSearchToolResult]
-    ) -> Bool {
-        searchMode == "connected_search_completed"
-            && answer.count < 600
-            && toolResults.contains { $0.positionRefs.isEmpty && $0.status == "ok" && !$0.sources.isEmpty }
+        return (validated.payload, validated.answer, true, repairReason)
     }
 
     private func makeFollowUpToolPlan(
@@ -776,7 +793,7 @@ struct AIAnalysisAgent: Sendable {
                 loopTurn: loopTurn,
                 maxLoopTurns: maxLoopTurns
             ),
-            configuration: configuration,
+            configuration: configuration.withMaxOutputTokens(2_000).forStage("follow_up_planning"),
             apiKey: apiKey
         )
         guard let decoded = Self.decodeToolPlan(raw) else {
@@ -790,25 +807,6 @@ struct AIAnalysisAgent: Sendable {
             contextQuestion: question,
             allowedProviders: Set(enabledProviders)
         )
-    }
-
-    private static func followUpArtifactSummary(_ artifacts: AIAnalysisArtifactBundle) -> String {
-        [
-            "组合分析数据摘要：\(String(artifacts.inputJSON.prefix(1200)))",
-            "本地金融证据摘要：\(String((artifacts.evidenceLedgerJSON ?? "{}").prefix(1200)))",
-            "联网资料摘要：\(String(artifacts.toolResultsJSON.prefix(800)))",
-            "安全校验摘要：\(String(artifacts.guardrailResultJSON.prefix(500)))",
-        ].joined(separator: "\n")
-    }
-
-    private static func followUpPortfolioContextJSON(_ context: AIFollowUpPortfolioContext?) -> String {
-        guard let context,
-              let data = try? inputEncoder.encode(context),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return "{}"
-        }
-        return json
     }
 
     static func nativeWebSearchToolResults(
@@ -1093,7 +1091,7 @@ struct AIAnalysisAgent: Sendable {
         apiKey: String
     ) async throws -> AIWebSearchToolPlan {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
-        let evidenceLedgerJSON = String(data: try Self.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
+        let evidenceLedgerJSON = AIContextProjection.evidenceJSON(evidenceLedger)
         let previousTurnsJSON = String(data: try Self.encoder.encode(previousTurns), encoding: .utf8) ?? "[]"
         let enabledProvidersJSON = String(data: try Self.encoder.encode(enabledProviders), encoding: .utf8) ?? "[]"
         let raw = try await llm.completeJSON(
@@ -1106,7 +1104,7 @@ struct AIAnalysisAgent: Sendable {
                 loopTurn: loopTurn,
                 maxLoopTurns: maxLoopTurns
             ),
-            configuration: configuration,
+            configuration: configuration.withMaxOutputTokens(2_000).forStage("report_planning"),
             apiKey: apiKey
         )
         guard let decoded = Self.decodeToolPlan(raw) else {
@@ -1174,7 +1172,7 @@ struct AIAnalysisAgent: Sendable {
             }
             while let result = await group.next() {
                 completed.append(result)
-                if nextIndex < calls.count {
+                if nextIndex < calls.count, !Task.isCancelled {
                     schedule(calls[nextIndex])
                     nextIndex += 1
                 }
@@ -1198,6 +1196,7 @@ struct AIAnalysisAgent: Sendable {
         ).filter { apiKeys[$0] != nil }
         var failures: [String] = []
         for provider in providers {
+            if Task.isCancelled { break }
             guard let apiKey = apiKeys[provider] else { continue }
             do {
                 let sources = try await search.search(
@@ -1220,6 +1219,7 @@ struct AIAnalysisAgent: Sendable {
                 }
                 failures.append("\(provider.rawValue) 未返回可用来源")
             } catch {
+                if error is CancellationError || Task.isCancelled { break }
                 failures.append("\(provider.rawValue)：\(String(error.localizedDescription.prefix(140)))")
             }
         }
@@ -1248,11 +1248,12 @@ struct AIAnalysisAgent: Sendable {
         progress: AIAnalysisProgressHandler? = nil
     ) async throws -> AIReportPayloadResult {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
-        let initialToolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
-        let initialEvidenceLedgerJSON = String(data: try Self.encoder.encode(evidenceLedger), encoding: .utf8) ?? "{}"
+        let initialToolResultsJSON = AIContextProjection.searchSummaryJSON(toolResults)
+        let initialEvidenceLedgerJSON = AIContextProjection.evidenceJSON(evidenceLedger)
         let reportConfiguration = configuration
             .withRequestTimeout(LLMRequestTimeoutPolicy.reportGeneration)
             .withMaxOutputTokens(LLMOutputTokenPolicy.reportGeneration)
+            .forStage("report_answer")
 
         let reportStage = AIAnalysisProgress.generatingReport(model: configuration.model)
         let completion: LLMCompletionResult
@@ -1304,8 +1305,8 @@ struct AIAnalysisAgent: Sendable {
             webResults: nativeToolResults,
             to: evidenceLedger
         )
-        let toolResultsJSON = String(data: try Self.encoder.encode(effectiveToolResults), encoding: .utf8) ?? "[]"
-        let evidenceLedgerJSON = String(data: try Self.encoder.encode(effectiveEvidenceLedger), encoding: .utf8) ?? "{}"
+        let toolResultsJSON = AIContextProjection.searchSummaryJSON(effectiveToolResults)
+        let evidenceLedgerJSON = AIContextProjection.evidenceJSON(effectiveEvidenceLedger)
         let effectiveSearchCallCount = max(completion.webSearchCallCount, completion.citations.isEmpty ? 0 : 1)
         if effectiveSearchCallCount > 0 {
             await progress?(
@@ -1319,7 +1320,7 @@ struct AIAnalysisAgent: Sendable {
         await progress?(.validatingModelOutput(attempt: 1, total: totalValidationAttempts))
         do {
             let payload = try Self.validatedPayload(raw, expectedLanguage: input.outputLanguage)
-            try AIReportEvidenceValidator.validate(payload: payload, ledger: effectiveEvidenceLedger)
+            try AIReportEvidenceValidator.validate(payload: payload, ledger: effectiveEvidenceLedger, input: input)
             return AIReportPayloadResult(
                 payload: payload,
                 rawReport: raw,
@@ -1361,7 +1362,7 @@ struct AIAnalysisAgent: Sendable {
                 await progress?(.validatingModelOutput(attempt: attempt + 1, total: totalValidationAttempts))
                 do {
                     let payload = try Self.validatedPayload(candidate, expectedLanguage: input.outputLanguage)
-                    try AIReportEvidenceValidator.validate(payload: payload, ledger: effectiveEvidenceLedger)
+                    try AIReportEvidenceValidator.validate(payload: payload, ledger: effectiveEvidenceLedger, input: input)
                     return AIReportPayloadResult(
                         payload: payload,
                         rawReport: raw,
@@ -1409,7 +1410,7 @@ struct AIAnalysisAgent: Sendable {
                 repairAttempt: repairAttempt,
                 maxAttempts: maxAttempts
             ),
-            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair),
+            configuration: configuration.withRequestTimeout(LLMRequestTimeoutPolicy.reportRepair).forStage("report_repair"),
             apiKey: apiKey,
             webSearchEnabled: false,
             reasoningEffort: .low,
@@ -2144,22 +2145,29 @@ struct AIAnalysisAgent: Sendable {
     }
 
     static func decodeFollowUpPayload(_ raw: String) -> LLMFollowUpPayload? {
-        let trimmed = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("```json") {
+            guard trimmed.hasSuffix("```"), trimmed.count >= 10 else { return nil }
+            trimmed = String(trimmed.dropFirst(7).dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if trimmed.hasPrefix("```"), trimmed.hasSuffix("```"),
+                  trimmed.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+            trimmed = String(trimmed.dropFirst(3).dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard (try? AIInformationSecurityGuardrail.validateGeneratedText(trimmed)) != nil else { return nil }
         guard let data = trimmed.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(LLMFollowUpPayload.self, from: data)
+        if let payload = try? JSONDecoder().decode(LLMFollowUpPayload.self, from: data) { return payload }
+        // A complete plain-language answer does not need another model call just to wrap it in JSON.
+        guard !trimmed.isEmpty, !["{", "[", "\""].contains(where: { trimmed.hasPrefix($0) }) else { return nil }
+        return LLMFollowUpPayload(answer: trimmed, limitations: [])
     }
 
     static func validatedFollowUpPayload(
         _ raw: String,
         responseLanguage: AIResponseLanguage = .simplifiedChinese
     ) throws -> (payload: LLMFollowUpPayload, answer: String) {
+        try AIInformationSecurityGuardrail.validateGeneratedText(raw)
         guard let payload = decodeFollowUpPayload(raw) else {
-            throw AIAnalysisAgentError.invalidReport
+            throw AIFollowUpResponseError.invalidStructure
         }
         let answer = try AIFollowUpGuardrail.validatedAnswer(payload.answer)
         _ = responseLanguage
@@ -3340,7 +3348,15 @@ enum AIAnalysisSchemaValidator {
     }
 }
 
+enum AIFollowUpResponseError: String, Error {
+    case invalidStructure = "invalid_structure"
+    case emptyAnswer = "empty_answer"
+    case answerTooLong = "answer_too_long"
+    case incompleteAnswer = "incomplete_answer"
+}
+
 enum AIFollowUpGuardrail {
+    static let maximumAnswerCharacters = 6_000
     static func normalizedQuestion(_ question: String) throws -> String {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 500 else {
@@ -3355,9 +3371,8 @@ enum AIFollowUpGuardrail {
 
     static func validatedAnswer(_ answer: String) throws -> String {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 3000 else {
-            throw AIAnalysisAgentError.invalidReport
-        }
+        guard !trimmed.isEmpty else { throw AIFollowUpResponseError.emptyAnswer }
+        guard trimmed.count <= maximumAnswerCharacters else { throw AIFollowUpResponseError.answerTooLong }
         try validateAnswerCompleteness(trimmed)
         try AIInformationSecurityGuardrail.validateGeneratedText(trimmed)
         return trimmed
@@ -3366,12 +3381,11 @@ enum AIFollowUpGuardrail {
     private static func validateAnswerCompleteness(_ answer: String) throws {
         let normalized = answer.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         let incompleteEndings = [
-            "是", "为", "建议", "包括", "例如", "如", "因为", "由于", "但", "并", "和", "或", "与",
-            "对", "在", "从", "将", "可以", "需要", "主要", "核心", "以及",
-            ":", "：", ",", "，", ";", "；", "、", "(", "（", "[", "【",
+            "建议是", "结论是", "原因是", "建议为", "具体如下：", "具体如下:",
+            "包括：", "包括:", "因为", "由于", "以及",
         ]
         guard !incompleteEndings.contains(where: { normalized.hasSuffix($0) }) else {
-            throw AIAnalysisAgentError.invalidReport
+            throw AIFollowUpResponseError.incompleteAnswer
         }
     }
 }
@@ -3787,7 +3801,20 @@ struct LLMFollowUpPayload: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        answer = try container.decode(String.self, forKey: .answer)
-        limitations = try container.decodeIfPresent([String].self, forKey: .limitations) ?? []
+        if let text = try? container.decode(String.self, forKey: .answer) {
+            answer = text
+        } else {
+            answer = try container.decode([String].self, forKey: .answer).joined(separator: "\n\n")
+        }
+        if let text = try? container.decode(String.self, forKey: .limitations) {
+            limitations = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [text]
+        } else {
+            limitations = try container.decodeIfPresent([String].self, forKey: .limitations) ?? []
+        }
+    }
+
+    init(answer: String, limitations: [String]) {
+        self.answer = answer
+        self.limitations = limitations
     }
 }

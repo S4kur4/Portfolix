@@ -269,6 +269,26 @@ struct AIProviderConfiguration: Equatable {
     var isEnabled: Bool
     var requestTimeout: TimeInterval = LLMRequestTimeoutPolicy.standard
     var maxOutputTokens: Int = LLMOutputTokenPolicy.standard
+    var requestStage = "unspecified"
+    var responseSchema: AIResponseSchema?
+    var functionTools: [LLMFunctionTool] = []
+    var functionInputItems: [AIJSONValue]?
+    var functionToolChoice: AIJSONValue?
+
+    func withFunctions(_ tools: [LLMFunctionTool], inputItems: [AIJSONValue]? = nil, choice: AIJSONValue? = nil) -> Self {
+        var copy = self
+        copy.functionTools = tools
+        copy.functionInputItems = inputItems
+        copy.functionToolChoice = choice
+        return copy
+    }
+
+    func forStage(_ stage: String) -> AIProviderConfiguration {
+        var copy = self
+        copy.requestStage = stage
+        copy.responseSchema = AIResponseSchema.forStage(stage)
+        return copy
+    }
 
     var providerOption: LLMProviderOption {
         LLMProviderOption.from(provider)

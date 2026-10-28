@@ -12,7 +12,7 @@ struct AIAgentActivityPolicyTests {
             buffer.replace(with: text)
             let mode = AIReportComposerAction(hasDraftText: buffer.hasContent)
             #expect(mode == expected)
-            #expect(mode.symbol == (expected == .send ? "arrow.up" : "sparkles"))
+            #expect(mode.symbol == (expected == .send ? "arrow.up" : "apple.intelligence"))
         }
         #expect(AIReportComposerAction.analyze.title(hasReport: false, language: .chinese) == "生成分析")
         #expect(AIReportComposerAction.analyze.title(hasReport: true, language: .chinese) == "重新分析")
@@ -21,7 +21,7 @@ struct AIAgentActivityPolicyTests {
 
     @Test
     func composerActionHonorsTheSelectedOperationAndBusyStates() {
-        for mode in AIReportComposerAction.allCases {
+        for mode in [AIReportComposerAction.analyze, .send] {
             #expect(mode.isEnabled(canGenerate: true, canSendFollowUp: true,
                                    isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false))
             for (submitting, awaiting, voice) in [(true, false, false), (false, true, false), (false, false, true)] {
@@ -33,6 +33,11 @@ struct AIAgentActivityPolicyTests {
             #expect(mode.isEnabled(canGenerate: false, canSendFollowUp: true,
                                   isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false) == (mode == .send))
         }
+        #expect(AIReportComposerAction.stop.symbol == "stop.fill")
+        #expect(AIReportComposerAction.stop.isEnabled(canGenerate: false, canSendFollowUp: false,
+                                                     isSubmitting: false, isAwaitingResponse: true, isVoiceActive: false))
+        #expect(!AIReportComposerAction.stop.isEnabled(canGenerate: true, canSendFollowUp: true,
+                                                      isSubmitting: false, isAwaitingResponse: false, isVoiceActive: false))
     }
 
     @Test

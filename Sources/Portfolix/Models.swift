@@ -111,6 +111,22 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
 
 }
 
+enum PerformanceColorScheme: String, CaseIterable, Identifiable, Sendable {
+    case greenUpRedDown = "green_up_red_down"
+    case redUpGreenDown = "red_up_green_down"
+
+    var id: String { rawValue }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .greenUpRedDown:
+            localizedText("绿涨红跌", "Green Up, Red Down", language: language)
+        case .redUpGreenDown:
+            localizedText("红涨绿跌", "Red Up, Green Down", language: language)
+        }
+    }
+}
+
 enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case chinese = "中文"
     case english = "English"
@@ -687,6 +703,9 @@ final class PortfolioStore {
     var appearanceMode: AppearanceMode = .system {
         didSet { persistDisplayPreference(appearanceMode, for: .appearanceMode) }
     }
+    var performanceColorScheme: PerformanceColorScheme = .greenUpRedDown {
+        didSet { persistDisplayPreference(performanceColorScheme, for: .performanceColorScheme) }
+    }
     var appLanguage: AppLanguage = .chinese {
         didSet {
             UserDefaults.standard.set(appLanguage.rawValue, forKey: Self.appLanguageDefaultsKey)
@@ -814,6 +833,10 @@ final class PortfolioStore {
     private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
     private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
     @ObservationIgnored private var isAIAnalysisGenerationInFlight = false
+    @ObservationIgnored private var analysisGenerationTask: Task<Void, Never>?
+    @ObservationIgnored private var analysisFollowUpTask: Task<Void, Never>?
+    @ObservationIgnored private var activeFollowUpRequestID: UUID?
+    private(set) var latestAIModelUsage: AIModelUsageSummary?
     @ObservationIgnored private var lastAIAnalysisRetentionPruneDay: Date?
     var aiChatRetentionPeriod: AIChatRetentionPeriod = .oneWeek {
         didSet {
@@ -826,9 +849,9 @@ final class PortfolioStore {
     private var aiInvestmentDistribution: AIInvestmentDistribution?
     private(set) var isUpdatingInvestmentDistribution = false
     @ObservationIgnored private var investmentDistributionTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledDistributionRefresh: Task<Void, Never>?
     @ObservationIgnored private var activeDistributionRequest: String?
     @ObservationIgnored private var activeDistributionRequestID: UUID?
-    @ObservationIgnored private var lastDistributionAttempt: String?
 
     var positions: [Position] {
         didSet { derivedMetrics = PortfolioDerivedMetrics(positions: positions) }
@@ -998,6 +1021,7 @@ final class PortfolioStore {
         self.positionRepository = activeRepository
         displayCurrency = PortfolioDisplayPreferenceKey.displayCurrency.load(from: activeRepository, default: DisplayCurrency.cny)
         appearanceMode = PortfolioDisplayPreferenceKey.appearanceMode.load(from: activeRepository, default: AppearanceMode.system)
+        performanceColorScheme = PortfolioDisplayPreferenceKey.performanceColorScheme.load(from: activeRepository, default: PerformanceColorScheme.greenUpRedDown)
         trendMetric = PortfolioDisplayPreferenceKey.trendMetric.load(from: activeRepository, default: TrendMetric.profitValue)
         trendRange = PortfolioDisplayPreferenceKey.trendRange.load(from: activeRepository, default: TrendRange.month)
         investmentCloudMode = PortfolioDisplayPreferenceKey.investmentCloudMode.load(from: activeRepository, default: InvestmentCloudMode.defaultMode)
@@ -1018,7 +1042,7 @@ final class PortfolioStore {
         // Reuse only historical asset exposure evidence; the retired radar scores are never requested.
         investmentProfileExposureCache = Self.savedAIInvestmentProfile()?.assetExposures ?? []
         if let json = try? activeRepository?.appSetting(for: InvestmentDistributionEngine.cacheKey),
-           json.utf8.count <= 1_000_000, let data = json.data(using: .utf8) {
+           json.utf8.count <= 10_000_000, let data = json.data(using: .utf8) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             aiInvestmentDistribution = try? decoder.decode(AIInvestmentDistribution.self, from: data)
@@ -1179,6 +1203,7 @@ final class PortfolioStore {
         if summary.riskProfileIncluded {
             loadRiskProfileSettings(from: positionRepository)
         }
+        scheduleInvestmentDistributionRefresh()
         return summary
     }
 
@@ -1251,6 +1276,7 @@ final class PortfolioStore {
         } else {
             positions.append(position)
         }
+        scheduleInvestmentDistributionRefresh()
     }
 
     func updatePosition(
@@ -1322,6 +1348,9 @@ final class PortfolioStore {
             positions = try positionRepository.fetchPositions()
         } else {
             positions[index] = updatedPosition
+        }
+        if InvestmentDistributionEngine.identityFingerprint(current) != InvestmentDistributionEngine.identityFingerprint(updatedPosition) {
+            scheduleInvestmentDistributionRefresh()
         }
     }
 
@@ -1551,7 +1580,7 @@ final class PortfolioStore {
     }
 
     func generateAIAnalysis(trigger: AIAnalysisTrigger = .manual) {
-        guard !isAIAnalysisGenerationInFlight else { return }
+        guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else { return }
         if case .running = aiAnalysisRun.status { return }
         pruneAIAnalysisChatHistory()
         isAIAnalysisGenerationInFlight = true
@@ -1568,7 +1597,7 @@ final class PortfolioStore {
                 )
             )
         }
-        Task { await generateAIAnalysisReport(trigger: trigger) }
+        analysisGenerationTask = Task { await generateAIAnalysisReport(trigger: trigger) }
     }
 
     func refreshAIAnalysisChatRetention() {
@@ -1591,9 +1620,10 @@ final class PortfolioStore {
 
     func submitAIAnalysisFollowUp(_ question: String) {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp else { return }
+        guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp, !isAIAnalysisGenerationInFlight else { return }
         pruneAIAnalysisChatHistory()
         let runtimeRunID = UUID()
+        activeFollowUpRequestID = runtimeRunID
         let watchdog = AIAgentRuntimeDiagnostics.startMainThreadWatchdog(runID: runtimeRunID)
         let priorChatHistory = aiAnalysisChatItems
         AIAgentRuntimeDiagnostics.event(
@@ -1614,7 +1644,8 @@ final class PortfolioStore {
         recordAIAnalysisActivity(.analyzing)
         AIAgentRuntimeDiagnostics.event("follow_up_ui_state_finished", runID: runtimeRunID)
 
-        Task {
+        analysisFollowUpTask = Task {
+            defer { watchdog?.cancel() }
             AIAgentRuntimeDiagnostics.event("follow_up_task_started", runID: runtimeRunID)
             let startedAt = Date()
             let answer = await answerAIAnalysisFollowUp(
@@ -1622,6 +1653,7 @@ final class PortfolioStore {
                 chatHistory: priorChatHistory,
                 runtimeRunID: runtimeRunID
             )
+            guard !Task.isCancelled, activeFollowUpRequestID == runtimeRunID else { return }
             AIAgentRuntimeDiagnostics.event(
                 "follow_up_answer_ready",
                 runID: runtimeRunID,
@@ -1635,7 +1667,8 @@ final class PortfolioStore {
                 .assistant(
                     answer.text,
                     followUpRunSnapshot: answer.runSnapshot,
-                    citations: answer.citations
+                    citations: answer.citations,
+                    modelUsage: answer.modelUsage
                 ),
                 runtimeRunID: runtimeRunID
             )
@@ -1646,8 +1679,39 @@ final class PortfolioStore {
             )
             aiAnalysisFollowUpProgress = nil
             isAnsweringAIAnalysisFollowUp = false
+            activeFollowUpRequestID = nil
             watchdog?.cancel()
             AIAgentRuntimeDiagnostics.event("follow_up_finished", runID: runtimeRunID)
+        }
+    }
+
+    func cancelAIAnalysis() {
+        analysisGenerationTask?.cancel()
+        analysisFollowUpTask?.cancel()
+        activeFollowUpRequestID = nil
+        isAIAnalysisGenerationInFlight = false
+        isAnsweringAIAnalysisFollowUp = false
+        aiAnalysisFollowUpProgress = nil
+        aiAnalysisActivityLines = []
+        aiAnalysisRun.status = .idle
+    }
+
+    func waitForAIAnalysisIdle() async {
+        await analysisGenerationTask?.value
+        await analysisFollowUpTask?.value
+    }
+
+    private func recordAIModelUsage(_ usage: AIModelUsageSummary?) {
+        guard let usage else { return }
+        latestAIModelUsage = usage
+        let key = "ai_model_usage_history_v1"
+        var history: [AIModelUsageSummary] = []
+        if let json = try? positionRepository?.appSetting(for: key), let data = json.data(using: .utf8) {
+            history = (try? JSONDecoder().decode([AIModelUsageSummary].self, from: data)) ?? []
+        }
+        history.append(usage)
+        if let data = try? JSONEncoder().encode(Array(history.suffix(30))), let json = String(data: data, encoding: .utf8) {
+            persistAppSetting(key: key, value: json)
         }
     }
 
@@ -1689,44 +1753,43 @@ final class PortfolioStore {
         _ question: String,
         chatHistory: [AIReportChatItem],
         runtimeRunID: UUID
-    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?) {
+    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?, modelUsage: AIModelUsageSummary?) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
             ? .english
             : .chinese
-        guard let report = aiAnalysisReport else {
-            return (
-                localizedText("请先生成一份智能分析报告，再继续追问。", "Generate a smart analysis report before asking a follow-up.", language: responseAppLanguage),
-                [],
-                nil
-            )
-        }
+        let report = aiAnalysisReport
         guard aiConfiguration.isEnabled else {
             return (
                 localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: responseAppLanguage),
                 [],
-                nil
+                nil,
+                AIModelUsageSummary(kind: "follow_up", calls: [])
             )
         }
         if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return (configurationMessage, [], nil)
+            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []))
         }
 
         do {
-            let artifacts = try await analyticsWorker?.fetchLatestAIAnalysisArtifacts() ?? nil
             let followUpContext = await makeAIFollowUpPortfolioContext(asOf: Date())
             let result = try await aiAgent.answerFollowUp(
                 question: question,
                 report: report,
-                artifacts: artifacts,
+                artifacts: nil,
                 chatHistory: chatHistory,
                 positions: positions,
                 portfolioContext: followUpContext,
+                localToolHandler: { [weak self] request in
+                    guard let self else { return AIPortfolioDataToolExecutor.error("app_unavailable") }
+                    return await self.readAIAnalysisData(request, runtimeRunID: runtimeRunID)
+                },
                 llmConfiguration: aiConfiguration,
                 searchConfiguration: searchConfiguration,
                 runtimeRunID: runtimeRunID,
                 progress: { [weak self] progress in
                     await MainActor.run {
+                        guard self?.activeFollowUpRequestID == runtimeRunID else { return }
                         AIAgentRuntimeDiagnostics.event(
                             "follow_up_progress",
                             runID: runtimeRunID,
@@ -1737,8 +1800,10 @@ final class PortfolioStore {
                     }
                 }
             )
-            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result))
+            recordAIModelUsage(result.modelUsage)
+            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result), nil)
         } catch {
+            if let failure = error as? AIModelRunFailure { recordAIModelUsage(failure.usage) }
             let stage: String
             if let pipelineError = error as? AIAnalysisPipelineError {
                 stage = String(describing: pipelineError.stage)
@@ -1760,9 +1825,29 @@ final class PortfolioStore {
                     language: responseAppLanguage
                 ),
                 [],
-                nil
+                nil,
+                (error as? AIModelRunFailure)?.usage
+                    ?? (error as? AIAnalysisPipelineError)?.modelUsage
+                    ?? AIModelUsageSummary(kind: "follow_up", calls: [])
             )
         }
+    }
+
+    private func readAIAnalysisData(_ request: AIPortfolioToolRequest, runtimeRunID: UUID) async -> String {
+        guard activeFollowUpRequestID == runtimeRunID, !Task.isCancelled else {
+            return AIPortfolioDataToolExecutor.error("request_cancelled")
+        }
+        let now = Date()
+        let context = await makeAIFollowUpPortfolioContext(asOf: now)
+        let performance = request.tool == .performance ? await loadAIPositionPerformance(asOf: now) : [:]
+        guard activeFollowUpRequestID == runtimeRunID, !Task.isCancelled else {
+            return AIPortfolioDataToolExecutor.error("request_cancelled")
+        }
+        return AIPortfolioDataToolExecutor.execute(request, snapshot: AIPortfolioToolSnapshot(
+            positions: positions, portfolioContext: context, performance: performance,
+            riskContext: makeAIStoreContext(positionPerformance: performance), report: aiAnalysisReport,
+            history: snapshotHistory, dailyProfit: dailyProfitHistory, asOf: now
+        ))
     }
 
     func refreshPosition(id: Position.ID) {
@@ -1837,8 +1922,9 @@ final class PortfolioStore {
     }
 
     private func generateAIAnalysisReport(trigger: AIAnalysisTrigger) async {
+        guard !Task.isCancelled else { return }
         defer {
-            isAIAnalysisGenerationInFlight = false
+            if !Task.isCancelled { isAIAnalysisGenerationInFlight = false }
         }
         refreshProviderCredentialState()
         guard !positions.isEmpty else {
@@ -1871,6 +1957,7 @@ final class PortfolioStore {
         do {
             updateAIAnalysisProgress(.loadingMarketData(assetCount: positions.count), startedAt: startedAt)
             await prepareMarketDataForAIAnalysis()
+            try Task.checkCancellation()
             updateAIAnalysisProgress(
                 .marketDataLoaded(total: positions.count),
                 startedAt: startedAt
@@ -1887,6 +1974,8 @@ final class PortfolioStore {
                 startedAt: startedAt
             )
             let report = result.report
+            recordAIModelUsage(result.artifacts.modelUsage)
+            try Task.checkCancellation()
             let finishedAt = Date()
             updateAIAnalysisProgress(.savingReport, startedAt: startedAt)
             aiAnalysisReport = report
@@ -1907,15 +1996,19 @@ final class PortfolioStore {
                 model: aiConfiguration.model,
                 searchCount: report.sources.count
             )
-            appendAIAnalysisChatItem(.report(report, aiAnalysisRun))
+            appendAIAnalysisChatItem(.report(report, aiAnalysisRun, modelUsage: result.artifacts.modelUsage))
             Self.aiAnalysisLogger.info("Agent run completed without fallback")
         } catch let error as AIAnalysisAgentError {
+            guard !Task.isCancelled else { return }
             if error == .missingLLMKey || error == .missingSearchKey || error == .emptyPortfolio {
                 aiAnalysisRun = AIAnalysisRun(status: .missingConfiguration(error.localizedDescription), startedAt: startedAt, finishedAt: .now, model: aiConfiguration.model)
                 return
             }
             completeAIAnalysisWithFallback(error: error, trigger: trigger, startedAt: startedAt, context: analysisContext)
         } catch {
+            if let failure = error as? AIModelRunFailure { recordAIModelUsage(failure.usage) }
+            if let pipeline = error as? AIAnalysisPipelineError { recordAIModelUsage(pipeline.modelUsage) }
+            guard !Task.isCancelled else { return }
             completeAIAnalysisWithFallback(error: error, trigger: trigger, startedAt: startedAt, context: analysisContext)
         }
     }
@@ -2003,7 +2096,7 @@ final class PortfolioStore {
         )
         let finishedAt = Date()
         let pipelineError = error as? AIAnalysisPipelineError
-        let artifacts = (pipelineError?.partialArtifacts
+        var artifacts = (pipelineError?.partialArtifacts
             ?? fallbackAIArtifacts(
                 report: fallback,
                 trigger: trigger,
@@ -2012,6 +2105,9 @@ final class PortfolioStore {
                 previousReport: aiAnalysisReport,
                 context: context
             )).withTrace(pipelineError?.trace)
+        if let usage = (error as? AIModelRunFailure)?.usage ?? pipelineError?.modelUsage {
+            artifacts = artifacts.withModelUsage(usage)
+        }
         aiAnalysisReport = fallback
         persistAIAnalysisReport(fallback)
         let runID = persistAIAnalysisRun(
@@ -2038,7 +2134,7 @@ final class PortfolioStore {
             fallbackReason: fallbackReason,
             diagnostic: diagnostic
         )
-        appendAIAnalysisChatItem(.report(fallback, aiAnalysisRun))
+        appendAIAnalysisChatItem(.report(fallback, aiAnalysisRun, modelUsage: artifacts.modelUsage))
 
         let stageID = (error as? AIAnalysisPipelineError)?.stage.telemetryID ?? "unknown"
         Self.aiAnalysisLogger.error(
@@ -2498,7 +2594,7 @@ final class PortfolioStore {
 
     var investmentDistributionItems: [InvestmentDistributionItem] {
         let assets = usableInvestmentDistributionAssets
-        return InvestmentDistributionEngine.items(positions: positions, assets: assets)
+        return InvestmentDistributionEngine.items(positions: positions, assets: assets, usesUnclassifiedFallback: canAnalyzeInvestmentDistribution)
     }
 
     var investmentDistributionRefreshID: String {
@@ -2519,12 +2615,16 @@ final class PortfolioStore {
     }
 
     private var usableInvestmentDistributionAssets: [AssetInvestmentDistribution] {
-        guard canAnalyzeInvestmentDistribution, let distribution = aiInvestmentDistribution,
-              distribution.version == InvestmentDistributionEngine.version,
-              distribution.model == aiConfiguration.model else { return [] }
-        let identities = Set(positions.map(InvestmentDistributionEngine.identityFingerprint))
-        let assets = distribution.assets.filter { identities.contains($0.identityFingerprint) }
-        return (try? InvestmentDistributionEngine.validatedAssets(assets, positions: positions)) ?? []
+        guard canAnalyzeInvestmentDistribution else { return [] }
+        let cached = Dictionary(grouping: InvestmentDistributionEngine.cachedAssets(aiInvestmentDistribution, positions: positions), by: \.positionRef)
+        return positions.compactMap { position in
+            if let domain = InvestmentDistributionEngine.localDomain(for: position) {
+                return AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: position),
+                    identityFingerprint: InvestmentDistributionEngine.identityFingerprint(position),
+                    allocations: [InvestmentDomainWeight(domain: domain, weight: 1)])
+            }
+            return cached[InvestmentProfileEngine.positionRef(for: position)]?.first
+        }
     }
 
     var investmentDistributionHelpText: String {
@@ -2536,52 +2636,86 @@ final class PortfolioStore {
     }
 
     func refreshInvestmentDistributionIfNeeded(force: Bool = false) {
+        scheduledDistributionRefresh?.cancel()
+        scheduledDistributionRefresh = nil
         refreshProviderCredentialState()
         guard canAnalyzeInvestmentDistribution, positions.contains(where: { $0.marketValueCNY > 0 }) else {
             cancelInvestmentDistributionUpdate()
             return
         }
         let fingerprint = distributionRequestFingerprint
-        guard activeDistributionRequest != fingerprint else { return }
-        guard force || (aiInvestmentDistribution?.requestFingerprint != fingerprint
-            && lastDistributionAttempt != fingerprint) else { return }
-        investmentDistributionTask?.cancel()
+        // Finish an in-flight batch rather than discarding paid work when another asset is added.
+        guard activeDistributionRequestID == nil else { return }
+        let requestPositions = InvestmentDistributionEngine.pendingPositions(positions, cache: aiInvestmentDistribution, force: force)
+        guard !requestPositions.isEmpty else { return }
         let requestID = UUID()
         activeDistributionRequest = fingerprint
         activeDistributionRequestID = requestID
-        lastDistributionAttempt = fingerprint
         isUpdatingInvestmentDistribution = true
-        let requestPositions = positions
         let configuration = aiConfiguration
         let search = searchConfiguration
-        let exposures = Dictionary(grouping: aiInvestmentDistribution?.researchedExposures ?? investmentProfileExposureCache, by: \.positionRef)
-            .compactMap { $0.value.first }
+        let domains = Dictionary(grouping: usableInvestmentDistributionAssets.flatMap(\.allocations).map(\.domain), by: \.id)
+            .compactMap { $0.value.first }.sorted { $0.id < $1.id }
         investmentDistributionTask = Task { [weak self, aiAgent] in
             do {
                 let distribution = try await aiAgent.generateInvestmentDistribution(
                     positions: requestPositions, llmConfiguration: configuration,
-                    searchConfiguration: search, cachedExposures: exposures,
+                    searchConfiguration: search, knownDomains: domains,
                     requestFingerprint: fingerprint
                 )
+                self?.recordAIModelUsage(distribution.modelUsage)
                 guard let self, !Task.isCancelled,
-                      self.canAnalyzeInvestmentDistribution,
-                      self.distributionRequestFingerprint == fingerprint else {
+                      self.canAnalyzeInvestmentDistribution, self.activeDistributionRequestID == requestID else {
                     self?.finishInvestmentDistributionRequest(requestID)
                     return
                 }
-                self.aiInvestmentDistribution = distribution
+                self.saveInvestmentDistribution(InvestmentDistributionEngine.merging(distribution, into: self.aiInvestmentDistribution, positions: self.positions))
                 Self.aiAnalysisLogger.info("Investment distribution updated")
-                let encoder = JSONEncoder()
-                encoder.dateEncodingStrategy = .iso8601
-                if let data = try? encoder.encode(distribution), let json = String(data: data, encoding: .utf8) {
-                    try? self.positionRepository?.setAppSetting(key: InvestmentDistributionEngine.cacheKey, value: json)
-                }
             } catch {
-                // Keep the last matching classification, or the local category fallback.
+                if let failure = error as? AIModelRunFailure { self?.recordAIModelUsage(failure.usage) }
+                if let self, !Task.isCancelled, self.activeDistributionRequestID == requestID,
+                   self.canAnalyzeInvestmentDistribution {
+                    let now = Date()
+                    let previous = Dictionary(grouping: InvestmentDistributionEngine.cachedAssets(self.aiInvestmentDistribution, positions: requestPositions), by: \.identityFingerprint)
+                    let failures = requestPositions.map { position in
+                        let identity = InvestmentDistributionEngine.identityFingerprint(position)
+                        let local = InvestmentDistributionEngine.localDomain(for: position)
+                        return AssetInvestmentDistribution(positionRef: InvestmentProfileEngine.positionRef(for: position),
+                            identityFingerprint: identity, allocations: local.map { [InvestmentDomainWeight(domain: $0, weight: 1)] } ?? previous[identity]?.first?.allocations ?? [],
+                            classifiedAt: local == nil ? previous[identity]?.first?.classifiedAt ?? now : now,
+                            retryAfter: local == nil ? now.addingTimeInterval(InvestmentDistributionEngine.failureRetryInterval) : nil,
+                            researchedAt: previous[identity]?.first?.researchedAt)
+                    }
+                    let failed = AIInvestmentDistribution(version: InvestmentDistributionEngine.version,
+                        generatedAt: now, model: configuration.model, requestFingerprint: fingerprint,
+                        assets: failures, researchedExposures: [])
+                    self.saveInvestmentDistribution(InvestmentDistributionEngine.merging(failed, into: self.aiInvestmentDistribution, positions: self.positions))
+                }
                 let code = AIAnalysisAgent.distributionFailureCode(error)
                 Self.aiAnalysisLogger.error("Investment distribution fallback: \(code, privacy: .public)")
             }
             self?.finishInvestmentDistributionRequest(requestID)
+            if let self, self.distributionRequestFingerprint != fingerprint {
+                self.scheduleInvestmentDistributionRefresh()
+            }
+        }
+    }
+
+    private func saveInvestmentDistribution(_ distribution: AIInvestmentDistribution) {
+        aiInvestmentDistribution = distribution
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(distribution), let json = String(data: data, encoding: .utf8) {
+            try? positionRepository?.setAppSetting(key: InvestmentDistributionEngine.cacheKey, value: json)
+        }
+    }
+
+    private func scheduleInvestmentDistributionRefresh() {
+        scheduledDistributionRefresh?.cancel()
+        scheduledDistributionRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.refreshInvestmentDistributionIfNeeded()
         }
     }
 
@@ -2593,15 +2727,19 @@ final class PortfolioStore {
     }
 
     private func cancelInvestmentDistributionUpdate() {
+        scheduledDistributionRefresh?.cancel()
+        scheduledDistributionRefresh = nil
         investmentDistributionTask?.cancel()
-        if lastDistributionAttempt == activeDistributionRequest { lastDistributionAttempt = nil }
         activeDistributionRequest = nil
         activeDistributionRequestID = nil
         isUpdatingInvestmentDistribution = false
     }
 
     func waitForInvestmentDistributionUpdate() async {
-        await investmentDistributionTask?.value
+        repeat {
+            await scheduledDistributionRefresh?.value
+            await investmentDistributionTask?.value
+        } while scheduledDistributionRefresh != nil || activeDistributionRequestID != nil
     }
 
     private static func savedAIInvestmentProfile() -> AIInvestmentProfile? {
@@ -2857,7 +2995,7 @@ final class PortfolioStore {
             } else {
                 persistCurrentSnapshot()
             }
-            refreshInvestmentDistributionIfNeeded(force: true)
+            refreshInvestmentDistributionIfNeeded()
         } catch {
             persistenceErrorMessage = "更新 \(position.name) 失败：\(error.localizedDescription)"
         }

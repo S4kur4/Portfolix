@@ -41,6 +41,7 @@ struct InvestmentProfileHarness: Sendable {
             var sourcesByRef: [String: [AssetResearchSource]] = [:]
             var limitations: [String] = []
             for call in plan.toolCalls {
+                if Task.isCancelled { break }
                 let referencedPositions = candidates.filter {
                     call.positionRefs.contains(InvestmentProfileEngine.positionRef(for: $0))
                 }
@@ -52,6 +53,7 @@ struct InvestmentProfileHarness: Sendable {
                 ).filter { searchKeys[$0] != nil }
                 var acceptedSources: [AssetResearchSource] = []
                 for provider in providers {
+                    if Task.isCancelled { break }
                     guard let key = searchKeys[provider] else { continue }
                     do {
                         acceptedSources = try await search.search(
@@ -62,6 +64,7 @@ struct InvestmentProfileHarness: Sendable {
                         )
                         if !acceptedSources.isEmpty { break }
                     } catch {
+                        if error is CancellationError || Task.isCancelled { break }
                         limitations.append(String(error.localizedDescription.prefix(160)))
                     }
                 }
@@ -133,7 +136,7 @@ struct InvestmentProfileHarness: Sendable {
             ),
             configuration: configuration
                 .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
-                .withMaxOutputTokens(LLMOutputTokenPolicy.standard),
+                .withMaxOutputTokens(2_000).forStage("distribution_planning"),
             apiKey: apiKey
         )
         guard let decoded = AIAnalysisAgent.decodeToolPlan(raw) else {
@@ -210,7 +213,7 @@ struct InvestmentProfileHarness: Sendable {
             ),
             configuration: configuration
                 .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
-                .withMaxOutputTokens(LLMOutputTokenPolicy.standard),
+                .withMaxOutputTokens(LLMOutputTokenPolicy.standard).forStage("distribution_extraction"),
             apiKey: apiKey
         )
         guard let payload = Self.decodeExposurePayload(raw) else {

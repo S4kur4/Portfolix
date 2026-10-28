@@ -90,7 +90,7 @@ struct PositionsView: View {
                             language: store.appLanguage,
                             appearance: .highlightedField
                         )
-                        .help(localizedText(
+                        .portfolixHelp(localizedText(
                             "选中搜索框后，可按住 Fn 进行语音输入。",
                             "Focus the search field, then hold Fn to dictate.",
                             language: store.appLanguage
@@ -266,7 +266,7 @@ struct PositionsView: View {
                 value: \.profitRate
             ) { position in
                 Text(formatPercent(position.profitRate))
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: position.profitRate)))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: position.profitRate, scheme: store.performanceColorScheme)))
                     .monospacedDigit()
             }
             .width(72)
@@ -469,11 +469,12 @@ struct AIReportView: View {
                 canClearHistory: hasAIAnalysisHistory,
                 clearHistory: { isClearHistoryConfirmationPresented = true },
                 generate: requestAnalysis,
+                cancel: store.cancelAIAnalysis,
                 sendFollowUp: sendFollowUp
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .alert(localizedText("清空智能分析历史？", "Clear analysis history?", language: store.appLanguage), isPresented: $isClearHistoryConfirmationPresented) {
+        .alert(localizedText("清空分析历史？", "Clear analysis history?", language: store.appLanguage), isPresented: $isClearHistoryConfirmationPresented) {
             Button(localizedText("取消", "Cancel", language: store.appLanguage), role: .cancel) {}
             Button(localizedText("清空", "Clear", language: store.appLanguage), role: .destructive) {
                 clearAIAnalysisHistory()
@@ -616,6 +617,7 @@ private struct AIReportChatSurface: View {
     let canClearHistory: Bool
     let clearHistory: () -> Void
     let generate: () -> Void
+    let cancel: () -> Void
     let sendFollowUp: (String) -> Void
     @State private var pendingScrollTask: Task<Void, Never>?
 
@@ -670,7 +672,8 @@ private struct AIReportChatSurface: View {
                                             AIReportChatReport(
                                                 report: report,
                                                 run: reportRun,
-                                                language: language
+                                                language: language,
+                                                modelUsage: item.responseModelUsage
                                             )
                                         }
                                     case let .assistant(text):
@@ -680,6 +683,7 @@ private struct AIReportChatSurface: View {
                                                 citations: item.citations ?? [],
                                                 createdAt: item.createdAt,
                                                 language: language,
+                                                modelUsage: item.responseModelUsage,
                                                 showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text)
                                             )
                                         }
@@ -751,11 +755,12 @@ private struct AIReportChatSurface: View {
 
                 AIReportChatComposer(
                     canGenerate: hasPositions && !isRunning,
-                    canSendFollowUp: report != nil && !isRunning && !isSendingFollowUp,
-                    isAwaitingResponse: isSendingFollowUp,
+                    canSendFollowUp: !isRunning && !isSendingFollowUp,
+                    isAwaitingResponse: isSendingFollowUp || isRunning,
                     hasReport: hasReport,
                     language: language,
                     generate: generate,
+                    cancel: cancel,
                     sendFollowUp: sendFollowUp
                 )
                 .id(composerResetID)
@@ -931,7 +936,7 @@ private struct AIReportChatActionsMenu: View {
                 clearHistory()
             } label: {
                 Label(
-                    localizedText("清空智能分析历史", "Clear Analysis History", language: language),
+                    localizedText("清空分析历史", "Clear Analysis History", language: language),
                     systemImage: "trash"
                 )
             }
@@ -1006,6 +1011,7 @@ private struct AIReportFollowUpMessage: View {
     let citations: [AIMessageCitation]
     let createdAt: Date
     let language: AppLanguage
+    let modelUsage: AIModelUsageSummary?
     let showsDisclaimer: Bool
 
     init(
@@ -1013,39 +1019,28 @@ private struct AIReportFollowUpMessage: View {
         citations: [AIMessageCitation] = [],
         createdAt: Date,
         language: AppLanguage,
+        modelUsage: AIModelUsageSummary? = nil,
         showsDisclaimer: Bool = true
     ) {
         self.text = text
         self.citations = citations
         self.createdAt = createdAt
         self.language = language
+        self.modelUsage = modelUsage
         self.showsDisclaimer = showsDisclaimer
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
             AIReportTimestampedAgentRow(date: createdAt, language: language) {
-                Group {
-                    if citations.isEmpty {
-                        Text(AIUserFacingTextSanitizer.sanitize(text))
-                            .font(PortfolixTypography.body)
-                            .foregroundStyle(PortfolixTheme.primaryText)
-                            .lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    } else {
-                        AIReportCitedText(text: text, citations: citations)
-                    }
-                }
+                AIReportCitedText(text: text, citations: citations)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PortfolixSpacing.lg)
                     .padding(.vertical, PortfolixSpacing.md)
                     .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
             }
 
-            if showsDisclaimer {
-                AIReportDisclaimer(language: language)
-            }
+            AIReportDisclaimer(language: language, modelUsage: modelUsage, showsDisclosure: showsDisclaimer)
         }
     }
 }
@@ -1073,7 +1068,9 @@ private struct AIReportCitedText: NSViewRepresentable {
 
 @MainActor
 final class AIReportCitationTextView: NSView, NSTextViewDelegate {
+    private static let citationHelpKey = AIMessageMarkdownRenderer.citationHelpKey
     private let textView = AIReportCitationNSTextView(frame: .zero)
+    private var citationHelpAnchors: [(range: NSRange, view: HoverHelpView)] = []
     private var renderedText = ""
     private var renderedCitations: [AIMessageCitation] = []
     private var lastMeasuredWidth: CGFloat = 320
@@ -1084,6 +1081,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
+        textView.isAutomaticLinkDetectionEnabled = false
         textView.drawsBackground = false
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
@@ -1108,6 +1106,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
     override func layout() {
         super.layout()
         textView.frame = bounds
+        layoutCitationHelp()
     }
 
     func update(text: String, citations: [AIMessageCitation]) {
@@ -1115,52 +1114,36 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
         renderedText = text
         renderedCitations = citations
 
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        let attributed = NSMutableAttributedString(
-            string: AIUserFacingTextSanitizer.sanitize(text),
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 13),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: paragraph,
-            ]
-        )
-        let orderedCitations = citations.enumerated().sorted { lhs, rhs in
-            if lhs.element.utf16Offset == rhs.element.utf16Offset {
-                return lhs.offset > rhs.offset
-            }
-            return lhs.element.utf16Offset > rhs.element.utf16Offset
-        }
-        for (_, citation) in orderedCitations {
-            guard let components = try? LLMBaseURLValidator.validatedComponents(from: citation.url),
-                  let url = components.url else { continue }
-            let offset = min(max(0, citation.utf16Offset), attributed.length)
-            let attachment = NSTextAttachment()
-            attachment.image = NSImage(
-                systemSymbolName: "link",
-                accessibilityDescription: "\(citation.title), \(citation.url)"
-            )?.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-            )
-            attachment.bounds = NSRect(x: 0, y: -1, width: 12, height: 12)
-            let icon = NSMutableAttributedString(attachment: attachment)
-            icon.addAttributes(
-                [
-                    .link: url,
-                    .toolTip: "\(citation.title)\n\(citation.url)",
-                    .foregroundColor: citationColor,
-                    .cursor: NSCursor.pointingHand,
-                ],
-                range: NSRange(location: 0, length: icon.length)
-            )
-            attributed.insert(icon, at: offset)
-        }
+        let attributed = AIMessageMarkdownRenderer.render(text, citations: citations, citationColor: citationColor)
         textView.textStorage?.setAttributedString(attributed)
+        for anchor in citationHelpAnchors {
+            anchor.view.dismissTooltip()
+            anchor.view.removeFromSuperview()
+        }
+        citationHelpAnchors.removeAll()
+        attributed.enumerateAttribute(Self.citationHelpKey, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
+            guard let text = value as? String else { return }
+            let anchor = HoverHelpView()
+            anchor.text = text
+            textView.addSubview(anchor)
+            citationHelpAnchors.append((range, anchor))
+        }
         textView.layoutManager?.invalidateLayout(
             forCharacterRange: NSRange(location: 0, length: attributed.length),
             actualCharacterRange: nil
         )
         invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    private func layoutCitationHelp() {
+        guard let manager = textView.layoutManager, let container = textView.textContainer else { return }
+        manager.ensureLayout(for: container)
+        for anchor in citationHelpAnchors {
+            let glyphs = manager.glyphRange(forCharacterRange: anchor.range, actualCharacterRange: nil)
+            anchor.view.frame = manager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+        }
     }
 
     func fittingSize(for proposedWidth: CGFloat?) -> CGSize {
@@ -1510,7 +1493,7 @@ private struct AIReportFollowUpProgressMessage: View {
     }
 }
 
-private struct AIReportProgressCard: View {
+struct AIReportProgressCard: View {
     let title: String
     let activityLines: [AIAgentActivityLine]
 
@@ -1526,23 +1509,14 @@ private struct AIReportProgressCard: View {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
             AIReportAgentThinkingIcon(size: 36)
 
-            ZStack(alignment: .leading) {
-                Text(displayLine.text)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .id(displayLine.id)
-                    .transition(
-                        .asymmetric(
-                            insertion: .offset(y: 16).combined(with: .opacity),
-                            removal: .offset(y: -16).combined(with: .opacity)
-                        )
-                    )
-            }
-            .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
-            .clipped()
-            .animation(.easeInOut(duration: 0.28), value: displayLine.id)
+            Text(displayLine.text)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(PortfolixTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .portfolixNumericTransition(displayLine.text)
+                .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
+                .clipped()
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
@@ -1638,6 +1612,7 @@ private struct AIReportChatReport: View {
     let report: AIAnalysisReport
     let run: AIAnalysisRun
     let language: AppLanguage
+    let modelUsage: AIModelUsageSummary?
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
@@ -1759,7 +1734,7 @@ private struct AIReportChatReport: View {
                 }
             }
 
-            AIReportDisclaimer(language: language)
+            AIReportDisclaimer(language: language, modelUsage: modelUsage)
                 .padding(.horizontal, 0)
         }
         .textSelection(.enabled)
@@ -1997,6 +1972,7 @@ private struct AIReportChatComposer: View {
     let hasReport: Bool
     let language: AppLanguage
     let generate: () -> Void
+    let cancel: () -> Void
     let sendFollowUp: (String) -> Void
     @State private var draftBuffer = AIReportComposerDraftBuffer()
     @State private var hasDraftText = false
@@ -2008,8 +1984,7 @@ private struct AIReportChatComposer: View {
         HStack(alignment: .center, spacing: AIReportComposerMetrics.controlSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 ZStack {
-                    TextField(placeholder, text: draftTextBinding)
-                        .textFieldStyle(.plain)
+                    AIReportComposerTextInput(placeholder: placeholder, text: draftTextBinding)
                         .font(PortfolixTypography.body)
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .lineLimit(1)
@@ -2065,6 +2040,7 @@ private struct AIReportChatComposer: View {
                 switch composerAction {
                 case .send: queueFollowUpSubmission()
                 case .analyze: generate()
+                case .stop: cancel()
                 }
             }
         }
@@ -2113,7 +2089,7 @@ private struct AIReportChatComposer: View {
     }
 
     private var composerAction: AIReportComposerAction {
-        AIReportComposerAction(hasDraftText: hasDraftText)
+        isAwaitingResponse ? .stop : AIReportComposerAction(hasDraftText: hasDraftText)
     }
 
     private var canPerformComposerAction: Bool {
@@ -2178,6 +2154,27 @@ private struct AIReportChatComposer: View {
     }
 }
 
+struct AIReportComposerTextInput: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        if #available(macOS 15.4, *) {
+            field.writingToolsAffordanceVisibility(.hidden)
+        } else {
+            field
+        }
+    }
+
+    private var field: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .autocorrectionDisabled(true)
+            .writingToolsBehavior(.disabled)
+            .textContentType(nil)
+    }
+}
+
 enum AIReportComposerMetrics {
     static let controlHeight: CGFloat = PortfolixSpacing.xxxl
     static let controlSpacing: CGFloat = PortfolixLayout.chatComposerHorizontalInset
@@ -2186,15 +2183,23 @@ enum AIReportComposerMetrics {
 enum AIReportComposerAction: CaseIterable {
     case analyze
     case send
+    case stop
 
     init(hasDraftText: Bool) {
         self = hasDraftText ? .send : .analyze
     }
 
-    var symbol: String { self == .send ? "arrow.up" : "sparkles" }
+    var symbol: String {
+        switch self {
+        case .send: "arrow.up"
+        case .analyze: "apple.intelligence"
+        case .stop: "stop.fill"
+        }
+    }
 
     func title(hasReport: Bool, language: AppLanguage) -> String {
         switch self {
+        case .stop: localizedText("停止生成", "Stop generating", language: language)
         case .send: localizedText("发送问题", "Send question", language: language)
         case .analyze: hasReport
             ? localizedText("重新分析", "Analyze Again", language: language)
@@ -2204,6 +2209,7 @@ enum AIReportComposerAction: CaseIterable {
 
     func isEnabled(canGenerate: Bool, canSendFollowUp: Bool, isSubmitting: Bool,
                    isAwaitingResponse: Bool, isVoiceActive: Bool) -> Bool {
+        if self == .stop { return isAwaitingResponse }
         guard !isSubmitting, !isAwaitingResponse, !isVoiceActive else { return false }
         return self == .send ? canSendFollowUp : canGenerate
     }
@@ -2249,8 +2255,14 @@ struct AIReportComposerActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: mode.symbol)
-                .font(.system(size: 12, weight: .medium))
+            Group {
+                if mode == .analyze {
+                    PortfolixAnalysisGlyph()
+                } else {
+                    Image(systemName: mode.symbol)
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
                 .frame(width: AIReportComposerMetrics.controlHeight, height: AIReportComposerMetrics.controlHeight)
                 .contentShape(Circle())
         }
@@ -2260,7 +2272,7 @@ struct AIReportComposerActionButton: View {
         .disabled(!isEnabled)
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(title)
-        .help(title)
+        .portfolixHelp(title)
     }
 }
 
@@ -2895,13 +2907,23 @@ private struct AIReportSourcesCard: View {
     }
 }
 
-private struct AIReportDisclaimer: View {
+struct AIReportDisclaimer: View {
     let language: AppLanguage
+    var modelUsage: AIModelUsageSummary? = nil
+    var showsDisclosure = true
+
+    var text: String {
+        let usage = AIModelUsageSummary.displayText(for: modelUsage, language: language)
+        guard showsDisclosure else { return usage }
+        let separator = language == .english ? "; " : "；"
+        return usage + separator + localizedText(AIAdviceDisclosure.text, "Generated by AI from available data for reference only. Not investment advice.", language: language)
+    }
 
     var body: some View {
-        Text(localizedText(AIAdviceDisclosure.text, "Generated by AI from available data for reference only. Not investment advice.", language: language))
+        Text(text)
             .font(PortfolixTypography.caption)
             .foregroundStyle(PortfolixTheme.tertiaryText)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -3306,6 +3328,8 @@ private struct RiskProfileSummaryCard: View {
                         Text(tolerance)
                             .font(.system(size: 24, weight: .medium, design: .rounded))
                             .foregroundStyle(PortfolixTheme.primaryText)
+                            .monospacedDigit()
+                            .portfolixNumericTransition(tolerance)
                             .lineLimit(1)
                         Text(localizedText("风险承受度", "Risk Tolerance", language: language))
                             .font(PortfolixTypography.captionEmphasis)
@@ -3350,6 +3374,7 @@ private struct RiskPortfolioMatchCard: View {
                             .font(.system(size: 32, weight: .light, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(scoreColor)
+                            .portfolixNumericTransition(scoreText)
                         Text(localizedText("关键约束匹配", "Key constraint fit", language: language))
                             .font(PortfolixTypography.caption)
                             .foregroundStyle(PortfolixTheme.tertiaryText)
@@ -3431,6 +3456,7 @@ private struct RiskConstraintSliderRow: View {
                         .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.tertiaryText)
                         .lineLimit(1)
+                        .portfolixNumericTransition(actualCaption)
                 }
                 .frame(width: leadingWidth, alignment: .leading)
 
@@ -3447,6 +3473,7 @@ private struct RiskConstraintSliderRow: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(PortfolixTheme.secondaryText)
                             .monospacedDigit()
+                            .portfolixNumericTransition(percentText(value))
                             .lineLimit(1)
 
                         RiskLimitBadge(
@@ -3586,6 +3613,7 @@ private struct RiskCountPill: View {
             Text(value)
                 .foregroundStyle(color)
                 .monospacedDigit()
+                .portfolixNumericTransition(value)
         }
         .font(.system(size: 11, weight: .medium))
     }
@@ -3663,6 +3691,20 @@ struct SettingsView: View {
                             options: DisplayCurrency.allCases,
                             optionTitle: { $0.rawValue },
                             width: 240,
+                            height: PortfolixLayout.settingsControlHeight
+                        )
+                    }
+
+                    SettingsDivider()
+
+                    SettingsRow(title: settingsText("涨跌配色", "Gain/Loss Colors")) {
+                        PortfolixGlassSegmentedPicker(
+                            title: settingsText("涨跌配色", "Gain/Loss Colors"),
+                            selection: $store.performanceColorScheme,
+                            options: PerformanceColorScheme.allCases,
+                            optionTitle: { $0.title(language: store.appLanguage) },
+                            optionAttributedTitle: { $0.selectorTitle(language: store.appLanguage) },
+                            width: store.appLanguage == .english ? 340 : 240,
                             height: PortfolixLayout.settingsControlHeight
                         )
                     }
@@ -4138,7 +4180,7 @@ private struct DataTransferInlineStatusView: View {
                 Label(title, systemImage: "checkmark.circle.fill")
                     .font(PortfolixTypography.captionEmphasis)
                     .foregroundStyle(PortfolixTheme.mint)
-                    .help(detail)
+                    .portfolixHelp(detail)
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .trailing)))
             }
         }
@@ -4193,79 +4235,23 @@ private struct SettingsToggleRow: View {
 enum HelpTooltipPlacement {
     case top
     case trailing
-
-    var alignment: Alignment {
-        switch self {
-        case .top:
-            .top
-        case .trailing:
-            .leading
-        }
-    }
-
-    var offset: CGSize {
-        switch self {
-        case .top:
-            CGSize(width: 0, height: -PortfolixSpacing.xxxl)
-        case .trailing:
-            CGSize(width: PortfolixSpacing.xxl, height: 0)
-        }
-    }
-
-    var transitionAnchor: UnitPoint {
-        switch self {
-        case .top:
-            .bottom
-        case .trailing:
-            .leading
-        }
-    }
 }
 
 struct HelpIcon: View {
     let text: String
     var placement: HelpTooltipPlacement = .top
-    @State private var isHovering = false
-    @State private var showsTooltip = false
 
     var body: some View {
         Image(systemName: "questionmark.circle")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(PortfolixTheme.tertiaryText)
             .contentShape(Rectangle())
-            .onHover { hovering in
-                isHovering = hovering
-                if hovering {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        guard isHovering else { return }
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            showsTooltip = true
-                        }
-                    }
-                } else {
-                    withAnimation(.easeOut(duration: 0.10)) {
-                        showsTooltip = false
-                    }
-                }
-            }
-            .overlay(alignment: placement.alignment) {
-                if showsTooltip {
-                    HelpTooltipBubble(text: text)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                                .stroke(PortfolixTheme.border, lineWidth: 1)
-                        }
-                        .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 8)
-                        .offset(placement.offset)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: placement.transitionAnchor)))
-                        .zIndex(10)
-                }
-            }
+            .portfolixHelp(text, placement: placement)
             .accessibilityLabel(text)
     }
 }
 
-private struct HelpTooltipBubble: View {
+struct HelpTooltipBubble: View {
     let text: String
     private let maximumWidth: CGFloat = 260
     private let textSize: CGFloat = 11
@@ -4277,6 +4263,10 @@ private struct HelpTooltipBubble: View {
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, PortfolixSpacing.xs)
         .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                .strokeBorder(PortfolixTheme.border, lineWidth: 1)
+        }
     }
 
     private var contentWidth: CGFloat {

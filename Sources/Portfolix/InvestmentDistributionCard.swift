@@ -43,7 +43,8 @@ struct InvestmentCloudCard: View {
                 .foregroundStyle(PortfolixTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            InvestmentCloudTreemap(items: items, currency: store.displayCurrency, language: store.appLanguage)
+            InvestmentCloudTreemap(items: items, currency: store.displayCurrency, language: store.appLanguage,
+                                   performanceColorScheme: store.performanceColorScheme)
                 .id(mode)
         }
     }
@@ -100,6 +101,7 @@ struct InvestmentCloudTreemap: View {
     let items: [InvestmentCloudItem]
     let currency: DisplayCurrency
     let language: AppLanguage
+    var performanceColorScheme: PerformanceColorScheme = .greenUpRedDown
     @Environment(\.colorScheme) private var colorScheme
     @State private var highlightedID: InvestmentCloudItem.ID?
 
@@ -153,7 +155,7 @@ struct InvestmentCloudTreemap: View {
         ZStack {
             RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                 .fill(item.mode == .dailyProfit
-                      ? PortfolixTheme.dailyProfitTileFill(for: item.amountCNY)
+                      ? PortfolixTheme.dailyProfitTileFill(for: item.amountCNY, scheme: performanceColorScheme)
                       : PortfolixTheme.lilac.opacity(colorScheme == .dark ? 0.30 : 0.16))
                 .opacity(highlightedID == nil || highlightedID == item.id ? 1 : 0.62)
             if canShowLabels(item: item, rect: rect) {
@@ -165,13 +167,15 @@ struct InvestmentCloudTreemap: View {
                         Text(String(format: "%.1f%%", percentage))
                             .font(.system(size: 11, weight: .medium))
                             .monospacedDigit()
+                            .portfolixNumericTransition(percentage)
                     }
                     Text(amountLabelText(item, rect: rect))
                         .font(.system(size: 10))
                         .monospacedDigit()
+                        .portfolixNumericTransition(amountLabelText(item, rect: rect))
                         .lineLimit(1)
                         .foregroundStyle(item.mode == .dailyProfit
-                                         ? PortfolixTheme.performanceStatusText(for: item.amountCNY)
+                                         ? PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
                                          : PortfolixTheme.primaryText)
                 }
                 .foregroundStyle(PortfolixTheme.primaryText)
@@ -188,11 +192,15 @@ struct InvestmentCloudTreemap: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(item.title(language: language))
                 .fixedSize(horizontal: false, vertical: true)
-            if let percentage = item.distributionPercentage { Text(String(format: "%.1f%%", percentage)) }
+            if let percentage = item.distributionPercentage {
+                Text(String(format: "%.1f%%", percentage))
+                    .portfolixNumericTransition(percentage)
+            }
             Text(amountText(item))
                 .monospacedDigit()
+                .portfolixNumericTransition(amountText(item))
                 .foregroundStyle(item.mode == .dailyProfit
-                                 ? PortfolixTheme.performanceStatusText(for: item.amountCNY)
+                                 ? PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
                                  : PortfolixTheme.primaryText)
         }
         .foregroundStyle(PortfolixTheme.primaryText)

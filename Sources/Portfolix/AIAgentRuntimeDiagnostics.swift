@@ -96,6 +96,7 @@ enum AIAgentRuntimeDiagnostics {
         case .reasoning: "reasoning"
         case .outputStarted: "output_started"
         case .repairingResponse: "repairing_response"
+        case .readingLocalData: "reading_local_data"
         }
     }
 }

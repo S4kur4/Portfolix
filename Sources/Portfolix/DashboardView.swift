@@ -153,15 +153,17 @@ private struct PortfolioHeroCard: View {
                         Text(formatHeroMoney(store.converted(store.totalValueCNY), currency: store.displayCurrency))
                             .font(PortfolixTypography.portfolioHeroValue)
                             .monospacedDigit()
-                            .contentTransition(.numericText())
+                            .portfolixNumericTransition(formatHeroMoney(store.converted(store.totalValueCNY), currency: store.displayCurrency))
                             .foregroundStyle(PortfolixTheme.primaryText)
 
                         HStack(spacing: PortfolixSpacing.md) {
                             Text("\(localizedText("今日收益", "Today Return", language: store.appLanguage)) \(todayProfitText)")
                                 .foregroundStyle(todayProfitColor)
+                                .portfolixNumericTransition(todayProfitText)
                                 .lineLimit(1)
                             Text("\(localizedText("今日收益率", "Today Return Rate", language: store.appLanguage)) \(todayProfitRateText)")
                                 .foregroundStyle(todayProfitRateColor)
+                                .portfolixNumericTransition(todayProfitRateText)
                                 .lineLimit(1)
                         }
                         .font(.system(size: 12, weight: .medium))
@@ -227,7 +229,7 @@ private struct PortfolioHeroCard: View {
     }
 
     private func valueColor(for value: Decimal) -> Color {
-        PortfolixTheme.performanceColor(for: value)
+        PortfolixTheme.performanceColor(for: value, scheme: store.performanceColorScheme)
     }
 
     private func fetchedDate(for position: Position) -> Date {
@@ -394,7 +396,7 @@ private struct PortfolioValueYearCurveBackground: View {
 }
 
 private enum DashboardChartStyle {
-    static let dataLineWidth: CGFloat = 2
+    static let dataLineWidth = PortfolixLayout.accentLineWidth
     static let initialValueTransitionDays = 6
 }
 
@@ -545,9 +547,14 @@ private struct PerformanceTrendCard: View {
                         .font(PortfolixTypography.secondaryValue)
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .monospacedDigit()
-                        .contentTransition(.numericText())
+                        .portfolixNumericTransition(latestValueText)
 
-                    Label(changeSummary, systemImage: changeSymbol)
+                    Label {
+                        Text(changeSummary)
+                            .portfolixNumericTransition(changeSummary)
+                    } icon: {
+                        Image(systemName: changeSymbol)
+                    }
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(changeColor)
                         .lineLimit(1)
@@ -605,6 +612,7 @@ private struct PerformanceTrendCard: View {
                                     }
                                     Text(valueText(for: snapshot))
                                         .foregroundStyle(PortfolixTheme.primaryText)
+                                        .portfolixNumericTransition(valueText(for: snapshot))
                                 }
                                     .portfolixChartTooltip()
                             }
@@ -770,7 +778,7 @@ private struct PerformanceTrendCard: View {
     }
 
     private var changeColor: Color {
-        PortfolixTheme.performanceColor(for: intervalChange)
+        PortfolixTheme.performanceColor(for: intervalChange, scheme: store.performanceColorScheme)
     }
 
     private var intervalChange: Double {
@@ -802,6 +810,7 @@ private struct AssetMixBarCard: View {
                     Text(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
                         .font(.system(size: 13, weight: .medium))
                         .monospacedDigit()
+                        .portfolixNumericTransition(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
                         .foregroundStyle(PortfolixTheme.secondaryText)
                         .lineLimit(1)
                 }
@@ -892,13 +901,13 @@ private struct AssetMixLegendItem: View {
             Text(String(format: "%.1f%%", item.value))
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .monospacedDigit()
+                .portfolixNumericTransition(item.value)
                 .lineLimit(1)
         }
         .font(PortfolixTypography.caption)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.42)
         .animation(.easeOut(duration: 0.16), value: highlightedItemID)
-        .help("\(item.name) \(String(format: "%.1f%%", item.value))")
     }
 }
 
@@ -1208,7 +1217,6 @@ private struct SortablePositionHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(title)
         .accessibilityLabel(title)
         .accessibilityValue(isSelected ? accessibilitySortValue : "")
     }
@@ -1243,7 +1251,6 @@ private struct CompactPositionRow: View {
                 }
                 .buttonStyle(.plain)
                 .frame(width: 32, height: 32)
-                .help(localizedText("编辑持仓", "Edit Holding", language: store.appLanguage))
                 .accessibilityLabel(localizedText("编辑 \(position.name)", "Edit \(position.name)", language: store.appLanguage))
 
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
@@ -1268,12 +1275,13 @@ private struct CompactPositionRow: View {
                 .positionMetricColumn(width: 118)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .portfolixNumericTransition(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
 
             Text(formatPercent(position.profitRate))
                 .positionMetricColumn(width: 72)
-                .foregroundStyle(PortfolixTheme.performanceColor(for: position.profitRate))
+                .foregroundStyle(PortfolixTheme.performanceColor(for: position.profitRate, scheme: store.performanceColorScheme))
                 .monospacedDigit()
+                .portfolixNumericTransition(position.profitRate)
 
             let todayProfit = store.todayProfitCNY(for: position)
             let isTodayProfitZero = todayProfit == 0
@@ -1284,10 +1292,10 @@ private struct CompactPositionRow: View {
             )
                 .positionMetricColumn(width: 96)
                 .foregroundStyle(
-                    PortfolixTheme.performanceColor(for: todayProfit)
+                    PortfolixTheme.performanceColor(for: todayProfit, scheme: store.performanceColorScheme)
                 )
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .portfolixNumericTransition(formatMoney(store.converted(todayProfit), currency: store.displayCurrency))
 
             VStack(alignment: .trailing, spacing: 2) {
                 Text(position.priceDateText(language: store.appLanguage))
@@ -1330,7 +1338,7 @@ private struct PositionSparkline: View {
     }
 
     private var color: Color {
-        PortfolixTheme.performanceColor(for: trendDelta)
+        PortfolixTheme.performanceColor(for: trendDelta, scheme: store.performanceColorScheme)
     }
 
     private var trendDelta: Double {
@@ -1600,7 +1608,7 @@ private struct DailyProfitCard: View {
             Text(moneyText(highlightedPoint?.amountCNY ?? monthlyProfitCNY))
                 .monospacedDigit()
                 .foregroundStyle(profitColor(highlightedPoint?.amountCNY ?? monthlyProfitCNY))
-                .contentTransition(.numericText())
+                .portfolixNumericTransition(moneyText(highlightedPoint?.amountCNY ?? monthlyProfitCNY))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
 
@@ -1616,6 +1624,7 @@ private struct DailyProfitCard: View {
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(PortfolixTheme.tertiaryText)
             .lineLimit(1)
+            .portfolixNumericTransition("\(profitableDayCount):\(lossDayCount)")
         }
         .font(.system(size: 12, weight: .medium))
         .frame(height: 16)
@@ -1733,7 +1742,7 @@ private struct DailyProfitCard: View {
                 Text(compactCellAmount(amount))
                     .font(.system(size: 7, weight: .medium))
                     .monospacedDigit()
-                    .foregroundStyle(PortfolixTheme.performanceStatusText(for: amount))
+                    .foregroundStyle(PortfolixTheme.performanceStatusText(for: amount, scheme: store.performanceColorScheme))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
@@ -1744,7 +1753,7 @@ private struct DailyProfitCard: View {
         .overlay {
             if isToday || isHighlighted {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(PortfolixTheme.lilac, lineWidth: isHighlighted ? 1.5 : 1)
+                    .strokeBorder(PortfolixTheme.lilac, lineWidth: PortfolixLayout.accentLineWidth)
             }
         }
         .onHover { hovering in
@@ -1875,11 +1884,11 @@ private struct DailyProfitCard: View {
     }
 
     private func profitColor(_ amount: Decimal) -> Color {
-        PortfolixTheme.performanceColor(for: amount)
+        PortfolixTheme.performanceColor(for: amount, scheme: store.performanceColorScheme)
     }
 
     private func cellBackground(_ amount: Decimal?) -> Color {
-        PortfolixTheme.dailyProfitTileFill(for: amount)
+        PortfolixTheme.dailyProfitTileFill(for: amount, scheme: store.performanceColorScheme)
     }
 
     private func dayTitle(_ date: Date) -> String {

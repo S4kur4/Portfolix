@@ -27,13 +27,16 @@ struct PortfolioDisplayPreferencesTests {
         store.trendRange = .year
         store.displayCurrency = .usd
         store.appearanceMode = .dark
+        store.performanceColorScheme = .redUpGreenDown
         for page in [SidebarSection.positions, .report, .settings, .overview] {
             store.selection = page
             #expect(store.investmentCloudMode == .distribution)
             #expect(store.dailyProfitDisplayMode == .chart)
+            #expect(store.performanceColorScheme == .redUpGreenDown)
         }
         store.synchronizePersistedMarketDataIfNeeded()
         #expect(store.investmentCloudMode == .distribution)
+        #expect(store.performanceColorScheme == .redUpGreenDown)
         let reopenedRepository = try PositionRepository(databaseURL: repository.storageURL)
         let restored = PortfolioStore(positionRepository: reopenedRepository)
         #expect(restored.investmentCloudMode == .distribution)
@@ -44,6 +47,7 @@ struct PortfolioDisplayPreferencesTests {
         #expect(restored.trendRange == .year)
         #expect(restored.displayCurrency == .usd)
         #expect(restored.appearanceMode == .dark)
+        #expect(restored.performanceColorScheme == .redUpGreenDown)
         #expect(restored.persistenceErrorMessage == nil)
     }
 
@@ -66,6 +70,10 @@ struct PortfolioDisplayPreferencesTests {
         for appearance in AppearanceMode.allCases {
             store.appearanceMode = appearance
             #expect(PortfolioStore(positionRepository: repository).appearanceMode == appearance)
+        }
+        for scheme in PerformanceColorScheme.allCases {
+            store.performanceColorScheme = scheme
+            #expect(PortfolioStore(positionRepository: repository).performanceColorScheme == scheme)
         }
         for metric in TrendMetric.allCases {
             store.trendMetric = metric
@@ -97,6 +105,7 @@ struct PortfolioDisplayPreferencesTests {
         first.investmentCloudMode = .distribution
         first.dailyProfitDisplayMode = .chart
         first.displayCurrency = .hkd
+        first.performanceColorScheme = .redUpGreenDown
         let separate = PortfolioStore(positionRepository: try makeRepository())
         expectDefaults(separate)
     }
@@ -110,6 +119,7 @@ struct PortfolioDisplayPreferencesTests {
         #expect(store.trendRange == .month)
         #expect(store.displayCurrency == .cny)
         #expect(store.appearanceMode == .system)
+        #expect(store.performanceColorScheme == .greenUpRedDown)
     }
 
     private func makeRepository() throws -> PositionRepository {

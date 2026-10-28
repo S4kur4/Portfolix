@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Portfolix
 
@@ -25,6 +26,58 @@ struct ProviderConfigurationSheetTests {
         #expect(success.color == PortfolixTheme.mint)
         #expect(failure.symbol == "xmark.circle.fill")
         #expect(failure.color == PortfolixTheme.danger)
+    }
+
+    @Test
+    func providerValidationMessagesUseSharedChineseAndEnglishCopy() {
+        #expect(ProviderConnectionStatus.validatingAPI(language: .chinese) == .validating("正在验证 API 配置"))
+        #expect(ProviderConnectionStatus.validatingAPI(language: .english) == .validating("Validating API configuration"))
+        #expect(ProviderConnectionStatus.validatedAPI(language: .chinese) == .success("API 已验证"))
+        #expect(ProviderConnectionStatus.validatedAPI(language: .english) == .success("API validated"))
+    }
+
+    @Test
+    func providerNoticesPreserveErrorsAndShareStatusPresentation() {
+        let statuses: [ProviderConnectionStatus] = [
+            .validatingAPI(language: .chinese),
+            .validatedAPI(language: .english),
+            .failure(LLMClientError.unauthorized.localizedDescription),
+            .failure(TavilyClientError.unauthorized.localizedDescription),
+            .failure(BochaAIClientError.unauthorized.localizedDescription),
+            .failure(DeepSeekSearchError.unauthorized.localizedDescription),
+            .failure("请先填写 API Key"),
+        ]
+
+        for status in statuses {
+            let notice = ProviderNoticeRow(status: status)
+            #expect(notice.symbol == status.symbol)
+            #expect(notice.title == status.message)
+            #expect(notice.tint == status.color)
+            #expect(notice.titleColor == status.color)
+            #expect(notice.message == nil)
+        }
+    }
+
+    @Test
+    func providerNoticeRowsHaveConsistentHeightInBothAppearances() {
+        for scheme: ColorScheme in [.light, .dark] {
+            let statuses: [ProviderConnectionStatus] = [
+                .validatingAPI(language: .chinese),
+                .validatedAPI(language: .chinese),
+                .validatingAPI(language: .english),
+                .validatedAPI(language: .english),
+                .failure(BochaAIClientError.unauthorized.localizedDescription),
+            ]
+            let heights = statuses.map { status in
+                let view = NSHostingView(
+                    rootView: ProviderNoticeRow(status: status)
+                        .frame(width: 500)
+                        .environment(\.colorScheme, scheme)
+                )
+                return view.fittingSize.height
+            }
+            #expect(heights.allSatisfy { $0 > 0 && $0 == heights.first })
+        }
     }
 
     @Test

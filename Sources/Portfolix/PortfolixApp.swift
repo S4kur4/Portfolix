@@ -59,17 +59,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(PortfolioStore.self) private var store
-    @State private var sidebarWidth: CGFloat = 218
+    @AppStorage("portfolix.sidebar.collapsed") private var isSidebarCollapsed = false
+    @State private var sidebarWidth = SidebarIconLayout.minimumExpandedWidth
+    @State private var sidebarIconCenterX = SidebarIconLayout.defaultCenterX
     private let periodicMaintenanceTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         @Bindable var store = store
 
-        HStack(spacing: 0) {
-            SidebarView()
-                .frame(width: sidebarWidth)
+        SidebarSplitLayout(sidebarWidth: isSidebarCollapsed
+                           ? SidebarIconLayout.collapsedWidth(centerX: sidebarIconCenterX) : sidebarWidth) {
+            SidebarView(isCollapsed: $isSidebarCollapsed, iconCenterX: $sidebarIconCenterX, expandedWidth: sidebarWidth)
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .overlay(alignment: .trailing) {
-                    SidebarResizeHandle(width: $sidebarWidth)
+                    if !isSidebarCollapsed {
+                        SidebarResizeHandle(width: $sidebarWidth)
+                    }
                 }
 
             ZStack {
@@ -80,7 +85,7 @@ struct RootView: View {
                     .clipped()
                     .padding(PortfolixSpacing.xl)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .ignoresSafeArea(edges: .top)
         }
         .background(PortfolixTheme.canvas)
@@ -138,7 +143,7 @@ struct RootView: View {
         @State private var dragStartWidth: CGFloat?
 
         private let hitWidth: CGFloat = 12
-        private let minimumSidebarWidth: CGFloat = 178
+        private let minimumSidebarWidth = SidebarIconLayout.minimumExpandedWidth
         private let maximumSidebarWidth: CGFloat = 308
 
         var body: some View {
@@ -160,7 +165,6 @@ struct RootView: View {
                             dragStartWidth = nil
                         }
                 )
-                .help("拖动调整侧边栏宽度")
         }
 
         private func setWidth(_ proposedWidth: CGFloat) {
