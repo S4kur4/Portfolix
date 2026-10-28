@@ -365,7 +365,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             let completed = try Self.parseResponseObject(completedData)
             completedResult = completed
             // Deltas are provisional; the completed response is the authoritative text.
-            if !completed.content.isEmpty { content = completed.content }
+            content = completed.content
             for citation in completed.citations where seenCitationURLs.insert(citation.url).inserted {
                 citations.append(citation)
             }

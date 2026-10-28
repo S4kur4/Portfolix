@@ -106,6 +106,23 @@ struct AIOptimizationTests {
   }
 
   @Test
+  func emptyFinalResponseCannotPublishAProvisionalDraft() async throws {
+    let (client, key) = transport([""], partialDelta: answer)
+    do {
+      _ = try await client.completeJSON(
+        systemPrompt: "Return JSON", userPrompt: "Synthetic question",
+        configuration: .default, apiKey: key)
+      Issue.record("An empty final response must not publish streamed draft text")
+    } catch let error as LLMClientError {
+      guard case .emptyFinalContent = error else {
+        Issue.record("Expected an empty-content error, got \(error)")
+        return
+      }
+    }
+    #expect(OptimizationProtocol.state.requests(for: key).count == 1)
+  }
+
+  @Test
   func completeAnswersAreNotRejectedByTheirLastChineseCharacter() throws {
     #expect(try AIFollowUpGuardrail.validatedAnswer("华为") == "华为")
     let longer = String(repeating: "完整的说明。", count: 600)
