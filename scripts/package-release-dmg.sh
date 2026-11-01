@@ -5,8 +5,8 @@ APP_NAME="${PORTFOLIX_APP_NAME:-Portfolix}"
 EXECUTABLE_NAME="${PORTFOLIX_EXECUTABLE_NAME:-Portfolix}"
 BUNDLE_ID="${PORTFOLIX_BUNDLE_ID:-app.portfolix.mac}"
 HELPER_BUNDLE_ID="${BUNDLE_ID}.PriceUpdater"
-VERSION="${PORTFOLIX_VERSION:-0.1.10}"
-BUILD_NUMBER="${PORTFOLIX_BUILD_NUMBER:-22}"
+VERSION="${PORTFOLIX_VERSION:-0.1.11}"
+BUILD_NUMBER="${PORTFOLIX_BUILD_NUMBER:-23}"
 COPYRIGHT_TEXT="${PORTFOLIX_COPYRIGHT:-Copyright © 2026 S4kur4. All rights reserved.}"
 MIN_SYSTEM_VERSION="${PORTFOLIX_MIN_SYSTEM_VERSION:-15.0}"
 SIGN_IDENTITY="${PORTFOLIX_SIGN_IDENTITY:--}"
@@ -40,6 +40,9 @@ ICON_NAME="Portfolix"
 ICON_SOURCE="$ROOT_DIR/Resources/$ICON_NAME.icon"
 BRAND_GLYPH_SOURCE="$ROOT_DIR/Resources/PortfolixBrandGlyph.svg"
 SPARKLE_FRAMEWORK_SOURCE="$ROOT_DIR/.build/release/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+if [[ ! -d "$SPARKLE_FRAMEWORK_SOURCE" ]]; then
+  SPARKLE_FRAMEWORK_SOURCE="$ROOT_DIR/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+fi
 
 if [[ ! -d "$ICON_SOURCE" ]]; then
   echo "missing app icon source: $ICON_SOURCE" >&2
