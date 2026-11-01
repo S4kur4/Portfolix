@@ -39,7 +39,7 @@ struct InvestmentCloudCard: View {
             Text(mode == .dailyProfit
                  ? localizedText("暂无今日盈亏", "No P&L for today", language: store.appLanguage)
                  : localizedText("暂无投资分布", "No investment distribution yet", language: store.appLanguage))
-                .font(PortfolixTypography.body)
+                .font(PortfolixTypography.captionEmphasis)
                 .foregroundStyle(PortfolixTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

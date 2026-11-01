@@ -1942,7 +1942,7 @@ private struct DashboardEmptyState: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .medium))
+            .font(PortfolixTypography.captionEmphasis)
             .foregroundStyle(PortfolixTheme.tertiaryText)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
