@@ -27,7 +27,7 @@ struct MCPTests {
         try initialize(server)
         let listed = try request(server, method: "tools/list")
         let tools = try #require((listed["result"] as? [String: Any])?["tools"] as? [[String: Any]])
-        #expect(tools.count == 6)
+        #expect(tools.count == 8)
         #expect(tools.allSatisfy { ($0["annotations"] as? [String: Bool])?["readOnlyHint"] == true })
         let unavailable = try call(server, name: "get_portfolio_summary")
         #expect(unavailable["isError"] as? Bool == true)
@@ -171,6 +171,14 @@ struct MCPTests {
         let firstDay = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 1)))
         try fixture.repository.replaceDailySnapshots(positions: [position], snapshotDate: firstDay)
         try fixture.repository.replaceDailySnapshots(positions: [position], snapshotDate: firstDay.addingTimeInterval(86_400))
+        try fixture.repository.migrateOpeningBalances()
+        let cash = PositionClosureMath.cashPosition(currency: .usdt, quantity: 1, name: "Schema USDT")
+        _ = try fixture.repository.recordTrade(side: .add, expected: cash, quantity: 100, price: 1, fees: 0,
+            tradeDate: .now, cashPositionID: nil, cashName: cash.name)
+        _ = try fixture.repository.recordTrade(side: .withdraw, expected: #require(fixture.repository.fetchPositions().first { $0.id == cash.id }),
+            quantity: 10, price: 1, fees: 0, tradeDate: .now, cashPositionID: nil, cashName: cash.name)
+        _ = try fixture.repository.recordTrade(side: .sell, expected: position, quantity: 10, price: 100, fees: 1,
+            tradeDate: .now, cashPositionID: nil, cashName: "Schema CNY")
         try fixture.repository.setAppSetting(key: MCPAccess.settingKey, value: "true")
         try initialize(fixture.server)
         let listing = try request(fixture.server, method: "tools/list")

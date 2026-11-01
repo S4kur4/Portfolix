@@ -92,6 +92,7 @@ struct RootView: View {
         .tint(PortfolixTheme.controlAccent)
         .sheet(item: $store.positionEditorPresentation) { presentation in
             PositionEditorSheet(presentation: presentation)
+                .id(presentation.id)
                 .environment(store)
         }
         .alert("运行提示", isPresented: persistenceErrorAlertPresented) {

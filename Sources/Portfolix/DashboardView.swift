@@ -114,7 +114,7 @@ private struct DashboardHeader: View {
             Button {
                 store.presentNewPositionEditor()
             } label: {
-                Label(localizedText("添加持仓", "Add Holding", language: store.appLanguage), systemImage: "plus")
+                Label(localizedText("添加资产", "Add Asset", language: store.appLanguage), systemImage: "plus")
             }
             .buttonStyle(PrimaryButtonStyle())
         }
@@ -1251,7 +1251,7 @@ private struct CompactPositionRow: View {
                 }
                 .buttonStyle(.plain)
                 .frame(width: 32, height: 32)
-                .accessibilityLabel(localizedText("编辑 \(position.name)", "Edit \(position.name)", language: store.appLanguage))
+                .accessibilityLabel(localizedText("添加 \(position.name)", "Add \(position.name)", language: store.appLanguage))
 
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(position.name)

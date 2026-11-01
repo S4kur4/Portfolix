@@ -3,6 +3,8 @@ import Foundation
 enum AIPortfolioDataTool: String, CaseIterable, Sendable {
   case summary = "get_portfolio_summary"
   case holdings = "list_holdings"
+  case closedHoldings = "list_closed_holdings"
+  case transactions = "list_transactions"
   case performance = "get_holding_performance"
   case constraints = "get_risk_constraints"
   case history = "get_portfolio_history"
@@ -18,14 +20,17 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       required = []
       description =
         "Read-only: current local portfolio value, cost, unrealized P&L, today's recorded performance and holding count. Use for portfolio follow-ups, including accepting an earlier offer to review holdings. Does not fetch live quotes."
-    case .holdings:
+    case .holdings, .closedHoldings, .transactions:
       properties = [
         "query": .object(["type": .string("string"), "maxLength": .number(80)]),
         "offset": Self.integer(0, 100_000), "limit": Self.integer(1, 25),
       ]
       required = []
-      description =
-        "Read-only: current holdings with asset refs, quantities, costs, market values, weights, unrealized P&L and quote dates. Optional name/code query; paginated, default 20 rows. Use next_offset until omitted_count is zero when the complete list is needed."
+      description = self == .transactions
+        ? "Read-only: opening balances, additions, sales and external cash withdrawals. Opening balances are migrated starting balances, not purchases or cash flows. External additions do not debit cash; cash-funded additions do. Cash withdrawals reduce portfolio cash, are not sales or investment losses, and have no realized P&L. Cash cannot be sold. Optional name/code query and pagination, default 20 rows. Cannot execute or modify records."
+        : self == .closedHoldings
+        ? "Read-only: sale records for assets no longer held, including current partial/full sales and legacy closures. Multiple sales can belong to one asset. Includes quantities, prices, fees, net proceeds, destination cash and realized P&L. Optional name/code query and pagination, default 20 rows. No trading or writes."
+        : "Read-only: current holdings with asset refs, quantities, costs, market values, weights, unrealized P&L and quote dates. Optional name/code query; paginated, default 20 rows. Use next_offset until omitted_count is zero when the complete list is needed."
     case .performance:
       properties = [
         "position_refs": .object([
@@ -91,7 +96,7 @@ struct AIPortfolioToolRequest: Sendable {
     else { throw AIPortfolioToolError.invalidArguments }
     let allowed: Set<String>
     switch tool {
-    case .holdings:
+    case .holdings, .closedHoldings, .transactions:
       allowed = ["query", "offset", "limit"]
       if let value = arguments["query"] {
         guard case .string(let text) = value, text.count <= 80 else {
@@ -146,6 +151,9 @@ struct AIPortfolioToolSnapshot {
   var report: AIAnalysisReport? = nil
   var history: [PortfolioSnapshot] = []
   var dailyProfit: [DailyProfitPoint] = []
+  var closures: [PositionClosureRecord] = []
+  var trades: [PositionTradeRecord] = []
+  var openings: [PositionOpeningBalanceRecord] = []
   var asOf: Date = .now
 }
 
@@ -166,10 +174,19 @@ enum AIPortfolioDataToolExecutor {
     case .summary:
       let value = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
       let cost = positions.reduce(Decimal.zero) { $0 + $1.totalCost / $1.quoteCurrency.rateFromCNY }
+      let realized = snapshot.closures.filter { !$0.isReversed }.reduce(Decimal.zero) { $0 + $1.realizedProfitCNY }
+        + snapshot.trades.filter { !$0.isReversed }.reduce(Decimal.zero) { $0 + ($1.realizedProfit ?? 0) / $1.rate }
+      let openIDs = Set(positions.map { $0.id.uuidString })
+      let closedIDs = Set(snapshot.closures.filter { !$0.isReversed }.map { $0.holding.id })
+        .union(snapshot.trades.filter { !$0.isReversed && $0.side == .sell && !openIDs.contains($0.asset.id) }.map { $0.asset.id })
       result["data"] =
         [
           "holding_count": positions.count, "total_value_cny": decimal(value),
           "total_cost_cny": decimal(cost), "unrealized_profit_cny": decimal(value - cost),
+          "realized_profit_cny": decimal(realized),
+          "transaction_count": snapshot.trades.filter { !$0.isReversed }.count + snapshot.closures.filter { !$0.isReversed }.count,
+          "opening_balance_count": snapshot.openings.filter(\.isVisible).count,
+          "closed_holding_count": closedIDs.count,
           "unrealized_profit_rate_pct": cost == 0
             ? NSNull() : decimal((value - cost) / cost * 100) as Any,
           "display_currency": snapshot.portfolioContext?.displayCurrency ?? "CNY",
@@ -217,6 +234,60 @@ enum AIPortfolioDataToolExecutor {
           "fetched_at": String(position.fetchedAt.prefix(64)),
         ] as [String: Any]
       }
+    case .transactions:
+      let filtered = PositionTransactionRow.listed(trades: snapshot.trades, closures: snapshot.closures,
+          openings: snapshot.openings, query: request.query)
+      let rows = filtered.dropFirst(min(request.offset, filtered.count)).prefix(request.limit)
+      let next = min(filtered.count, request.offset + rows.count)
+      result["matched_count"] = filtered.count
+      result["omitted_count"] = filtered.count - next
+      result["next_offset"] = next < filtered.count ? next as Any : NSNull()
+      result["data"] = rows.map { row -> [String: Any] in
+        var data: [String: Any] = ["record_id": row.id.uuidString, "position_ref": "position_\(row.assetID)",
+          "name": row.name, "symbol": row.symbol, "side": row.kind.rawValue,
+          "trade_date": row.tradeDate, "quantity": row.quantity, "currency": row.currency.rawValue,
+          "recorded_at": row.recordedAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull()]
+        data["execution_price"] = decimal(row.price)
+        data["fees"] = decimal(row.fee)
+        data["recorded_amount_quote"] = decimal(row.amount)
+        data["cash_amount"] = decimal(row.kind.hasCashFlow ? row.amount : 0)
+        data["portfolio_flow"] = row.kind == .opening ? "none" : row.kind == .add ? "external_in" : row.kind == .withdraw ? "external_out" : "internal"
+        if row.kind == .withdraw {
+          data["cash_flow_direction"] = "out"
+          data["execution_price"] = NSNull()
+        }
+        if row.opening != nil {
+          data["is_transaction"] = false
+          data["opening_balance_needs_review"] = row.needsOpeningReview
+          data["trade_date"] = NSNull()
+          if row.needsOpeningReview {
+            data["quantity"] = NSNull(); data["recorded_amount_quote"] = NSNull()
+          }
+          data["execution_price"] = NSNull()
+        }
+        data["funding_or_destination"] = row.trade?.cash?.name ?? (row.closure?.cashName ?? "external")
+        data["realized_profit_quote"] = row.profit.map { decimal($0) } as Any? ?? NSNull()
+        return data
+      }
+    case .closedHoldings:
+      let activeIDs = Set(positions.map { $0.id.uuidString })
+      let filtered = PositionTransactionRow.listed(trades: snapshot.trades, closures: snapshot.closures, query: request.query)
+        .filter { $0.kind == .sell && !activeIDs.contains($0.assetID) }
+      let rows = filtered.dropFirst(min(request.offset, filtered.count)).prefix(request.limit)
+      let nextOffset = min(filtered.count, request.offset + rows.count)
+      result["matched_count"] = filtered.count
+      result["omitted_count"] = max(0, filtered.count - nextOffset)
+      result["next_offset"] = nextOffset < filtered.count ? nextOffset as Any : NSNull()
+      result["data"] = rows.map { row in
+        ["record_id": row.id.uuidString, "position_ref": "position_\(row.assetID)",
+         "name": row.name, "symbol": row.symbol, "trade_date": row.tradeDate,
+         "currency": row.currency.rawValue, "quantity": row.quantity,
+         "execution_price": decimal(row.price), "fees": decimal(row.fee), "net_proceeds": decimal(row.amount),
+         "realized_profit_quote": row.profit.map(decimal) as Any? ?? NSNull(),
+         "cash_destination": row.trade?.cash?.name ?? row.closure?.cashName ?? "external",
+         "trade_day_profit_cny": row.closure?.dailyProfitCNY as Any? ?? NSNull()] as [String: Any]
+      }
+      result["limitation"] = "Realized P&L is net proceeds minus recorded cost; it is not the trade day's price-change P&L."
     case .performance:
       var missing: [String] = []
       result["data"] = request.positionRefs.compactMap { ref -> [String: Any]? in

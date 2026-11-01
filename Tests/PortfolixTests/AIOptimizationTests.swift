@@ -258,7 +258,7 @@ struct AIOptimizationTests {
     let store = PortfolioStore(
       positionRepository: repository, credentialStore: credentials,
       aiAgent: AIAnalysisAgent(
-        llm: client, search: OptimizationSearch(), credentialStore: credentials))
+        llm: client, search: OptimizationSearch(), credentialStore: credentials), initialLanguage: .chinese)
     store.aiConfiguration = .default
     store.searchConfiguration = .default
     store.submitAIAnalysisFollowUp("解释复利")

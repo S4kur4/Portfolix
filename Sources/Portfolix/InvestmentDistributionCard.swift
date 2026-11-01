@@ -19,9 +19,7 @@ struct InvestmentCloudCard: View {
                     )
 
                     if mode == .dailyProfit {
-                        cloud(items: InvestmentCloudEngine.dailyProfitItems(positions: store.positions) {
-                            store.todayProfitCNY(for: $0, asOf: context.date)
-                        })
+                        cloud(items: store.investmentCloudDailyProfitItems(asOf: context.date))
                     } else {
                         cloud(items: store.investmentDistributionItems.map(InvestmentCloudItem.init(distribution:)))
                     }

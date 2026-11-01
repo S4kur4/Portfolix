@@ -65,6 +65,8 @@ actor MarketDataAdapter {
             throw MarketDataAdapterError.invalidKeyword
         }
 
+        if let cash = CashAssetLookup.stablecoins(keyword: keyword).first { return [cash] }
+
         var candidates = try await native.searchAssets(keyword: keyword)
 
         var errors: [Error] = []
@@ -95,8 +97,10 @@ actor MarketDataAdapter {
 
         switch category {
         case .cash:
-            return []
+            return CashAssetLookup.search(keyword: keyword)
         case .crypto:
+            let cash = CashAssetLookup.stablecoins(keyword: keyword)
+            if !cash.isEmpty { return cash }
             return Self.deduplicated(try await okx.searchAssets(keyword: keyword)).prefix(12).map { $0 }
         case .cnStock, .bStock, .hkStock, .usStock, .fund:
             let candidates = try await native.searchAssets(keyword: keyword)
@@ -119,13 +123,30 @@ actor MarketDataAdapter {
         category != .cash
     }
 
+    static func supportsQuote(for position: Position) -> Bool {
+        let symbol = position.symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch position.category {
+        case .cash:
+            return false
+        case .crypto:
+            return symbol.range(of: #"^[A-Z0-9]{1,20}[-/][A-Z0-9]{1,20}$"#, options: .regularExpression) != nil
+        case .fund:
+            return symbol.range(of: #"^\d{6}$"#, options: .regularExpression) != nil
+        case .hkStock:
+            guard symbol.range(of: #"^\d{1,5}(\.HK)?$"#, options: .regularExpression) != nil else { return false }
+            return NativeMarketDataAdapter.eastmoneySECID(symbol: symbol, category: position.category) != nil
+        case .cnStock, .bStock, .usStock:
+            return NativeMarketDataAdapter.eastmoneySECID(symbol: symbol, category: position.category) != nil
+        }
+    }
+
     static func shouldSearchOKXAssets(keyword: String) -> Bool {
         let normalized = keyword
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .replacingOccurrences(of: "/", with: "-")
         guard !normalized.isEmpty else { return false }
-        if normalized.contains("USDT") || normalized.contains("-") {
+        if normalized.contains("USDT") || normalized.contains("USDC") || normalized.contains("-") {
             return true
         }
         return [

@@ -223,6 +223,7 @@ actor OKXClient {
     }
 
     private static func candidate(from instrument: OKXSpotInstrument) -> AssetLookupCandidate? {
+        guard instrument.baseCcy != "USDT" else { return nil }
         let currency: DisplayCurrency
         switch instrument.quoteCcy {
         case "USDT":
@@ -250,14 +251,12 @@ actor OKXClient {
     private static func candidateRank(_ candidate: AssetLookupCandidate, keyword: String) -> (Int, String) {
         let normalizedSymbol = candidate.symbol.replacingOccurrences(of: "/", with: "-")
         let rank: Int
-        if normalizedSymbol == keyword || candidate.name == keyword {
+        if normalizedSymbol == keyword {
             rank = 0
-        } else if normalizedSymbol == "\(keyword)-USDT" {
-            rank = 1
-        } else if normalizedSymbol.hasPrefix("\(keyword)-") {
-            rank = 2
+        } else if candidate.name == keyword || normalizedSymbol.hasPrefix("\(keyword)-") {
+            rank = candidate.quoteCurrency == .usdt ? 1 : 2
         } else {
-            rank = 3
+            rank = 4
         }
         return (rank, candidate.symbol)
     }

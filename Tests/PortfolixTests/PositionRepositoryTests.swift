@@ -353,6 +353,9 @@ struct PositionRepositoryTests {
             "daily_returns.json",
             "daily_asset_prices.json",
             "risk_profile.json",
+            "closed_holdings.json",
+            "trades.json",
+            "opening_balances.json",
         ]))
         let exportedText = try extractedNames
             .map { try String(contentsOf: extractedDirectory.appendingPathComponent($0), encoding: .utf8) }
@@ -442,9 +445,12 @@ struct PositionRepositoryTests {
         legacyManifest["schemaVersion"] = 2
         var legacyCounts = try #require(legacyManifest["recordCounts"] as? [String: Any])
         legacyCounts.removeValue(forKey: "riskProfiles")
+        legacyCounts.removeValue(forKey: "closedHoldings")
+        legacyCounts.removeValue(forKey: "trades")
+        legacyCounts.removeValue(forKey: "openingBalances")
         legacyManifest["recordCounts"] = legacyCounts
         var legacyFiles = try #require(legacyManifest["files"] as? [[String: Any]])
-        legacyFiles.removeAll { $0["name"] as? String == "risk_profile.json" }
+        legacyFiles.removeAll { ["risk_profile.json", "closed_holdings.json", "trades.json", "opening_balances.json"].contains($0["name"] as? String ?? "") }
         legacyManifest["files"] = legacyFiles
         try JSONSerialization.data(withJSONObject: legacyManifest, options: [.prettyPrinted, .sortedKeys])
             .write(to: legacyManifestURL, options: .atomic)
@@ -1975,6 +1981,7 @@ struct PositionRepositoryTests {
 
         #expect(candidates.count == 1)
         #expect(candidates.first?.symbol == "BTC/USDT")
+        #expect(!candidates.contains { $0.symbol == "BTC/USDC" })
         #expect(candidates.first?.upstreamSource == "OKX")
     }
 

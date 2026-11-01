@@ -373,15 +373,15 @@ private final class BackgroundPriceUpdater {
         return persisted
     }
 
-    private func replaceDailySnapshots(positions: [StoredPosition]) throws {
+    private func replaceDailySnapshots(positions _: [StoredPosition]) throws {
         let day = Self.dayString()
-        let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY }
-        let totalCost = positions.reduce(0.0) { $0 + $1.totalCostCNY }
-        let profit = totalValue - totalCost
-        let profitRate = totalCost == 0 ? 0 : profit / totalCost * 100
-
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {
+            let positions = try fetchPositions()
+            let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY }
+            let totalCost = positions.reduce(0.0) { $0 + $1.totalCostCNY }
+            let profit = totalValue - totalCost
+            let profitRate = totalCost == 0 ? 0 : profit / totalCost * 100
             let statement = try prepare(
                 """
                 INSERT INTO portfolio_snapshots (
@@ -413,6 +413,12 @@ private final class BackgroundPriceUpdater {
                         source, quote_time, freshness, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(asset_id, snapshot_date) DO UPDATE SET
+                        name = excluded.name,
+                        symbol = excluded.symbol,
+                        category = excluded.category,
+                        quote_currency = excluded.quote_currency,
+                        quantity = excluded.quantity,
+                        average_cost = excluded.average_cost,
                         latest_price = excluded.latest_price,
                         market_value_cny = excluded.market_value_cny,
                         source = excluded.source,

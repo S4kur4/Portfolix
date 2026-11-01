@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum PositionEditorField: Hashable {
@@ -5,11 +6,7 @@ private enum PositionEditorField: Hashable {
     case symbol
     case quantity
     case cost
-}
-
-private enum PositionEditorLayout {
-    static let valueFieldWidth: CGFloat = 320
-    static let valueFieldHeight: CGFloat = 28
+    case fees
 }
 
 private struct AssetLookupProviderMessage: Sendable {
@@ -56,6 +53,10 @@ struct PositionEditorSheet: View {
     @State private var selectedQuoteTime: String?
     @State private var isSaving = false
     @State private var didAttemptSave = false
+    @State private var purchaseFees = ""
+    @State private var purchaseCashID = ""
+    @State private var purchaseAssetID = ""
+    @State private var tradeID = UUID()
     @FocusState private var focusedField: PositionEditorField?
 
     init(presentation: PositionEditorPresentation) {
@@ -64,23 +65,20 @@ struct PositionEditorSheet: View {
         _name = State(initialValue: position?.name ?? "")
         _symbol = State(initialValue: position?.symbol ?? "")
         _category = State(initialValue: position?.category ?? .cnStock)
-        _quantity = State(initialValue: position.map { decimalString($0.quantity) } ?? "")
-        _costValue = State(initialValue: position.map { decimalString($0.averageCost) } ?? "")
+        _quantity = State(initialValue: "")
+        _costValue = State(initialValue: position.map { decimalString($0.latestPrice) } ?? "")
         _costMode = State(initialValue: .averageCost)
         _costCurrency = State(initialValue: position?.quoteCurrency ?? .cny)
         _latestPrice = State(initialValue: position.map { decimalString($0.latestPrice) } ?? "")
         _validationMessage = State(initialValue: nil)
         _isManualAssetEntry = State(initialValue: position?.source == "手工价格" || position == nil)
         _selectedQuoteTime = State(initialValue: position?.quoteTime)
+        _purchaseAssetID = State(initialValue: position?.id.uuidString ?? "")
     }
 
-    private var isEditing: Bool {
-        presentation.position != nil
-    }
-
-    private var locksAssetIdentity: Bool {
-        isEditing
-    }
+    private var selectedPosition: Position? { store.positions.first { $0.id.uuidString == purchaseAssetID } }
+    private var locksAssetIdentity: Bool { !purchaseAssetID.isEmpty }
+    private var purchaseCashOptions: [Position] { store.positions.filter { $0.category == .cash && $0.quoteCurrency == costCurrency } }
 
     private var language: AppLanguage {
         store.appLanguage
@@ -90,20 +88,21 @@ struct PositionEditorSheet: View {
         localizedText(chinese, english, language: language)
     }
 
-    private func placeholderColor(for field: PositionEditorField) -> Color {
-        shouldHighlight(field) ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
-    }
-
-    private func inputColor(for field: PositionEditorField) -> Color {
-        shouldHighlight(field) ? PortfolixTheme.danger : PortfolixTheme.primaryText
-    }
-
-    private func shouldShowPlaceholder(for field: PositionEditorField, text: String) -> Bool {
-        focusedField != field && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var usesFixedCashPricing: Bool {
         category == .cash
+    }
+
+    private var additionCopy: AssetAdditionCopy {
+        AssetAdditionCopy(isExistingAsset: locksAssetIdentity, isCash: usesFixedCashPricing, language: language)
+    }
+
+    private var footerNotices: [SheetNotice] {
+        if isSaving { return [.init(message: sheetText("正在添加资产", "Adding asset"), kind: .progress)] }
+        guard !locksAssetIdentity else { return [] }
+        if isSearchingAssets || isResolvingAsset {
+            return [.init(message: isResolvingAsset ? sheetText("正在获取最新价格", "Fetching latest price") : sheetText("正在查询数据源", "Searching data sources"), kind: .progress)]
+        }
+        return assetLookupMessage.map { [.init(message: $0, kind: .information)] } ?? []
     }
 
     private func editorTextField(
@@ -114,14 +113,7 @@ struct PositionEditorSheet: View {
         isLocked: Bool = false
     ) -> some View {
         LabeledContent {
-            ZStack(alignment: .trailing) {
-                if !isLocked, shouldShowPlaceholder(for: field, text: text.wrappedValue) {
-                    Text(placeholder)
-                        .font(PortfolixTypography.body)
-                        .foregroundStyle(placeholderColor(for: field))
-                        .lineLimit(1)
-                        .allowsHitTesting(false)
-                }
+            Group {
                 if isLocked {
                     Text(text.wrappedValue)
                         .font(PortfolixTypography.body)
@@ -130,36 +122,26 @@ struct PositionEditorSheet: View {
                         .lineLimit(1)
                         .frame(
                             maxWidth: .infinity,
-                            minHeight: PositionEditorLayout.valueFieldHeight,
+                            minHeight: AssetEntryLayout.valueFieldHeight,
                             alignment: .trailing
                         )
                 } else {
-                    TextField("", text: text)
-                        .textFieldStyle(.plain)
-                        .font(PortfolixTypography.body)
-                        .monospacedDigit()
-                        .multilineTextAlignment(.trailing)
-                        .foregroundStyle(inputColor(for: field))
-                        .focused($focusedField, equals: field)
-                        .frame(height: PositionEditorLayout.valueFieldHeight, alignment: .center)
-                        .holdingVoiceInput(
-                            text: text, isFocused: focusedField == field,
-                            numeric: field == .quantity || field == .cost,
-                            language: language,
-                            appearance: .waveformOnly
-                        )
+                    AssetEntryTextField(title: title, text: text, field: field, focus: $focusedField,
+                        placeholder: placeholder, language: language,
+                        numeric: field == .quantity || field == .cost || field == .fees,
+                        isInvalid: shouldHighlight(field))
                 }
             }
             .frame(
-                width: PositionEditorLayout.valueFieldWidth,
-                height: PositionEditorLayout.valueFieldHeight,
+                width: AssetEntryLayout.valueFieldWidth,
+                height: AssetEntryLayout.valueFieldHeight,
                 alignment: .trailing
             )
         } label: {
-            EditorFieldLabel(
+            AssetEntryFieldLabel(
                 title: title,
                 isInvalid: shouldHighlight(field),
-                showsRequiredIndicator: !isLocked
+                showsRequiredIndicator: !isLocked && field != .fees
             )
         }
     }
@@ -167,13 +149,38 @@ struct PositionEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
-                title: isEditing ? sheetText("编辑持仓", "Edit Holding") : sheetText("添加持仓", "Add Holding"),
+                title: sheetText("添加资产", "Add Asset"),
                 symbol: "square.and.pencil"
             )
 
             Divider().overlay(PortfolixTheme.border)
 
             Form {
+                LabeledContent(sheetText("资产", "Asset")) {
+                    PortfolixGlassMenuPicker(title: sheetText("资产", "Asset"), selection: $purchaseAssetID,
+                        options: [""] + store.positions.map { $0.id.uuidString },
+                        optionTitle: { id in
+                            store.positions.first { $0.id.uuidString == id }?.name
+                                ?? sheetText("新资产", "New Asset")
+                        })
+                }
+                .onChange(of: purchaseAssetID) { _, value in
+                    assetLookupTask?.cancel()
+                    assetLookupGeneration += 1
+                    assetCandidates = []
+                    selectedAssetCandidate = nil
+                    let position = store.positions.first { $0.id.uuidString == value }
+                    name = position?.name ?? ""; symbol = position?.symbol ?? ""
+                    category = position?.category ?? .cnStock; costCurrency = position?.quoteCurrency ?? .cny
+                    costValue = position.map { decimalString($0.latestPrice) } ?? ""
+                    latestPrice = costValue; quantity = ""; costMode = .averageCost
+                    selectedQuoteTime = position?.quoteTime
+                    isManualAssetEntry = position?.source == "手工价格" || position == nil
+                    purchaseCashID = ""
+                    purchaseFees = ""
+                    validationMessage = nil
+                    didAttemptSave = false
+                }
                 Section {
                     LabeledContent(sheetText("资产类别", "Asset Type")) {
                         PortfolixGlassMenuPicker(
@@ -229,16 +236,6 @@ struct PositionEditorSheet: View {
                             }
                         }
 
-                    if !locksAssetIdentity, isSearchingAssets || isResolvingAsset {
-                        HStack(spacing: PortfolixSpacing.sm) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text(isResolvingAsset ? sheetText("正在获取最新价格", "Fetching latest price") : sheetText("正在查询数据源", "Searching data sources"))
-                                .font(.system(size: 11))
-                                .foregroundStyle(PortfolixTheme.secondaryText)
-                        }
-                    }
-
                     if !locksAssetIdentity, !assetCandidates.isEmpty {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                             Text(sheetText("数据候选", "Data Candidates"))
@@ -254,45 +251,42 @@ struct PositionEditorSheet: View {
                         .padding(.vertical, PortfolixSpacing.xs)
                     }
 
-                    if !locksAssetIdentity, let assetLookupMessage {
-                        Text(assetLookupMessage)
-                            .font(.system(size: 10))
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
-                    }
                 }
+                .accessibilityElement(children: .contain)
 
                 editorTextField(
-                    title: sheetText("当前份额", "Current Shares"),
+                    title: additionCopy.quantityTitle,
                     text: $quantity,
                     field: .quantity,
-                    placeholder: sheetText("填写当前持有份额", "Enter current shares")
+                    placeholder: additionCopy.quantityPlaceholder
                 )
                 .onChange(of: quantity) { _, _ in
                     validationMessage = nil
+                    synchronizePurchaseReference()
                 }
 
-                LabeledContent(sheetText("成本录入方式", "Cost Input Method")) {
-                    PortfolixGlassSegmentedPicker(
-                        title: sheetText("成本录入方式", "Cost Input Method"),
-                        selection: $costMode,
-                        options: CostEntryMode.allCases,
-                        optionTitle: { $0.title(language: language) },
-                        width: PositionEditorLayout.valueFieldWidth
-                    )
-                }
-                .disabled(usesFixedCashPricing)
+                if !usesFixedCashPricing {
+                    LabeledContent(sheetText("成本录入方式", "Cost Input Method")) {
+                        PortfolixGlassSegmentedPicker(
+                            title: sheetText("成本录入方式", "Cost Input Method"),
+                            selection: $costMode,
+                            options: CostEntryMode.allCases,
+                            optionTitle: { $0 == .totalCost ? sheetText("总成本", "Total Cost") : sheetText("成本价", "Unit Cost") },
+                            width: AssetEntryLayout.valueFieldWidth
+                        )
+                    }
 
-                editorTextField(
-                    title: costMode.title(language: language),
+                    editorTextField(
+                    title: additionCopy.costTitle(mode: costMode),
                     text: $costValue,
                     field: .cost,
-                    placeholder: costMode == .totalCost
-                        ? sheetText("填写持仓总成本", "Enter total holding cost")
-                        : sheetText("填写每份成本价", "Enter cost per share"),
+                    placeholder: additionCopy.costPlaceholder(mode: costMode),
                     isLocked: usesFixedCashPricing
-                )
-                .onChange(of: costValue) { _, _ in
-                    validationMessage = nil
+                    )
+                    .onChange(of: costValue) { _, _ in
+                        validationMessage = nil
+                        synchronizePurchaseReference()
+                    }
                 }
 
                 LabeledContent(sheetText("计价与成本币种", "Price and Cost Currency")) {
@@ -301,82 +295,65 @@ struct PositionEditorSheet: View {
                         selection: $costCurrency,
                         options: DisplayCurrency.allCases,
                         optionTitle: { $0.rawValue },
-                        width: PositionEditorLayout.valueFieldWidth
+                        width: AssetEntryLayout.valueFieldWidth
                     )
                 }
                 .disabled(locksAssetIdentity || !isManualAssetEntry)
 
-                LabeledContent(sheetText("当前价格", "Current Price")) {
-                    Text(currentPriceText)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
-
-                if hasPriceMetadata {
-                    LabeledContent(sheetText("价格日期", "Price Date")) {
-                        RelativeTimeText { now in
-                            priceMetadataText(now: now) ?? ""
+                    Section {
+                        if !usesFixedCashPricing {
+                            editorTextField(title: sheetText("手续费", "Fees"), text: $purchaseFees, field: .fees,
+                                placeholder: sheetText("选填，默认为 0", "Optional, defaults to 0"))
+                            LabeledContent(sheetText("资金来源", "Funding Source")) {
+                                PortfolixGlassMenuPicker(title: sheetText("资金来源", "Funding Source"), selection: $purchaseCashID,
+                                    options: [""] + purchaseCashOptions.map { $0.id.uuidString },
+                                    optionTitle: { id in purchaseCashOptions.first { $0.id.uuidString == id }?.name ?? additionCopy.externalFundsTitle })
+                            }
                         }
-                            .foregroundStyle(PortfolixTheme.secondaryText)
-                            .lineLimit(1)
+                        LabeledContent(additionCopy.resultingQuantityTitle) {
+                            let total = (selectedPosition?.quantity ?? 0) + (decimalValue(quantity) ?? 0)
+                            Text(usesFixedCashPricing ? formatMoney(total, currency: costCurrency) : decimalString(total)).monospacedDigit()
+                        }
+                        if !usesFixedCashPricing {
+                            LabeledContent(additionCopy.totalCostTitle) {
+                                let gross = costMode == .totalCost ? (decimalValue(costValue) ?? 0) : (decimalValue(quantity) ?? 0) * (decimalValue(costValue) ?? 0)
+                                Text(formatMoney(PositionClosureMath.rounded(gross, currency: costCurrency) + (PositionClosureMath.decimal(purchaseFees) ?? 0), currency: costCurrency)).monospacedDigit()
+                            }
+                        }
                     }
-                }
+                    .accessibilityElement(children: .contain)
 
-                LabeledContent(sheetText("持有金额", "Holding Amount")) {
-                    Text(holdingAmountText)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
-                        .monospacedDigit()
-                }
-
-                if quantityChanged {
-                    Section {
-                        EditorNoticeRow(
-                            symbol: "exclamationmark.triangle.fill",
-                            title: costChangeReminderText,
-                            tint: PortfolixTheme.amber,
-                            titleColor: PortfolixTheme.amber
-                        )
-                    }
-                    .listRowBackground(PortfolixTheme.panel)
-                    .listRowSeparator(.hidden)
-                }
-
-                if let validationMessage {
-                    Section {
-                        EditorNoticeRow(
-                            symbol: "exclamationmark.circle.fill",
-                            title: validationMessage,
-                            tint: PortfolixTheme.danger,
-                            titleColor: PortfolixTheme.danger
-                        )
-                    }
-                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 36)
+            .scrollIndicators(.never)
+            .environment(\.defaultMinListRowHeight, AssetEntryLayout.minimumRowHeight)
+            .disabled(isSaving)
             .onChange(of: costMode) { oldMode, newMode in
                 convertCostEntry(from: oldMode, to: newMode)
             }
             .onDisappear {
                 assetLookupTask?.cancel()
             }
+            .onAppear { if usesFixedCashPricing { applyFixedCashPricing() } }
+            .onChange(of: costCurrency) { _, _ in purchaseCashID = "" }
+            .onChange(of: purchaseCashID) { _, _ in validationMessage = nil }
+            .onChange(of: purchaseFees) { _, _ in validationMessage = nil }
 
             Divider().overlay(PortfolixTheme.border)
 
-            HStack(spacing: PortfolixSpacing.sm) {
-                Spacer()
-
+            SheetActionFooter(errorMessage: validationMessage, notices: footerNotices) {
                 Button(sheetText("取消", "Cancel")) {
                     dismiss()
                 }
                 .buttonStyle(QuietButtonStyle())
                 .keyboardShortcut(.cancelAction)
+                .disabled(isSaving)
 
-                Button(isEditing ? sheetText("保存修改", "Save Changes") : sheetText("添加持仓", "Add Holding")) {
+                Button(sheetText("确认添加", "Add Asset")) {
+                    let window = NSApp.keyWindow
                     Task {
-                        if await saveChanges() {
+                        if await saveChanges(committing: window) {
                             dismiss()
                         }
                     }
@@ -385,9 +362,8 @@ struct PositionEditorSheet: View {
                 .disabled(isSaving)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(PortfolixSpacing.xl)
         }
-        .frame(width: 560, height: 650)
+        .frame(width: 620, height: usesFixedCashPricing ? 560 : 720)
         .background {
             PortfolixSheetBackground()
         }
@@ -407,25 +383,25 @@ struct PositionEditorSheet: View {
         if !usesFixedCashPricing, decimalValue(costValue).map({ $0 >= 0 }) != true {
             fields.insert(.cost)
         }
+        if !usesFixedCashPricing, PositionTradeInput.fees(purchaseFees).map({ $0 >= 0 }) != true {
+            fields.insert(.fees)
+        }
         return fields
     }
 
+    private func synchronizePurchaseReference() {
+        guard isManualAssetEntry, !locksAssetIdentity,
+              let entered = PositionClosureMath.decimal(costValue), entered > 0 else { return }
+        if costMode == .averageCost { latestPrice = decimalString(entered) }
+        else if let units = PositionClosureMath.decimal(quantity), units > 0 { latestPrice = decimalString(entered / units) }
+    }
+
     private var firstInvalidField: PositionEditorField? {
-        [.name, .symbol, .quantity, .cost].first { invalidRequiredFields.contains($0) }
+        [.name, .symbol, .quantity, .cost, .fees].first { invalidRequiredFields.contains($0) }
     }
 
     private func shouldHighlight(_ field: PositionEditorField) -> Bool {
         didAttemptSave && invalidRequiredFields.contains(field)
-    }
-
-    private var quantityChanged: Bool {
-        guard
-            let position = presentation.position,
-            let enteredQuantity = decimalValue(quantity)
-        else {
-            return false
-        }
-        return enteredQuantity != position.quantity
     }
 
     private var canSave: Bool {
@@ -467,15 +443,15 @@ struct PositionEditorSheet: View {
         return formatMoney(quantity * latestPrice, currency: costCurrency)
     }
 
-    private var costChangeReminderText: String {
-        let costLabel = costMode.title(language: language)
-        return sheetText(
-            "份额变化通常会影响成本，请确认上方的\(costLabel)是否仍然准确",
-            "Share changes usually affect cost. Please confirm the \(costLabel) above is still accurate"
-        )
-    }
-
-    private func saveChanges() async -> Bool {
+    private func saveChanges(committing window: NSWindow?) async -> Bool {
+        guard !isSaving else { return false }
+        isSaving = true
+        defer { isSaving = false }
+        focusedField = nil
+        guard await SheetEditingCommit.commit(in: window) else {
+            validationMessage = sheetText("无法结束当前输入，请检查后重试。", "Unable to finish editing. Check the current field and try again.")
+            return false
+        }
         if usesFixedCashPricing {
             applyFixedCashPricing()
         }
@@ -485,7 +461,14 @@ struct PositionEditorSheet: View {
             let enteredCost = decimalValue(costValue)
         else {
             didAttemptSave = true
-            validationMessage = nil
+            switch firstInvalidField {
+            case .name: validationMessage = sheetText("请填写资产名称。", "Enter an asset name.")
+            case .symbol: validationMessage = sheetText("请填写资产代码。", "Enter an asset code.")
+            case .quantity: validationMessage = sheetText("\(additionCopy.quantityTitle)必须大于 0。", "Enter a quantity or amount greater than 0.")
+            case .cost: validationMessage = sheetText("成本须为 0 或正数。", "Cost must be zero or positive.")
+            case .fees: validationMessage = sheetText("手续费须为 0 或正数。", "Fees must be zero or positive.")
+            case nil: validationMessage = sheetText("资产类别或币种与数据源不一致，请重新选择资产。", "The asset type or currency does not match its data source. Select the asset again.")
+            }
             focusedField = firstInvalidField
             return false
         }
@@ -504,10 +487,9 @@ struct PositionEditorSheet: View {
         }
 
         didAttemptSave = false
+        let submittedPosition = selectedPosition
+        let submittedAssetID = purchaseAssetID
         let averageCost = costMode == .totalCost ? enteredCost / quantity : enteredCost
-        isSaving = true
-        defer { isSaving = false }
-
         let refreshedQuote: AssetLookupCandidate?
         do {
             refreshedQuote = try await latestQuoteForSaveIfNeeded(enteredPrice: latestPrice)
@@ -516,10 +498,10 @@ struct PositionEditorSheet: View {
             return false
         }
 
-        let finalName = presentation.position?.name ?? refreshedQuote?.name ?? name
-        let finalSymbol = presentation.position?.symbol ?? refreshedQuote?.symbol ?? symbol
-        let finalCategory = presentation.position?.category ?? refreshedQuote?.category ?? category
-        let finalCostCurrency = presentation.position?.quoteCurrency ?? refreshedQuote?.quoteCurrency ?? costCurrency
+        let finalName = submittedPosition?.name ?? refreshedQuote?.name ?? name
+        let finalSymbol = submittedPosition?.symbol ?? refreshedQuote?.symbol ?? symbol
+        let finalCategory = submittedPosition?.category ?? refreshedQuote?.category ?? category
+        let finalCostCurrency = submittedPosition?.quoteCurrency ?? refreshedQuote?.quoteCurrency ?? costCurrency
         let finalLatestPrice = refreshedQuote?.latestPrice ?? latestPrice
         let quoteMetadata = quoteMetadata(for: finalLatestPrice, refreshedQuote: refreshedQuote)
 
@@ -535,44 +517,36 @@ struct PositionEditorSheet: View {
         }
 
         do {
-            if let position = presentation.position {
-                try store.updatePosition(
-                    id: position.id,
-                    name: finalName,
-                    symbol: finalSymbol,
-                    category: finalCategory,
-                    quantity: quantity,
-                    averageCost: averageCost,
-                    quoteCurrency: finalCostCurrency,
-                    latestPrice: finalLatestPrice,
-                    source: quoteMetadata.source,
-                    quoteTime: quoteMetadata.quoteTime,
-                    freshness: quoteMetadata.freshness
-                )
-            } else {
-                try store.addPosition(
-                    name: finalName,
-                    symbol: finalSymbol,
-                    category: finalCategory,
-                    quantity: quantity,
-                    averageCost: averageCost,
-                    quoteCurrency: finalCostCurrency,
-                    latestPrice: finalLatestPrice,
-                    source: quoteMetadata.source,
-                    quoteTime: quoteMetadata.quoteTime,
-                    freshness: quoteMetadata.freshness
-                )
+            guard submittedAssetID == purchaseAssetID else { throw PositionTradeError.changed }
+            guard let fees = PositionTradeInput.fees(purchaseFees), fees >= 0 else { throw PositionTradeError.invalidInput }
+            if locksAssetIdentity, submittedPosition == nil { throw PositionTradeError.changed }
+            if !locksAssetIdentity, store.positions.contains(where: {
+                $0.symbol.caseInsensitiveCompare(finalSymbol) == .orderedSame && $0.category == finalCategory
+            }) {
+                throw PositionValidationError.duplicateAsset
             }
+            let cashID = usesFixedCashPricing ? nil : UUID(uuidString: purchaseCashID)
+            if !usesFixedCashPricing, !purchaseCashID.isEmpty, cashID == nil { throw PositionTradeError.invalidInput }
+            try PositionInputValidator.validateProviderIdentity(category: finalCategory, quoteCurrency: finalCostCurrency, source: quoteMetadata.source)
+            let asset = submittedPosition ?? Position(name: finalName.trimmingCharacters(in: .whitespacesAndNewlines),
+                symbol: finalSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), category: finalCategory,
+                quoteCurrency: finalCostCurrency, quantity: quantity, averageCost: averageCost,
+                latestPrice: finalLatestPrice, marketValueCNY: quantity * finalLatestPrice / finalCostCurrency.rateFromCNY,
+                profitRate: 0, weeklyTrend: Array(repeating: finalLatestPrice.doubleValue, count: 7),
+                source: quoteMetadata.source, quoteTime: quoteMetadata.quoteTime, freshness: quoteMetadata.freshness)
+            try store.recordTrade(id: tradeID, side: cashID == nil ? .add : .buy, position: asset, quantity: quantity,
+                price: usesFixedCashPricing ? 1 : averageCost, fees: usesFixedCashPricing ? 0 : fees,
+                tradeDate: .now, cashPositionID: cashID)
             return true
         } catch {
-            validationMessage = error.localizedDescription
+            validationMessage = (error as? PositionTradeError)?.message(language: language) ?? error.localizedDescription
             return false
         }
     }
 
     private func latestQuoteForSaveIfNeeded(enteredPrice: Decimal) async throws -> AssetLookupCandidate? {
         guard
-            let position = presentation.position,
+            let position = selectedPosition,
             !isManualAssetEntry,
             selectedAssetCandidate == nil,
             enteredPrice == position.latestPrice
@@ -628,7 +602,7 @@ struct PositionEditorSheet: View {
         }
 
         if
-            let position = presentation.position,
+            let position = selectedPosition,
             position.latestPrice == enteredPrice
         {
             return (position.source, position.quoteTime, position.freshness)
@@ -658,7 +632,7 @@ struct PositionEditorSheet: View {
     }
 
     private func handleCategoryChange() {
-        guard isManualAssetEntry else { return }
+        guard isManualAssetEntry, !locksAssetIdentity else { return }
         validationMessage = nil
         selectedAssetCandidate = nil
         selectedQuoteTime = nil
@@ -716,13 +690,14 @@ struct PositionEditorSheet: View {
             try? await Task.sleep(for: .milliseconds(280))
             guard !Task.isCancelled else { return }
 
-            let localCandidates = searchCategory == .cash ? CashAssetLookup.search(keyword: query) : []
+            let localCandidates = searchCategory == .cash ? CashAssetLookup.search(keyword: query)
+                : searchCategory == .crypto ? CashAssetLookup.stablecoins(keyword: query) : []
             var candidates = Self.filteredLookupCandidates(localCandidates, category: searchCategory)
             assetCandidates = candidates
             if !candidates.isEmpty || searchCategory == .cash {
                 isSearchingAssets = false
             }
-            if searchCategory == .cash {
+            if searchCategory == .cash || !candidates.isEmpty {
                 assetLookupMessage = candidates.isEmpty ? emptyMessage : nil
                 return
             }
@@ -853,6 +828,14 @@ struct PositionEditorSheet: View {
 }
 
 enum CashAssetLookup {
+    static func stablecoins(keyword: String) -> [AssetLookupCandidate] {
+        let keyword = normalizedCashKeyword(keyword)
+        return cashAssets.filter { entry in
+            entry.candidate.symbol == "USDT"
+                && (entry.aliases + [entry.candidate.name, entry.candidate.symbol]).contains { normalizedCashKeyword($0) == keyword }
+        }.map(\.candidate)
+    }
+
     static func search(keyword: String) -> [AssetLookupCandidate] {
         let normalizedKeyword = normalizedCashKeyword(keyword)
         return cashAssets.compactMap { entry in
@@ -927,7 +910,9 @@ private extension PositionEditorSheet {
     }
 
     static func filteredLookupCandidates(_ candidates: [AssetLookupCandidate], category: AssetCategory) -> [AssetLookupCandidate] {
-        Array(deduplicated(candidates.filter { $0.category == category }).prefix(10))
+        Array(deduplicated(candidates.filter {
+            $0.category == category || (category == .crypto && $0.category == .cash && $0.symbol == "USDT")
+        }).prefix(10))
     }
 
     var emptySearchMessage: String {
@@ -971,7 +956,7 @@ private extension PositionEditorSheet {
     }
 
     func priceMetadataText(now: Date) -> String? {
-        if let position = presentation.position, selectedAssetCandidate == nil {
+        if let position = selectedPosition, selectedAssetCandidate == nil {
             return "\(position.priceDateText(language: language)) · \(position.relativeUpdateText(now: now, language: language))"
         }
         guard let selectedAssetCandidate else {
@@ -999,58 +984,6 @@ private extension PositionEditorSheet {
             return preview.priceDateText(language: language)
         }
         return sheetText("价格日期待获取", "Price date pending")
-    }
-}
-
-private struct EditorFieldLabel: View {
-    let title: String
-    let isInvalid: Bool
-    var showsRequiredIndicator = true
-
-    var body: some View {
-        HStack(spacing: PortfolixSpacing.xs) {
-            Text(title)
-            if showsRequiredIndicator {
-                Text("·")
-                    .font(.system(size: 22, weight: .heavy))
-                    .baselineOffset(1)
-                    .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-}
-
-private struct EditorNoticeRow: View {
-    let symbol: String
-    let title: String
-    var message: String?
-    let tint: Color
-    let titleColor: Color
-
-    var body: some View {
-        HStack(alignment: .top, spacing: PortfolixSpacing.md) {
-            Image(systemName: symbol)
-                .foregroundStyle(tint)
-                .frame(width: 18, alignment: .center)
-
-            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(titleColor)
-                    .lineLimit(2)
-
-                if let message {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundStyle(PortfolixTheme.secondaryText)
-                        .lineLimit(2)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, PortfolixSpacing.xs)
     }
 }
 
@@ -1105,10 +1038,10 @@ private func decimalString(_ value: Decimal) -> String {
 }
 
 private func decimalValue(_ value: String) -> Decimal? {
-    Decimal(string: value.trimmingCharacters(in: .whitespacesAndNewlines))
+    PositionClosureMath.decimal(value)
 }
 
-private enum CostEntryMode: String, CaseIterable, Identifiable {
+enum CostEntryMode: String, CaseIterable, Identifiable {
     case totalCost
     case averageCost
 

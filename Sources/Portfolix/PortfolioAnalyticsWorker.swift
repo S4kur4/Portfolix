@@ -4,6 +4,7 @@ struct PortfolioPersistedState: Sendable {
     let positions: [Position]
     let snapshots: [PortfolioSnapshot]
     let dailyProfitHistory: [DailyProfitPoint]
+    var tradeProfitAdjustments: [String: [String: Decimal]] = [:]
 }
 
 actor PortfolioAnalyticsWorker {
@@ -76,7 +77,8 @@ actor PortfolioAnalyticsWorker {
         return PortfolioPersistedState(
             positions: try repository.fetchPositions(),
             snapshots: try repository.fetchPortfolioSnapshots(),
-            dailyProfitHistory: try repository.fetchDailyProfitPoints(through: snapshotDate)
+            dailyProfitHistory: try repository.fetchDailyProfitPoints(through: snapshotDate),
+            tradeProfitAdjustments: try repository.tradeDailyProfitAdjustments(through: snapshotDate)
         )
     }
 

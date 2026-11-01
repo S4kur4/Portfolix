@@ -91,17 +91,19 @@ claude mcp add --transport stdio --scope user portfolix -- '/Applications/Portfo
 | 工具 | 返回数据 | 参数 |
 | --- | --- | --- |
 | `get_data_status` | 本机日期、时区、已保存历史起止日期与记录数、最近行情获取时间 | 无 |
-| `get_portfolio_summary` | 最近保存的组合快照、持仓数量 | 无 |
+| `get_portfolio_summary` | 最近保存的组合快照、持仓数量、已实现盈亏及期初／交易记录数 | 无 |
 | `list_holdings` | 资产名称、代码、类别、份额、成本及缓存价格、价格时间与新鲜度 | `query` 可选，名称/代码的字面子串，最多 100 字符；`limit` 默认 50、最多 100；`offset` 默认 0 |
+| `list_transactions` | 未撤销的期初持仓、增持、卖出和现金转出记录，含记录时间、资金流向及已实现盈亏 | 同 `list_holdings` |
+| `list_closed_holdings` | 已不再持有资产的卖出记录，兼容旧版清仓；同一资产可能有多笔卖出 | 同 `list_holdings` |
 | `get_daily_profit` | 与 App 日历相同口径的每日人民币盈亏 | `start_date`、`end_date` |
 | `get_portfolio_history` | 历史组合市值、总成本、持仓收益及收益率 | `start_date`、`end_date` |
 | `get_asset_price_history` | 指定资产的历史价格、份额与人民币市值 | `asset_id`、`start_date`、`end_date` |
 
-日期使用 `YYYY-MM-DD`，包含开始和结束日期，单次范围最多 366 天。资产 ID 从 `list_holdings` 获取。分页返回 `next_offset`，为 `null` 时结束；翻页期间修改持仓可能改变分页位置，需要重新读取。
+日期使用 `YYYY-MM-DD`，包含开始和结束日期，单次范围最多 366 天。资产 ID 从 `list_holdings` 或记录查询获取。分页返回 `next_offset`，为 `null` 时结束；翻页期间修改持仓或记录可能改变分页位置，需要重新读取。
 
 建议先调用 `get_data_status` 确定日期范围，再查询汇总或明细。`read_at` 是 UTC 查询时间；`local_date`、`time_zone` 表示当前设备日期和时区，历史日期是记录时保存的日历日期，不因当前时区重新换算。
 
-金额、份额和数据库中的计数使用十进制字符串，并明确币种；`profit_rate` 使用百分数（`10` 表示 10%）。分页偏移是整数。组合汇总是带日期的已保存快照，不冒充实时估值。历史缺失不补零。每日盈亏按「人民币单位市值相对上一条有效记录的变化 × 当前份额」汇总，包含汇率变化，不等同于经过出入金调整的账户实际收益。
+金额、份额和数据库中的计数使用十进制字符串，并明确币种；`profit_rate` 使用百分数（`10` 表示 10%）。分页偏移是整数。组合汇总是带日期的已保存快照，不冒充实时估值。历史缺失不补零。每日盈亏按「人民币单位市值相对上一条有效记录的变化 × 当前份额」并结合交易时点及手续费调整，包含汇率变化，不等同于时间加权账户收益。期初持仓不是买入或现金流，现金转出不是投资亏损，已实现盈亏仅汇总未撤销卖出记录。
 
 ## 安全边界
 

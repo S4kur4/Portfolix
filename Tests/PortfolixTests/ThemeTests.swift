@@ -702,6 +702,20 @@ struct ThemeTests {
     }
 
     @Test
+    func fixedCurrencyControlsKeepTheirOriginalDimensions() {
+        #expect(DisplayCurrency.allCases == [.cny, .hkd, .usd, .usdt])
+        for width: CGFloat in [240, 270] {
+            for scheme: ColorScheme in [.light, .dark] {
+                let host = NSHostingView(rootView: PortfolixGlassSegmentedPicker(
+                    title: "Display Currency", selection: .constant(DisplayCurrency.cny), options: DisplayCurrency.allCases,
+                    optionTitle: { $0.rawValue }, width: width, height: PortfolixLayout.positionsToolbarControlHeight
+                ).environment(\.colorScheme, scheme))
+                #expect(host.fittingSize == CGSize(width: width, height: PortfolixLayout.positionsToolbarControlHeight))
+            }
+        }
+    }
+
+    @Test
     func dashboardControlsHaveTheSameFixedHeight() {
         let segmented = NSHostingView(rootView: PortfolixGlassSegmentedPicker(
             title: "Currency",

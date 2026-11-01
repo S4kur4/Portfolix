@@ -88,6 +88,7 @@ enum DisplayCurrency: String, CaseIterable, Identifiable, Sendable {
         case .usdt: PortfolixTheme.amber
         }
     }
+
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
@@ -860,12 +861,18 @@ final class PortfolioStore {
         didSet { rebuildVisibleSnapshots() }
     }
     var dailyProfitHistory: [DailyProfitPoint]
+    private(set) var positionClosures: [PositionClosureRecord] = []
+    private(set) var positionTrades: [PositionTradeRecord] = []
+    private(set) var positionOpeningBalances: [PositionOpeningBalanceRecord] = []
+    private var tradeProfitByDate: [String: [String: Decimal]] = [:]
+    @ObservationIgnored private var positionClosureRevision = 0
     private var derivedMetrics = PortfolioDerivedMetrics.empty
     private var visibleSnapshotCache: [PortfolioSnapshot] = []
     private let positionRepository: PositionRepository?
     private let analyticsWorker: PortfolioAnalyticsWorker?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
+    private let usesLegacyAIReportCache: Bool
     @ObservationIgnored private var deepSeekModelCatalogRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var loginItemConfigurationTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundPriceUpdateObservation: BackgroundPriceUpdateObservation?
@@ -978,15 +985,17 @@ final class PortfolioStore {
     init(
         positionRepository: PositionRepository? = nil,
         credentialStore: ProviderCredentialStoring? = nil,
-        aiAgent: AIAnalysisAgent? = nil
+        aiAgent: AIAnalysisAgent? = nil,
+        initialLanguage: AppLanguage? = nil
     ) {
+        usesLegacyAIReportCache = positionRepository == nil
         let managesSystemBackgroundUpdates = positionRepository == nil && !Self.shouldSkipLaunchRefresh
         backgroundUpdatesEnabled = managesSystemBackgroundUpdates
             ? UserDefaults.standard.bool(forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             : false
         automaticPriceUpdateFrequency = Self.savedAutomaticPriceUpdateFrequency()
         automaticPriceUpdateDailyTimeMinutes = Self.savedDailyUpdateTimeMinutes()
-        appLanguage = Self.savedAppLanguage()
+        appLanguage = initialLanguage ?? Self.savedAppLanguage()
         riskProfileUpdatedAt = Self.savedRiskProfileUpdatedAt()
         let savedChatRetentionPeriod = Self.savedAIChatRetentionPeriod()
         aiChatRetentionPeriod = savedChatRetentionPeriod
@@ -996,9 +1005,14 @@ final class PortfolioStore {
         var loadedChatItems: [AIReportChatItem] = []
         do {
             let repository = try positionRepository ?? PositionRepository()
+            try repository.migrateOpeningBalances()
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
             loadedDailyProfitHistory = try repository.fetchDailyProfitPoints()
+            positionClosures = try repository.fetchPositionClosures()
+            positionTrades = try repository.fetchPositionTrades()
+            positionOpeningBalances = try repository.fetchOpeningBalances()
+            tradeProfitByDate = try repository.tradeDailyProfitAdjustments()
             let cutoff = savedChatRetentionPeriod.cutoffDate()
             try repository.deleteExpiredAIAnalysisContent(before: cutoff)
             let storedChatItems = try repository.fetchAIAnalysisChatItems(since: cutoff)
@@ -1033,14 +1047,15 @@ final class PortfolioStore {
         rebuildVisibleSnapshots()
         mcpReadAccessEnabled = (try? activeRepository?.appSetting(for: MCPAccess.settingKey)) == "true"
         loadRiskProfileSettings(from: activeRepository)
-        let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport()) ?? Self.savedAIAnalysisReport()
+        let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport())
+            ?? (usesLegacyAIReportCache ? Self.savedAIAnalysisReport() : nil)
         aiAnalysisReport = latestReport.flatMap { report in
             report.generatedAt >= savedChatRetentionPeriod.cutoffDate() ? report : nil
         }
         removePersistedAIAnalysisReportIfExpired(cutoff: savedChatRetentionPeriod.cutoffDate())
         aiAnalysisChatItems = loadedChatItems
         // Reuse only historical asset exposure evidence; the retired radar scores are never requested.
-        investmentProfileExposureCache = Self.savedAIInvestmentProfile()?.assetExposures ?? []
+        investmentProfileExposureCache = usesLegacyAIReportCache ? Self.savedAIInvestmentProfile()?.assetExposures ?? [] : []
         if let json = try? activeRepository?.appSetting(for: InvestmentDistributionEngine.cacheKey),
            json.utf8.count <= 10_000_000, let data = json.data(using: .utf8) {
             let decoder = JSONDecoder()
@@ -1091,7 +1106,12 @@ final class PortfolioStore {
     }
 
     func todayProfitCNY(asOf date: Date) -> Decimal {
-        positions.reduce(0) { $0 + todayProfitCNY(for: $1, asOf: date) }
+        let day = PositionClosureMath.day(date)
+        let closedProfit = positionClosures.filter { !$0.isReversed && $0.tradeDate == day }
+            .reduce(Decimal.zero) { $0 + (PositionClosureMath.decimal($1.dailyProfitCNY ?? "") ?? -$1.feeAmount / $1.conversionRate) }
+        let activeIDs = Set(positions.map { $0.id.uuidString })
+        let soldProfit = tradeProfitAdjustments(asOf: date).filter { !activeIDs.contains($0.key) }.values.reduce(0, +)
+        return positions.reduce(closedProfit + soldProfit) { $0 + todayProfitCNY(for: $1, asOf: date) }
     }
 
     var todayProfitRate: Decimal {
@@ -1106,12 +1126,17 @@ final class PortfolioStore {
     }
 
     func todayProfitCNY(for position: Position, asOf date: Date = .now) -> Decimal {
-        guard position.category != .cash, position.weeklyTrend.count >= 2 else { return 0 }
-        guard position.wasFetchedOnSameDay(as: date) else { return 0 }
+        let adjustment = tradeProfitAdjustments(asOf: date)[position.id.uuidString] ?? 0
+        guard position.category != .cash, position.weeklyTrend.count >= 2 else { return adjustment }
+        guard position.wasFetchedOnSameDay(as: date) else { return adjustment }
         let latestPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 1])
         let previousPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 2])
         let priceChange = latestPrice - previousPrice
-        return position.quantity * priceChange / position.quoteCurrency.rateFromCNY
+        return position.quantity * priceChange / position.quoteCurrency.rateFromCNY + adjustment
+    }
+
+    private func tradeProfitAdjustments(asOf date: Date) -> [String: Decimal] {
+        tradeProfitByDate[PositionClosureMath.day(date)] ?? [:]
     }
 
     var categoryAllocation: [AllocationItem] {
@@ -1198,6 +1223,11 @@ final class PortfolioStore {
         }
         let summary = try positionRepository.importDataPayload(preparedImport.payload)
         positions = try positionRepository.fetchPositions()
+        positionClosures = try positionRepository.fetchPositionClosures()
+        positionTrades = try positionRepository.fetchPositionTrades()
+        positionOpeningBalances = try positionRepository.fetchOpeningBalances()
+        tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionClosureRevision += 1
         snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
         dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         if summary.riskProfileIncluded {
@@ -1435,12 +1465,112 @@ final class PortfolioStore {
         return trend
     }
 
+    var directlyDeletablePositionIDs: Set<Position.ID> {
+        let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: positionTrades, closures: positionClosures, openings: positionOpeningBalances)
+        return Set(positions.lazy.filter { !linkedIDs.contains($0.id) }.map(\.id))
+    }
+
     func deletePosition(for positionID: Position.ID) throws {
         try deletePositions(for: [positionID])
     }
 
+    var activePositionClosures: [PositionClosureRecord] { positionClosures.filter { !$0.isReversed } }
+    var realizedProfitCNY: Decimal {
+        activePositionClosures.reduce(0) { $0 + $1.realizedProfitCNY }
+            + positionTrades.filter { !$0.isReversed }.reduce(0) { $0 + ($1.realizedProfit ?? 0) / $1.rate }
+    }
+
+    func investmentCloudDailyProfitItems(asOf date: Date) -> [InvestmentCloudItem] {
+        let open = InvestmentCloudEngine.dailyProfitItems(positions: positions) { todayProfitCNY(for: $0, asOf: date) }
+        let closed = activePositionClosures.filter { $0.tradeDate == PositionClosureMath.day(date) }.compactMap { record -> InvestmentCloudItem? in
+            guard let position = try? record.holding.position() else { return nil }
+            let profit = PositionClosureMath.decimal(record.dailyProfitCNY ?? "") ?? -record.feeAmount / record.conversionRate
+            guard profit != 0 else { return nil }
+            return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
+        }
+        let activeIDs = Set(positions.map { $0.id.uuidString })
+        let adjustments = tradeProfitAdjustments(asOf: date)
+        var seen = Set<String>()
+        let sold = positionTrades.compactMap { record -> InvestmentCloudItem? in
+            guard !record.isReversed, record.tradeDate == PositionClosureMath.day(date),
+                  !activeIDs.contains(record.asset.id), seen.insert(record.asset.id).inserted,
+                  let profit = adjustments[record.asset.id], profit != 0,
+                  let position = try? record.asset.position() else { return nil }
+            return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
+        }
+        return (open + closed + sold).sorted { $0.areaWeight > $1.areaWeight }
+    }
+
+    func recordTrade(id: UUID, side: PositionTradeSide, position: Position, quantity: Decimal, price: Decimal,
+                     fees: Decimal, tradeDate: Date, cashPositionID: UUID?) throws {
+        guard let positionRepository else { throw PositionRepositoryError.database("本地存储不可用") }
+        try positionRepository.recordTrade(id: id, side: side, expected: position, quantity: quantity, price: price,
+            fees: fees, tradeDate: tradeDate, cashPositionID: cashPositionID,
+            cashName: PositionClosureMath.cashName(position.quoteCurrency, language: appLanguage))
+        try reloadPositionClosureState()
+    }
+
+    func reverseTrade(_ record: PositionTradeRecord) throws {
+        guard let positionRepository else { throw PositionRepositoryError.database("本地存储不可用") }
+        try positionRepository.reverseTrade(id: record.id)
+        try reloadPositionClosureState()
+    }
+
+    func reverseRecord(_ row: PositionTransactionRow) throws {
+        guard row.canReverse() else {
+            if row.opening != nil { throw PositionOpeningBalanceError.needsReview }
+            if row.closure != nil { throw PositionClosureError.reversalExpired }
+            throw PositionTradeError.changed
+        }
+        if let record = row.opening {
+            guard let positionRepository else { throw PositionOpeningBalanceError.changed }
+            try positionRepository.reverseOpeningBalance(id: record.id)
+            try reloadPositionClosureState()
+        }
+        else if let record = row.trade { try reverseTrade(record) }
+        else if let record = row.closure { try reversePositionClosure(record) }
+        else { throw PositionTradeError.changed }
+    }
+
+    func confirmOpeningBalance(_ record: PositionOpeningBalanceRecord, quantity: Decimal, totalCost: Decimal) throws {
+        guard let positionRepository else { throw PositionOpeningBalanceError.changed }
+        try positionRepository.confirmOpeningBalance(id: record.id, quantity: quantity, totalCost: totalCost)
+        try reloadPositionClosureState()
+    }
+
+    func closePosition(_ position: Position, settlement: PositionClosureSettlement, tradeDate: Date,
+                       cashPositionID: Position.ID?) throws {
+        guard let positionRepository else { throw PositionRepositoryError.database("本地存储不可用") }
+        try positionRepository.closePosition(expected: position, settlement: settlement, tradeDate: tradeDate,
+            cashPositionID: cashPositionID, cashName: PositionClosureMath.cashName(position.quoteCurrency, language: appLanguage))
+        try reloadPositionClosureState()
+        if selectedPositionID == position.id { selectedPositionID = nil }
+    }
+
+    func reversePositionClosure(_ record: PositionClosureRecord) throws {
+        guard let positionRepository else { throw PositionRepositoryError.database("本地存储不可用") }
+        try positionRepository.reversePositionClosure(id: record.id)
+        try reloadPositionClosureState()
+    }
+
+    private func reloadPositionClosureState() throws {
+        guard let positionRepository else { return }
+        positions = try positionRepository.fetchPositions()
+        positionClosures = try positionRepository.fetchPositionClosures()
+        positionTrades = try positionRepository.fetchPositionTrades()
+        positionOpeningBalances = try positionRepository.fetchOpeningBalances()
+        tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+        dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+        positionClosureRevision += 1
+        if let selectedPositionID, !positions.contains(where: { $0.id == selectedPositionID }) { self.selectedPositionID = nil }
+        scheduleInvestmentDistributionRefresh()
+    }
+
     func deletePositions(for positionIDs: Set<Position.ID>) throws {
         guard !positionIDs.isEmpty else { return }
+        let existingIDs = Set(positions.map(\.id)).intersection(positionIDs)
+        guard existingIDs.isSubset(of: directlyDeletablePositionIDs) else { throw PositionTradeError.recordedTradesExist }
         if let positionRepository {
             try positionRepository.delete(positionIDs: Array(positionIDs))
             positions = try positionRepository.fetchPositions()
@@ -1614,7 +1744,7 @@ final class PortfolioStore {
         aiAnalysisRun = AIAnalysisRun()
         aiAnalysisFollowUpProgress = nil
         aiAnalysisActivityLines = []
-        UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey)
+        if usesLegacyAIReportCache { UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey) }
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
     }
 
@@ -1846,12 +1976,15 @@ final class PortfolioStore {
         return AIPortfolioDataToolExecutor.execute(request, snapshot: AIPortfolioToolSnapshot(
             positions: positions, portfolioContext: context, performance: performance,
             riskContext: makeAIStoreContext(positionPerformance: performance), report: aiAnalysisReport,
-            history: snapshotHistory, dailyProfit: dailyProfitHistory, asOf: now
+            history: snapshotHistory, dailyProfit: dailyProfitHistory, closures: positionClosures, trades: positionTrades,
+            openings: positionOpeningBalances, asOf: now
         ))
     }
 
     func refreshPosition(id: Position.ID) {
-        guard !refreshingPositionIDs.contains(id) else { return }
+        guard !refreshingPositionIDs.contains(id),
+              let position = positions.first(where: { $0.id == id }),
+              MarketDataAdapter.supportsQuote(for: position) else { return }
         Task { await refreshLatestPrice(for: id) }
     }
 
@@ -2374,6 +2507,7 @@ final class PortfolioStore {
     }
 
     private func persistAIAnalysisReport(_ report: AIAnalysisReport) {
+        guard usesLegacyAIReportCache else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(report) else { return }
@@ -2381,6 +2515,7 @@ final class PortfolioStore {
     }
 
     private func removePersistedAIAnalysisReportIfExpired(cutoff: Date) {
+        guard usesLegacyAIReportCache else { return }
         guard let report = Self.savedAIAnalysisReport(), report.generatedAt < cutoff else { return }
         UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey)
     }
@@ -2762,6 +2897,10 @@ final class PortfolioStore {
                 return
             }
             positions = persistedPositions
+            positionClosures = try positionRepository.fetchPositionClosures()
+            positionTrades = try positionRepository.fetchPositionTrades()
+            positionOpeningBalances = try positionRepository.fetchOpeningBalances()
+            tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
             refreshInvestmentDistributionIfNeeded()
@@ -2950,15 +3089,21 @@ final class PortfolioStore {
 
         let updatedPositions = currentPositions.compactMap { replacements[$0.id] }
         let mergedPositions = positions.map { replacements[$0.id] ?? $0 }
+        let closureRevision = positionClosureRevision
         do {
             if let analyticsWorker,
                let persistedState = try await analyticsWorker.persistQuoteRefresh(
                    updatedPositions: updatedPositions,
                    snapshotPositions: mergedPositions
                ) {
-                positions = persistedState.positions
-                snapshotHistory = persistedState.snapshots
-                dailyProfitHistory = persistedState.dailyProfitHistory
+                if closureRevision != positionClosureRevision {
+                    try reloadPositionClosureState()
+                } else {
+                    positions = persistedState.positions
+                    snapshotHistory = persistedState.snapshots
+                    dailyProfitHistory = persistedState.dailyProfitHistory
+                    tradeProfitByDate = persistedState.tradeProfitAdjustments
+                }
             } else if let positionRepository {
                 try positionRepository.applyQuoteRefresh(
                     updatedPositions: updatedPositions,
@@ -2967,6 +3112,7 @@ final class PortfolioStore {
                 positions = try positionRepository.fetchPositions()
                 snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
                 dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+                tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
             } else if !replacements.isEmpty {
                 positions = mergedPositions
             }
@@ -2989,9 +3135,11 @@ final class PortfolioStore {
                     $0.id == updatedPosition.id ? updatedPosition : $0
                 }
                 if let positionRepository {
-                    try positionRepository.update(updatedPosition)
-                    persistCurrentSnapshot(using: updatedPositions)
+                    try positionRepository.applyQuoteRefresh(updatedPositions: [updatedPosition], snapshotPositions: updatedPositions)
                     positions = try positionRepository.fetchPositions()
+                    snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+                    dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+                    tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
                 } else {
                     positions = updatedPositions
                 }
@@ -3068,18 +3216,7 @@ final class PortfolioStore {
         let totalValue = totalValueCNY
         let totalValueForAllocation = max(totalValue.doubleValue, 0.001)
         let portfolioTodayProfit = todayProfitCNY(asOf: date)
-        let nonCashPositions = positions.filter { $0.category != .cash }
-        let availableTodayCount = nonCashPositions.filter { todayReturnStatus(for: $0, asOf: date) == "available" }.count
-        let portfolioTodayStatus: String
-        if nonCashPositions.isEmpty {
-            portfolioTodayStatus = "not_applicable_cash"
-        } else if availableTodayCount == nonCashPositions.count {
-            portfolioTodayStatus = "available"
-        } else if availableTodayCount > 0 {
-            portfolioTodayStatus = "partial"
-        } else {
-            portfolioTodayStatus = "unavailable"
-        }
+        let portfolioTodayStatus = aiTodayReturnStatus(asOf: date)
 
         let positionContexts = positions
             .sorted { $0.marketValueCNY > $1.marketValueCNY }
@@ -3127,10 +3264,37 @@ final class PortfolioStore {
                 profitAmountCNY: portfolioTodayStatus == "unavailable" ? nil : Self.aiDecimalString(portfolioTodayProfit),
                 profitAmountDisplay: portfolioTodayStatus == "unavailable" ? nil : formatSignedMoney(converted(portfolioTodayProfit), currency: displayCurrency),
                 returnRatePct: portfolioTodayStatus == "unavailable" ? nil : todayProfitRate(asOf: date).doubleValue,
-                calculationBasis: "sum_of_position_today_returns_when_quote_fetched_today"
+                calculationBasis: "recorded_open_position_changes_plus_closed_position_trade_day_profit_less_fees"
             ),
             positions: positionContexts
         )
+    }
+
+    func aiTodayReturnStatus(asOf date: Date) -> String {
+        let snapshotDate = Self.aiSnapshotDayFormatter.string(from: date)
+        let nonCashPositions = positions.filter { $0.category != .cash }
+        let availableTodayCount = nonCashPositions.filter { todayReturnStatus(for: $0, asOf: date) == "available" }.count
+        let activeIDs = Set(positions.map { $0.id.uuidString })
+        let closedTrades = positionTrades.filter { !$0.isReversed && $0.side == .sell
+            && $0.tradeDate == snapshotDate && !activeIDs.contains($0.asset.id) }
+        let legacyClosures = activePositionClosures.filter { $0.tradeDate == snapshotDate }
+        // A completed sale still contributes today's P/L even if only cash remains.
+        if !legacyClosures.isEmpty || !closedTrades.isEmpty {
+            let completeClosures = legacyClosures.allSatisfy { $0.dailyProfitCNY != nil }
+            let anchoredIDs = Set(closedTrades.flatMap(\.priceHistory).filter {
+                $0.date == snapshotDate && (PositionClosureMath.decimal($0.quantity) ?? 0) > 0
+            }.map(\.assetID))
+            let completeTrades = Set(closedTrades.map { $0.asset.id }).isSubset(of: anchoredIDs)
+            return completeClosures && completeTrades && availableTodayCount == nonCashPositions.count ? "available" : "partial"
+        } else if nonCashPositions.isEmpty {
+            return "not_applicable_cash"
+        } else if availableTodayCount == nonCashPositions.count {
+            return "available"
+        } else if availableTodayCount > 0 {
+            return "partial"
+        } else {
+            return "unavailable"
+        }
     }
 
     private func todayReturnStatus(for position: Position, asOf date: Date) -> String {
@@ -3186,7 +3350,7 @@ final class PortfolioStore {
     }
 
     private func quoteCandidate(for position: Position) -> AssetLookupCandidate? {
-        guard position.category != .cash else { return nil }
+        guard MarketDataAdapter.supportsQuote(for: position) else { return nil }
         return AssetLookupCandidate(
             name: position.name,
             symbol: position.symbol,
@@ -3203,6 +3367,7 @@ final class PortfolioStore {
             try positionRepository.replaceDailySnapshots(positions: snapshotPositions ?? positions)
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
+            tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }

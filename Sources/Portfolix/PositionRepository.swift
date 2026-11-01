@@ -1,5 +1,6 @@
 import CSQLite
 import Foundation
+import PortfolixCore
 
 enum PositionRepositoryError: LocalizedError {
     case database(String)
@@ -63,6 +64,7 @@ final class PositionRepository {
         database = handle
         try configure()
         try migrate()
+        try migrateOpeningBalances()
         try applyDatabaseFilePermissions()
     }
 
@@ -136,6 +138,7 @@ final class PositionRepository {
     func exportDataPayload(
         riskProfile: PortfolixDataPackage.RiskProfile? = nil
     ) throws -> PortfolixDataPackage.Payload {
+        try migrateOpeningBalances()
         let holdingStatement = try prepare(
             """
             SELECT
@@ -254,7 +257,10 @@ final class PositionRepository {
             holdings: holdings,
             portfolioSnapshots: portfolioSnapshots,
             assetPriceSnapshots: assetPriceSnapshots,
-            riskProfile: try riskProfile ?? storedRiskProfile()
+            riskProfile: try riskProfile ?? storedRiskProfile(),
+            closedHoldings: try fetchPositionClosures(),
+            trades: try fetchPositionTrades(),
+            openingBalances: try fetchOpeningBalances()
         )
         try PortfolixDataPackageService.validate(payload: payload, requiresRiskProfile: true)
         return payload
@@ -263,11 +269,31 @@ final class PositionRepository {
     func importDataPayload(_ payload: PortfolixDataPackage.Payload) throws -> PortfolixDataTransferSummary {
         try PortfolixDataPackageService.validate(payload: payload)
         var importedIDMap: [String: String] = [:]
+        let archivedIDs = Set((payload.closedHoldings ?? []).filter { !$0.isReversed }.map { $0.holding.id })
+        let activeImportIDs = Set(payload.holdings.map(\.id))
+        let historicalTradeIDs = Set((payload.trades ?? []).flatMap { $0.accountIDs }).subtracting(activeImportIDs)
+        let reversedOpeningIDs = Set((payload.openingBalances ?? []).filter { $0.isReversed && !activeImportIDs.contains($0.holding.id) }.map { $0.holding.id })
+        let existingClosedIDs = Set(try fetchPositionClosures().filter { !$0.isReversed }.map { $0.holding.id })
 
         try transaction {
+            let existingTrades = try fetchPositionTrades()
+            let incomingTradeIDs = Set((payload.trades ?? []).map(\.id))
+            guard Set(existingTrades.map(\.id)).isSubset(of: incomingTradeIDs) else {
+                throw PortfolixDataPackageError.invalidPackage("当前交易记录与备份不一致，不能合并覆盖余额")
+            }
+            for id in archivedIDs.union(historicalTradeIDs).union(reversedOpeningIDs) {
+                if let uuid = UUID(uuidString: id), try fetchPosition(id: uuid) != nil {
+                    try removeActiveClosurePosition(id: uuid)
+                }
+                try deleteClosureAssetSnapshots(id: id, from: "1970-01-01")
+            }
             func resolvedAssetID(importedID: String, symbol: String, category: String) throws -> String {
                 if let mappedID = importedIDMap[importedID] {
                     return mappedID
+                }
+                if archivedIDs.contains(importedID) || historicalTradeIDs.contains(importedID) {
+                    importedIDMap[importedID] = importedID
+                    return importedID
                 }
                 if let matchingID = try existingAssetID(symbol: symbol, category: category) {
                     importedIDMap[importedID] = matchingID
@@ -284,6 +310,7 @@ final class PositionRepository {
             }
 
             for holding in payload.holdings {
+                guard !existingClosedIDs.contains(holding.id) else { throw PositionClosureError.invalidRecord }
                 let targetID = try resolvedAssetID(
                     importedID: holding.id,
                     symbol: holding.symbol,
@@ -363,6 +390,30 @@ final class PositionRepository {
                 try stepDone(statement)
             }
 
+            for closure in payload.closedHoldings ?? [] {
+                try savePositionClosure(closure.remapping(
+                    positionID: importedIDMap[closure.holding.id] ?? closure.holding.id,
+                    cashPositionID: closure.cashPositionID.map { importedIDMap[$0] ?? $0 }))
+            }
+
+            // Restoring a backup restores balances and the audit trail, never executes its cash flows again.
+            for trade in payload.trades ?? [] {
+                if importedIDMap[trade.asset.id] == nil {
+                    importedIDMap[trade.asset.id] = trade.asset.id
+                }
+                if let cash = trade.cash, importedIDMap[cash.id] == nil {
+                    importedIDMap[cash.id] = cash.id
+                }
+                try saveTrade(trade.remapping(importedIDMap))
+            }
+
+            for opening in payload.openingBalances ?? [] {
+                try saveOpeningBalance(opening.remapping(importedIDMap))
+            }
+            let suppliedOpeningIDs = Set(try (payload.openingBalances ?? []).map { try $0.remapping(importedIDMap).id })
+            let importedHoldingIDs = Set(payload.holdings.compactMap { UUID(uuidString: importedIDMap[$0.id] ?? $0.id) })
+            try ensureOpeningBalances(replacing: importedHoldingIDs.subtracting(suppliedOpeningIDs))
+
             if let riskProfile = payload.riskProfile {
                 try setAppSetting(
                     key: RiskProfilePersistence.configuredKey,
@@ -402,6 +453,7 @@ final class PositionRepository {
     func update(_ position: Position) throws {
         try PositionInputValidator.validate(position)
         try transaction {
+            guard try fetchPosition(id: position.id) != nil else { throw PositionClosureError.holdingChanged }
             try save(position, operation: "update")
         }
     }
@@ -418,16 +470,25 @@ final class PositionRepository {
 
     func applyQuoteRefresh(
         updatedPositions: [Position],
-        snapshotPositions: [Position],
+        snapshotPositions _: [Position],
         snapshotDate: Date = .now
     ) throws {
         try updatedPositions.forEach(PositionInputValidator.validate)
-        try snapshotPositions.forEach(PositionInputValidator.validate)
         try transaction {
             for position in updatedPositions {
-                try save(position, operation: "update")
+                guard let current = try fetchPosition(id: position.id),
+                      current.symbol == position.symbol, current.category == position.category,
+                      current.quoteCurrency == position.quoteCurrency else { continue }
+                let updated = Position(id: current.id, name: current.name, symbol: current.symbol,
+                    category: current.category, quoteCurrency: current.quoteCurrency, quantity: current.quantity,
+                    totalCost: current.totalCost, averageCost: current.averageCost, latestPrice: position.latestPrice,
+                    marketValueCNY: current.quantity * position.latestPrice / current.quoteCurrency.rateFromCNY,
+                    profitRate: current.averageCost == 0 ? 0 : (position.latestPrice - current.averageCost) / current.averageCost * 100,
+                    weeklyTrend: position.weeklyTrend, source: position.source, quoteTime: position.quoteTime,
+                    fetchedAt: position.fetchedAt, freshness: position.freshness)
+                try save(updated, operation: "quote_update")
             }
-            try writeDailySnapshots(positions: snapshotPositions, snapshotDate: snapshotDate)
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: snapshotDate)
         }
     }
 
@@ -470,9 +531,206 @@ final class PositionRepository {
         try delete(positionIDs: [positionID])
     }
 
+    func fetchPositionClosures() throws -> [PositionClosureRecord] {
+        let statement = try prepare("SELECT payload_json FROM position_closures ORDER BY trade_date DESC, rowid DESC")
+        defer { sqlite3_finalize(statement) }
+        var records: [PositionClosureRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let record = try decoder.decode(PositionClosureRecord.self, from: Data(text(at: 0, in: statement).utf8))
+            try PositionClosureValidation.validate(record)
+            records.append(record)
+        }
+        return records
+    }
+
+    @discardableResult
+    func closePosition(expected: Position, settlement: PositionClosureSettlement, tradeDate: Date,
+                       cashPositionID: Position.ID?, cashName: String, now: Date = .now) throws -> PositionClosureRecord {
+        let day = Self.dayString(from: tradeDate)
+        let today = Self.dayString(from: now)
+        guard day <= today, tradeDate >= Date(timeIntervalSince1970: 0) else { throw PositionClosureError.invalidDate }
+        var savedRecord: PositionClosureRecord?
+        try transaction {
+            guard let current = try fetchPosition(id: expected.id), current.category != .cash,
+                  current.quantity == expected.quantity, current.totalCost == expected.totalCost,
+                  current.symbol == expected.symbol, current.name == expected.name,
+                  current.category == expected.category, current.quoteCurrency == expected.quoteCurrency else {
+                throw PositionClosureError.holdingChanged
+            }
+            guard !settlement.executionPrice.isNaN, !settlement.fees.isNaN, !settlement.netProceeds.isNaN,
+                  settlement.executionPrice >= 0, settlement.fees >= 0, settlement.netProceeds >= 0,
+                  abs((current.quantity * settlement.executionPrice - settlement.grossProceeds).doubleValue)
+                    <= (current.quoteCurrency == .usdt ? 0.00000001 : 0.01) else { throw PositionClosureError.invalidAmount }
+            let original = try closureAssetSnapshots(positionID: current.id.uuidString, from: day)
+            guard original.allSatisfy({ PositionClosureMath.decimal($0.quantity) == current.quantity }) else {
+                throw PositionClosureError.historicalQuantityChange
+            }
+            // Daily snapshots alone cannot detect an intraday quantity change that was later reversed.
+            let revisions = try prepare("SELECT snapshot_json FROM position_revisions WHERE position_id = ? AND created_at >= ? AND ? < ? AND operation IN ('create', 'update', 'balance_update')")
+            defer { sqlite3_finalize(revisions) }
+            try bind(current.id.uuidString, to: 1, in: revisions)
+            try bind(Self.timestamp(from: Calendar.current.startOfDay(for: tradeDate)), to: 2, in: revisions)
+            try bind(day, to: 3, in: revisions)
+            try bind(today, to: 4, in: revisions)
+            while sqlite3_step(revisions) == SQLITE_ROW {
+                let snapshot = try decoder.decode([String: String].self, from: Data(text(at: 0, in: revisions).utf8))
+                guard snapshot["quantity"].flatMap(PositionClosureMath.decimal) == current.quantity else {
+                    throw PositionClosureError.historicalQuantityChange
+                }
+            }
+            let allPositions = try fetchPositions()
+            let cash: Position?
+            if let cashPositionID {
+                guard let selected = allPositions.first(where: { $0.id == cashPositionID }),
+                      selected.category == .cash, selected.quoteCurrency == current.quoteCurrency else {
+                    throw PositionClosureError.invalidCash
+                }
+                cash = selected
+            } else {
+                guard !allPositions.contains(where: { $0.category == .cash && $0.symbol == current.quoteCurrency.rawValue }) else {
+                    throw PositionClosureError.invalidCash
+                }
+                cash = nil
+            }
+            let targetID = cash?.id ?? UUID()
+            let targetName = cash?.name ?? cashName
+            let updatedCash = PositionClosureMath.cashPosition(id: targetID, currency: current.quoteCurrency,
+                quantity: (cash?.quantity ?? 0) + settlement.netProceeds, name: targetName, symbol: cash?.symbol)
+            if updatedCash.quantity > 0 {
+                try PositionInputValidator.validate(updatedCash)
+                try save(updatedCash, operation: "closure_credit")
+            }
+            let rate = current.quoteCurrency.rateFromCNY
+            let cashHistory = try closureAssetSnapshots(positionID: targetID.uuidString, from: day)
+            let portfolioHistory = try closurePortfolioSnapshots(from: day)
+            let sourceByDay = Dictionary(uniqueKeysWithValues: original.map { ($0.date, $0) })
+            let cashByDay = Dictionary(uniqueKeysWithValues: cashHistory.map { ($0.date, $0) })
+            let portfolioDays = Set(portfolioHistory.map(\.date))
+            let days = Set(original.map(\.date) + cashHistory.map(\.date) + portfolioHistory.map(\.date) + [day])
+                .filter { $0 <= today }.sorted()
+            var adjustments: [PositionClosureHistoryAdjustment] = []
+            for date in days {
+                let previousCash = cashByDay[date]
+                let cashQuantity = previousCash.flatMap { PositionClosureMath.decimal($0.quantity) } ?? 0
+                let cashUnit = cashQuantity > 0
+                    ? (previousCash.flatMap { PositionClosureMath.decimal($0.marketValueCNY) } ?? 0) / cashQuantity
+                    : 1 / rate
+                let credit = settlement.netProceeds * cashUnit
+                let source = sourceByDay[date]
+                let sourceValue = source.flatMap { PositionClosureMath.decimal($0.marketValueCNY) } ?? 0
+                let sourcePrice = source.flatMap { PositionClosureMath.decimal($0.latestPrice) } ?? 0
+                let sourceUnit = sourcePrice > 0 ? sourceValue / current.quantity / sourcePrice : 1 / rate
+                let sourceCost = source.flatMap { PositionClosureMath.decimal($0.averageCost) }.map { $0 * current.quantity * sourceUnit } ?? 0
+                let adjustsPortfolio = date < today && portfolioDays.contains(date) && source != nil
+                let valueDelta = adjustsPortfolio ? credit - sourceValue : 0
+                let costDelta = adjustsPortfolio ? credit - sourceCost : 0
+                if adjustsPortfolio { try adjustClosurePortfolioSnapshot(day: date, valueDelta: valueDelta, costDelta: costDelta) }
+                if updatedCash.quantity > 0, date < today {
+                    let quantity = cashQuantity + settlement.netProceeds
+                    if quantity > 0 {
+                        try writeClosureAssetSnapshot(.init(assetID: targetID.uuidString, date: date, name: targetName,
+                            symbol: updatedCash.symbol, category: AssetCategory.cash.rawValue, quoteCurrency: current.quoteCurrency.rawValue,
+                            quantity: Self.decimalString(quantity), averageCost: "1", latestPrice: "1",
+                            marketValueCNY: Self.decimalString(quantity * cashUnit), source: "手工价格", quoteTime: day,
+                            freshness: Freshness.manual.rawValue, updatedAt: Self.timestamp(from: now)))
+                    }
+                }
+                adjustments.append(.init(date: date, valueDeltaCNY: Self.decimalString(valueDelta), costDeltaCNY: Self.decimalString(costDelta),
+                    cashUnitValueCNY: Self.decimalString(cashUnit), createdCashSnapshot: previousCash == nil,
+                    adjustedPortfolioSnapshot: adjustsPortfolio))
+            }
+            let prior = try closureAssetSnapshots(positionID: current.id.uuidString, from: "1970-01-01")
+                .last { $0.date < day }
+            let priorUnit = prior.flatMap { snapshot -> Decimal? in
+                guard let quantity = PositionClosureMath.decimal(snapshot.quantity), quantity > 0,
+                      let value = PositionClosureMath.decimal(snapshot.marketValueCNY) else { return nil }
+                return value / quantity
+            }
+            let dailyProfit = priorUnit.map { settlement.netProceeds / rate - $0 * current.quantity }
+            let record = PositionClosureRecord(id: UUID(), holding: .init(position: current, timestamp: Self.timestamp(from: now)),
+                tradeDate: day, executionPrice: Self.decimalString(settlement.executionPrice), fees: Self.decimalString(settlement.fees),
+                netProceeds: Self.decimalString(settlement.netProceeds), rateFromCNY: Self.decimalString(rate),
+                cashPositionID: updatedCash.quantity > 0 ? targetID.uuidString : nil, cashName: targetName,
+                createdCashPosition: cash == nil && updatedCash.quantity > 0,
+                dailyProfitCNY: dailyProfit.map(Self.decimalString), originalSnapshots: original,
+                historyAdjustments: adjustments, recordedAt: Self.timestamp(from: now))
+            try PositionClosureValidation.validate(record)
+            try savePositionClosure(record)
+            try insertRevision(position: current, operation: "close")
+            try removeActiveClosurePosition(id: current.id)
+            try deleteClosureAssetSnapshots(id: current.id.uuidString, from: day)
+            try writeClosureAssetSnapshot(.init(assetID: current.id.uuidString, date: day, name: current.name, symbol: current.symbol,
+                category: current.category.rawValue, quoteCurrency: current.quoteCurrency.rawValue,
+                quantity: Self.decimalString(current.quantity), averageCost: Self.decimalString(current.averageCost),
+                latestPrice: Self.decimalString(settlement.executionPrice), marketValueCNY: Self.decimalString(settlement.grossProceeds / rate),
+                source: "手工价格", quoteTime: day, freshness: Freshness.manual.rawValue, updatedAt: Self.timestamp(from: now)))
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+            savedRecord = record
+        }
+        guard let savedRecord else { throw PositionClosureError.invalidRecord }
+        return savedRecord
+    }
+
+    func reversePositionClosure(id: UUID, now: Date = .now) throws {
+        try transaction {
+            guard var record = try fetchPositionClosures().first(where: { $0.id == id }), !record.isReversed else {
+                throw PositionClosureError.invalidRecord
+            }
+            guard let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt), Calendar.current.isDate(recordedAt, inSameDayAs: now) else {
+                throw PositionClosureError.reversalExpired
+            }
+            let original = try record.holding.position()
+            let positions = try fetchPositions()
+            guard !(try fetchPositionTrades()).contains(where: { trade in
+                !trade.isReversed && trade.tradeDate >= record.tradeDate &&
+                    (trade.asset.id == record.holding.id || record.cashPositionID.map { trade.cash?.id == $0 } == true)
+            }) else { throw PositionTradeError.dependentTrade }
+            guard !positions.contains(where: { $0.id == original.id || ($0.symbol.caseInsensitiveCompare(original.symbol) == .orderedSame && $0.category == original.category) }) else {
+                throw PositionClosureError.activeHoldingExists
+            }
+            if let cashID = record.cashPositionID, record.netAmount > 0 {
+                guard let cash = positions.first(where: { $0.id.uuidString == cashID }), cash.category == .cash,
+                      cash.quoteCurrency == original.quoteCurrency, cash.quantity >= record.netAmount else { throw PositionClosureError.insufficientCash }
+                let remaining = cash.quantity - record.netAmount
+                if remaining == 0 { try removeActiveClosurePosition(id: cash.id) }
+                else { try save(PositionClosureMath.cashPosition(id: cash.id, currency: cash.quoteCurrency,
+                    quantity: remaining, name: cash.name, symbol: cash.symbol), operation: "closure_reversal") }
+                for adjustment in record.historyAdjustments where adjustment.date < Self.dayString(from: now) {
+                    if let snapshot = try closureAssetSnapshots(positionID: cashID, from: adjustment.date).first(where: { $0.date == adjustment.date }),
+                       let quantity = PositionClosureMath.decimal(snapshot.quantity), quantity >= record.netAmount {
+                        let newQuantity = quantity - record.netAmount
+                        if newQuantity == 0 { try deleteClosureAssetSnapshot(id: cashID, day: adjustment.date) }
+                        else {
+                            let unit = (PositionClosureMath.decimal(snapshot.marketValueCNY) ?? 0) / quantity
+                            try writeClosureAssetSnapshot(.init(assetID: snapshot.assetID, date: snapshot.date, name: snapshot.name,
+                                symbol: snapshot.symbol, category: snapshot.category, quoteCurrency: snapshot.quoteCurrency,
+                                quantity: Self.decimalString(newQuantity), averageCost: "1", latestPrice: "1",
+                                marketValueCNY: Self.decimalString(newQuantity * unit), source: snapshot.source,
+                                quoteTime: snapshot.quoteTime, freshness: snapshot.freshness, updatedAt: Self.timestamp(from: now)))
+                        }
+                    } else { throw PositionClosureError.insufficientCash }
+                }
+            }
+            for adjustment in record.historyAdjustments where adjustment.adjustedPortfolioSnapshot {
+                try adjustClosurePortfolioSnapshot(day: adjustment.date,
+                    valueDelta: -(PositionClosureMath.decimal(adjustment.valueDeltaCNY) ?? 0),
+                    costDelta: -(PositionClosureMath.decimal(adjustment.costDeltaCNY) ?? 0))
+            }
+            try deleteClosureAssetSnapshots(id: record.holding.id, from: record.tradeDate)
+            for snapshot in record.originalSnapshots { try writeClosureAssetSnapshot(snapshot) }
+            try save(original, operation: "reopen")
+            record.reversedAt = Self.timestamp(from: now)
+            try savePositionClosure(record)
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+        }
+    }
+
     func delete(positionIDs: [Position.ID]) throws {
         guard !positionIDs.isEmpty else { return }
         try transaction {
+            let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: try fetchPositionTrades(), closures: try fetchPositionClosures(),
+                openings: try fetchOpeningBalances())
+            guard Set(positionIDs).isDisjoint(with: linkedIDs) else { throw PositionTradeError.recordedTradesExist }
             for positionID in Set(positionIDs) {
                 try deletePosition(id: positionID)
             }
@@ -625,6 +883,16 @@ final class PositionRepository {
             contributionCountByDate[snapshotDate, default: 0] += 1
         }
 
+        for closure in try fetchPositionClosures() where !closure.isReversed {
+            guard let day = Self.date(fromDayString: closure.tradeDate), day >= startDate, day <= endDate else { continue }
+            totalsByDate[day, default: 0] -= closure.feeAmount / closure.conversionRate
+            if closure.feeAmount > 0 { contributionCountByDate[day, default: 0] += 1 }
+        }
+        for (day, values) in try tradeDailyProfitAdjustments(through: date) {
+            guard let day = Self.date(fromDayString: day), day >= startDate, day <= endDate else { continue }
+            totalsByDate[day, default: 0] += values.values.reduce(0, +)
+            contributionCountByDate[day, default: 0] += 1
+        }
         return totalsByDate.keys
             .filter { contributionCountByDate[$0, default: 0] > 0 }
             .sorted()
@@ -1187,6 +1455,20 @@ final class PositionRepository {
     }
 
     private func migrate() throws {
+        try execute("CREATE TABLE IF NOT EXISTS position_opening_balances (position_id TEXT PRIMARY KEY NOT NULL, payload_json TEXT NOT NULL)")
+        try execute("CREATE TABLE IF NOT EXISTS position_trades (id TEXT PRIMARY KEY NOT NULL, trade_date TEXT NOT NULL, payload_json TEXT NOT NULL)")
+        try execute("""
+            CREATE TABLE IF NOT EXISTS position_closures (
+                id TEXT PRIMARY KEY NOT NULL,
+                position_id TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                fees_cny TEXT NOT NULL,
+                reversed_at TEXT,
+                payload_json TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_position_closure
+                ON position_closures(position_id) WHERE reversed_at IS NULL;
+            """)
         try execute(
             """
             CREATE TABLE IF NOT EXISTS assets (
@@ -1848,6 +2130,547 @@ final class PositionRepository {
         return Calendar.current.date(
             from: DateComponents(year: parts[0], month: parts[1], day: parts[2])
         )
+    }
+}
+
+extension PositionRepository {
+    private func savePositionClosure(_ record: PositionClosureRecord) throws {
+        let statement = try prepare("""
+            INSERT INTO position_closures(id, position_id, trade_date, fees_cny, reversed_at, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
+                position_id = excluded.position_id, trade_date = excluded.trade_date, fees_cny = excluded.fees_cny,
+                reversed_at = excluded.reversed_at, payload_json = excluded.payload_json
+            """)
+        defer { sqlite3_finalize(statement) }
+        try bind(record.id.uuidString, to: 1, in: statement)
+        try bind(record.holding.id, to: 2, in: statement)
+        try bind(record.tradeDate, to: 3, in: statement)
+        try bind(Self.decimalString(record.feeAmount / record.conversionRate), to: 4, in: statement)
+        if let reversed = record.reversedAt { try bind(reversed, to: 5, in: statement) }
+        else { sqlite3_bind_null(statement, 5) }
+        try bind(String(decoding: encoder.encode(record), as: UTF8.self), to: 6, in: statement)
+        try stepDone(statement)
+    }
+
+    private func removeActiveClosurePosition(id: UUID) throws {
+        for sql in ["DELETE FROM positions WHERE id = ?", "DELETE FROM latest_quotes WHERE asset_id = ?", "DELETE FROM assets WHERE id = ?"] {
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            try bind(id.uuidString, to: 1, in: statement)
+            try stepDone(statement)
+        }
+    }
+
+    private func closureAssetSnapshots(positionID: String, from day: String) throws -> [PortfolixDataPackage.AssetPriceHistory] {
+        let statement = try prepare("""
+            SELECT snapshot_date, name, symbol, category, quote_currency, quantity, average_cost,
+                   latest_price, market_value_cny, source, quote_time, freshness, updated_at
+            FROM asset_price_snapshots WHERE asset_id = ? AND snapshot_date >= ? ORDER BY snapshot_date
+            """)
+        defer { sqlite3_finalize(statement) }
+        try bind(positionID, to: 1, in: statement)
+        try bind(day, to: 2, in: statement)
+        var rows: [PortfolixDataPackage.AssetPriceHistory] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(.init(assetID: positionID, date: text(at: 0, in: statement), name: text(at: 1, in: statement),
+                symbol: text(at: 2, in: statement), category: text(at: 3, in: statement), quoteCurrency: text(at: 4, in: statement),
+                quantity: text(at: 5, in: statement), averageCost: text(at: 6, in: statement), latestPrice: text(at: 7, in: statement),
+                marketValueCNY: text(at: 8, in: statement), source: text(at: 9, in: statement), quoteTime: text(at: 10, in: statement),
+                freshness: text(at: 11, in: statement), updatedAt: text(at: 12, in: statement)))
+        }
+        return rows
+    }
+
+    private func closurePortfolioSnapshots(from day: String) throws -> [PortfolixDataPackage.PortfolioHistory] {
+        let statement = try prepare("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots WHERE snapshot_date >= ? ORDER BY snapshot_date")
+        defer { sqlite3_finalize(statement) }
+        try bind(day, to: 1, in: statement)
+        var rows: [PortfolixDataPackage.PortfolioHistory] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(.init(date: text(at: 0, in: statement), totalValueCNY: text(at: 1, in: statement), totalCostCNY: text(at: 2, in: statement),
+                totalProfitCNY: text(at: 3, in: statement), profitRate: text(at: 4, in: statement), updatedAt: text(at: 5, in: statement)))
+        }
+        return rows
+    }
+
+    private func adjustClosurePortfolioSnapshot(day: String, valueDelta: Decimal, costDelta: Decimal) throws {
+        guard let current = try closurePortfolioSnapshots(from: day).first(where: { $0.date == day }),
+              let value = PositionClosureMath.decimal(current.totalValueCNY), let cost = PositionClosureMath.decimal(current.totalCostCNY) else { return }
+        let newValue = value + valueDelta
+        let newCost = cost + costDelta
+        guard !newValue.isNaN, !newCost.isNaN, newValue >= 0, newCost >= 0 else { throw PositionClosureError.invalidRecord }
+        let statement = try prepare("UPDATE portfolio_snapshots SET total_value_cny = ?, total_cost_cny = ?, total_profit_cny = ?, profit_rate = ?, updated_at = ? WHERE snapshot_date = ?")
+        defer { sqlite3_finalize(statement) }
+        for (offset, value) in [newValue, newCost, newValue - newCost, newCost == 0 ? 0 : (newValue - newCost) / newCost * 100].enumerated() {
+            try bind(Self.decimalString(value), to: Int32(offset + 1), in: statement)
+        }
+        try bind(Self.timestamp(), to: 5, in: statement)
+        try bind(day, to: 6, in: statement)
+        try stepDone(statement)
+    }
+
+    private func writeClosureAssetSnapshot(_ snapshot: PortfolixDataPackage.AssetPriceHistory) throws {
+        let statement = try prepare("""
+            INSERT INTO asset_price_snapshots(id, asset_id, snapshot_date, name, symbol, category, quote_currency,
+                quantity, average_cost, latest_price, market_value_cny, source, quote_time, freshness, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(asset_id, snapshot_date) DO UPDATE SET quantity = excluded.quantity,
+                average_cost = excluded.average_cost, latest_price = excluded.latest_price, market_value_cny = excluded.market_value_cny,
+                source = excluded.source, quote_time = excluded.quote_time, freshness = excluded.freshness, updated_at = excluded.updated_at
+            """)
+        defer { sqlite3_finalize(statement) }
+        let values = ["\(snapshot.assetID)-\(snapshot.date)", snapshot.assetID, snapshot.date, snapshot.name, snapshot.symbol,
+            snapshot.category, snapshot.quoteCurrency, snapshot.quantity, snapshot.averageCost, snapshot.latestPrice,
+            snapshot.marketValueCNY, snapshot.source, snapshot.quoteTime, snapshot.freshness, snapshot.updatedAt]
+        for (offset, value) in values.enumerated() { try bind(value, to: Int32(offset + 1), in: statement) }
+        try stepDone(statement)
+    }
+
+    private func deleteClosureAssetSnapshots(id: String, from day: String) throws {
+        let statement = try prepare("DELETE FROM asset_price_snapshots WHERE asset_id = ? AND snapshot_date >= ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(id, to: 1, in: statement)
+        try bind(day, to: 2, in: statement)
+        try stepDone(statement)
+    }
+
+    private func deleteClosureAssetSnapshot(id: String, day: String) throws {
+        let statement = try prepare("DELETE FROM asset_price_snapshots WHERE asset_id = ? AND snapshot_date = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(id, to: 1, in: statement)
+        try bind(day, to: 2, in: statement)
+        try stepDone(statement)
+    }
+}
+
+extension PositionRepository {
+    func fetchOpeningBalances() throws -> [PositionOpeningBalanceRecord] {
+        let statement = try prepare("SELECT payload_json FROM position_opening_balances ORDER BY position_id")
+        defer { sqlite3_finalize(statement) }
+        var records: [PositionOpeningBalanceRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let record = try decoder.decode(PositionOpeningBalanceRecord.self, from: Data(text(at: 0, in: statement).utf8))
+            try record.validate()
+            records.append(record)
+        }
+        return records
+    }
+
+    func migrateOpeningBalances(now: Date = .now) throws {
+        try transaction { try ensureOpeningBalances(now: now) }
+    }
+
+    private func ensureOpeningBalances(replacing ids: Set<UUID> = [], now: Date = .now) throws {
+        let existing = Dictionary(uniqueKeysWithValues: try fetchOpeningBalances().map { ($0.id, $0) })
+        let positions = try fetchPositions()
+        let trades = try fetchPositionTrades()
+        let closures = try fetchPositionClosures()
+        let accountIDs = Set(positions.map(\.id))
+            .union(trades.flatMap(\.accountIDs).compactMap(UUID.init(uuidString:)))
+            .union(closures.flatMap { [$0.holding.id, $0.cashPositionID].compactMap { $0 }.compactMap(UUID.init(uuidString:)) })
+        guard !accountIDs.isSubset(of: Set(existing.keys)) || !ids.isEmpty else { return }
+        let candidates = try PositionOpeningBalanceMath.reconstruct(positions: positions, trades: trades, closures: closures,
+            recordedAt: Self.timestamp(from: now))
+        for var candidate in candidates where existing[candidate.id] == nil || ids.contains(candidate.id) {
+            if try hasUnexplainedOpeningCorrections(candidate, trades: trades, closures: closures) {
+                candidate = .init(id: candidate.id, holding: candidate.holding, quantity: candidate.quantity,
+                    totalCost: candidate.totalCost, requiresReview: true, recordedAt: candidate.recordedAt)
+            }
+            if let previous = existing[candidate.id], previous.quantity == candidate.quantity,
+               previous.totalCost == candidate.totalCost, previous.requiresReview == candidate.requiresReview,
+               !previous.isReversed { continue }
+            try saveOpeningBalance(candidate)
+        }
+    }
+
+    private func hasUnexplainedOpeningCorrections(_ record: PositionOpeningBalanceRecord,
+                                                 trades: [PositionTradeRecord], closures: [PositionClosureRecord]) throws -> Bool {
+        guard let quantity = record.units, let cost = record.cost else { return true }
+        let id = record.id.uuidString
+        let linked = trades.filter { !$0.isReversed && $0.accountIDs.compactMap(UUID.init(uuidString:)).contains(record.id) }
+        let relatedClosures = closures.filter { !$0.isReversed && (UUID(uuidString: $0.holding.id) == record.id || $0.cashPositionID.flatMap(UUID.init(uuidString:)) == record.id) }
+        guard let firstEvent = (linked.map(\.recordedAt) + relatedClosures.map(\.recordedAt)).min() else { return false }
+        let statement = try prepare("SELECT created_at, snapshot_json FROM position_revisions WHERE position_id = ? AND operation IN ('update', 'balance_update') AND created_at >= ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(id, to: 1, in: statement)
+        try bind(firstEvent, to: 2, in: statement)
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let timestamp = text(at: 0, in: statement)
+            guard let revision = try? decoder.decode([String: String].self, from: Data(text(at: 1, in: statement).utf8)) else { return true }
+            var expected = PositionTradeReplay.Balance(quantity: quantity, cost: cost)
+            for trade in linked where trade.recordedAt < timestamp {
+                if UUID(uuidString: trade.asset.id) == record.id { expected.quantity += trade.quantityDelta; expected.cost += trade.costDelta }
+                if trade.cash.flatMap({ UUID(uuidString: $0.id) }) == record.id { expected.quantity += trade.cashDelta; expected.cost += trade.cashDelta }
+            }
+            for closure in relatedClosures where closure.recordedAt < timestamp {
+                if UUID(uuidString: closure.holding.id) == record.id {
+                    expected.quantity -= closure.quantity
+                    expected.cost -= PositionClosureMath.decimal(closure.holding.totalCost) ?? 0
+                }
+                if closure.cashPositionID.flatMap(UUID.init(uuidString:)) == record.id {
+                    expected.quantity += closure.netAmount; expected.cost += closure.netAmount
+                }
+            }
+            var possible = [expected]
+            for trade in linked.filter({ $0.recordedAt == timestamp }).sorted(by: { $0.sequence < $1.sequence }) {
+                if UUID(uuidString: trade.asset.id) == record.id { expected.quantity += trade.quantityDelta; expected.cost += trade.costDelta }
+                if trade.cash.flatMap({ UUID(uuidString: $0.id) }) == record.id { expected.quantity += trade.cashDelta; expected.cost += trade.cashDelta }
+                possible.append(expected)
+            }
+            guard possible.contains(where: { balance in revision["quantity"].flatMap(PositionClosureMath.decimal) == balance.quantity
+                && revision["totalCost"].flatMap(PositionClosureMath.decimal).map { abs(($0 - balance.cost).doubleValue) < 0.000001 } == true
+            }) else { return true }
+        }
+        return false
+    }
+
+    private func saveOpeningBalance(_ record: PositionOpeningBalanceRecord) throws {
+        try record.validate()
+        let statement = try prepare("INSERT INTO position_opening_balances(position_id, payload_json) VALUES (?, ?) ON CONFLICT(position_id) DO UPDATE SET payload_json = excluded.payload_json")
+        defer { sqlite3_finalize(statement) }
+        try bind(record.id.uuidString, to: 1, in: statement)
+        try bind(String(decoding: encoder.encode(record), as: UTF8.self), to: 2, in: statement)
+        try stepDone(statement)
+    }
+
+    func confirmOpeningBalance(id: UUID, quantity: Decimal, totalCost: Decimal) throws {
+        try transaction {
+            guard let record = try fetchOpeningBalances().first(where: { $0.id == id }), !record.isReversed else { throw PositionOpeningBalanceError.changed }
+            let candidates = try PositionOpeningBalanceMath.reconstruct(positions: fetchPositions(), trades: fetchPositionTrades(),
+                closures: fetchPositionClosures(), recordedAt: record.recordedAt)
+            guard let candidate = candidates.first(where: { $0.id == id }), candidate.units == quantity,
+                  candidate.cost.map({ abs(($0 - totalCost).doubleValue) < 0.000001 }) == true else { throw PositionOpeningBalanceError.changed }
+            try saveOpeningBalance(.init(id: record.id, holding: record.holding, quantity: PositionClosureMath.string(quantity),
+                totalCost: PositionClosureMath.string(totalCost), requiresReview: false, recordedAt: record.recordedAt))
+        }
+    }
+
+    func reverseOpeningBalance(id: UUID, now: Date = .now) throws {
+        try transaction {
+            guard var record = try fetchOpeningBalances().first(where: { $0.id == id }), !record.isReversed else { throw PositionOpeningBalanceError.changed }
+            guard !record.requiresReview, let units = record.units, let cost = record.cost, units > 0 else { throw PositionOpeningBalanceError.needsReview }
+            let links = PositionRecordLinks.activeAccountIDs(trades: try fetchPositionTrades(), closures: try fetchPositionClosures())
+            guard !links.contains(id) else { throw PositionOpeningBalanceError.dependentRecords }
+            guard let position = try fetchPosition(id: id), position.quantity == units,
+                  abs((position.totalCost - cost).doubleValue) < 0.000001 else { throw PositionOpeningBalanceError.changed }
+            for snapshot in try closureAssetSnapshots(positionID: id.uuidString, from: "1970-01-01") {
+                let value = PositionClosureMath.decimal(snapshot.marketValueCNY) ?? 0
+                let quantity = PositionClosureMath.decimal(snapshot.quantity) ?? 0
+                let price = PositionClosureMath.decimal(snapshot.latestPrice) ?? 0
+                let average = PositionClosureMath.decimal(snapshot.averageCost) ?? 0
+                if quantity > 0, average > 0, price == 0, snapshot.quoteCurrency != DisplayCurrency.cny.rawValue {
+                    throw PositionOpeningBalanceError.needsReview
+                }
+                let rate = quantity > 0 && price > 0 ? value / quantity / price : 1 / position.quoteCurrency.rateFromCNY
+                try adjustClosurePortfolioSnapshot(day: snapshot.date, valueDelta: -value, costDelta: -quantity * average * rate)
+            }
+            try removeActiveClosurePosition(id: id)
+            try deleteClosureAssetSnapshots(id: id.uuidString, from: "1970-01-01")
+            record.reversedAt = Self.timestamp(from: now)
+            try saveOpeningBalance(record)
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+        }
+    }
+
+    func fetchPositionTrades() throws -> [PositionTradeRecord] {
+        let statement = try prepare("SELECT payload_json FROM position_trades ORDER BY trade_date DESC, rowid DESC")
+        defer { sqlite3_finalize(statement) }
+        var records: [PositionTradeRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let record = try decoder.decode(PositionTradeRecord.self, from: Data(text(at: 0, in: statement).utf8))
+            try record.validate()
+            records.append(record)
+        }
+        return records.sorted { $0.tradeDate == $1.tradeDate ? $0.sequence > $1.sequence : $0.tradeDate > $1.tradeDate }
+    }
+
+    @discardableResult
+    func recordTrade(id: UUID = UUID(), side: PositionTradeSide, expected: Position, quantity: Decimal,
+                     price: Decimal, fees: Decimal, tradeDate: Date, cashPositionID: UUID?,
+                     cashName: String, now: Date = .now) throws -> PositionTradeRecord {
+        let day = Self.dayString(from: tradeDate)
+        guard day <= Self.dayString(from: now), tradeDate >= Date(timeIntervalSince1970: 0),
+              quantity > 0, price >= 0, side != .buy || price > 0, fees >= 0,
+              !quantity.isNaN, !price.isNaN, !fees.isNaN,
+              expected.category != .cash || ((side == .add || side == .withdraw) && price == 1 && fees == 0),
+              side != .withdraw || expected.category == .cash,
+              side.usesCashAccount || cashPositionID == nil else { throw PositionTradeError.invalidInput }
+        var result: PositionTradeRecord?
+        try transaction {
+            try ensureOpeningBalances(now: now)
+            let records = try fetchPositionTrades()
+            guard !records.contains(where: { $0.id == id }) else { throw PositionTradeError.changed }
+            let positions = try fetchPositions()
+            if let current = positions.first(where: { $0.id == expected.id }) {
+                guard current.quantity == expected.quantity, current.totalCost == expected.totalCost,
+                      current.symbol == expected.symbol, current.name == expected.name,
+                      current.category == expected.category, current.quoteCurrency == expected.quoteCurrency else { throw PositionTradeError.changed }
+            } else {
+                guard !side.reducesBalance, !positions.contains(where: { $0.symbol == expected.symbol && $0.category == expected.category }),
+                      !records.contains(where: { $0.asset.id == expected.id.uuidString }) else { throw PositionTradeError.changed }
+            }
+            let cash: Position?
+            if !side.usesCashAccount {
+                cash = nil
+            } else if let cashPositionID, let selected = positions.first(where: { $0.id == cashPositionID }),
+               selected.category == .cash, selected.quoteCurrency == expected.quoteCurrency {
+                cash = selected
+            } else {
+                guard side == .sell, cashPositionID == nil,
+                      !positions.contains(where: { $0.category == .cash && $0.symbol == expected.quoteCurrency.rawValue }) else {
+                    throw PositionTradeError.insufficientCash
+                }
+                // A positive template is metadata only; the replay starts a new account at zero.
+                cash = PositionClosureMath.cashPosition(currency: expected.quoteCurrency, quantity: 1, name: cashName)
+            }
+            let amount = expected.category == .cash ? quantity
+                : PositionClosureMath.rounded(quantity * price, currency: expected.quoteCurrency) + (side == .sell ? -fees : fees)
+            guard amount >= 0, !amount.isNaN else { throw PositionTradeError.invalidInput }
+            let candidate = PositionTradeRecord(id: id, sequence: (records.map(\.sequence).max() ?? 0) + 1,
+                side: side, asset: .init(position: expected, timestamp: Self.timestamp(from: now)),
+                cash: cash.map { .init(position: $0, timestamp: Self.timestamp(from: now)) }, tradeDate: day,
+                quantity: Self.decimalString(quantity), executionPrice: Self.decimalString(price), fees: Self.decimalString(fees),
+                cashAmount: Self.decimalString(amount), allocatedCost: "0", rateFromCNY: Self.decimalString(expected.quoteCurrency.rateFromCNY),
+                recordedAt: Self.timestamp(from: now), reversedAt: nil, priceHistory: [])
+            try candidate.validate()
+            let later = connectedTradeRecords(records.filter { !$0.isReversed && $0.tradeDate > day },
+                accountIDs: candidate.accountIDs)
+            try writeDailySnapshots(positions: positions, snapshotDate: now)
+            let replayed = try replayTrades(old: later, new: [candidate] + later, from: day, now: now)
+            try ensureOpeningBalances(now: now)
+            result = replayed.first { $0.id == id }
+        }
+        guard let result else { throw PositionTradeError.invalidInput }
+        return result
+    }
+
+    func reverseTrade(id: UUID, now: Date = .now) throws {
+        try transaction {
+            let records = try fetchPositionTrades()
+            guard var record = records.first(where: { $0.id == id }), !record.isReversed else { throw PositionTradeError.changed }
+            let affected = connectedTradeRecords(records.filter {
+                !$0.isReversed && ($0.tradeDate > record.tradeDate || ($0.tradeDate == record.tradeDate && $0.sequence >= record.sequence))
+            }, accountIDs: record.accountIDs)
+            _ = try replayTrades(old: affected, new: affected.filter { $0.id != id }, from: record.tradeDate, now: now,
+                recordedBoundary: record.recordedAt)
+            record.reversedAt = Self.timestamp(from: now)
+            try saveTrade(record)
+        }
+    }
+
+    private func saveTrade(_ record: PositionTradeRecord) throws {
+        try record.validate()
+        let statement = try prepare("INSERT INTO position_trades(id, trade_date, payload_json) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET trade_date = excluded.trade_date, payload_json = excluded.payload_json")
+        defer { sqlite3_finalize(statement) }
+        try bind(record.id.uuidString, to: 1, in: statement)
+        try bind(record.tradeDate, to: 2, in: statement)
+        try bind(String(decoding: encoder.encode(record), as: UTF8.self), to: 3, in: statement)
+        try stepDone(statement)
+    }
+
+    private func connectedTradeRecords(_ candidates: [PositionTradeRecord], accountIDs: Set<String>) -> [PositionTradeRecord] {
+        var ids = accountIDs
+        var count = 0
+        repeat {
+            count = ids.count
+            for trade in candidates where !ids.isDisjoint(with: trade.accountIDs) {
+                ids.formUnion(trade.accountIDs)
+            }
+        } while ids.count != count
+        return candidates.filter { !ids.isDisjoint(with: $0.accountIDs) }
+    }
+
+    private func replayTrades(old: [PositionTradeRecord], new: [PositionTradeRecord], from day: String,
+                              now: Date, recordedBoundary: String? = nil) throws -> [PositionTradeRecord] {
+        let today = Self.dayString(from: now)
+        let current = try fetchPositions()
+        let all = old + new
+        var templates: [String: Position] = [:]
+        for record in all {
+            templates[record.asset.id] = try record.asset.position()
+            if let cash = record.cash { templates[cash.id] = try cash.position() }
+        }
+        for position in current { templates[position.id.uuidString] = position }
+        let ids = Set(all.flatMap { $0.accountIDs })
+        guard !(try fetchPositionClosures()).contains(where: { closure in
+            !closure.isReversed && (closure.tradeDate > day ||
+                (closure.tradeDate == day && recordedBoundary.map { $0 < closure.recordedAt } == true)) &&
+                (ids.contains(closure.holding.id) || closure.cashPositionID.map(ids.contains) == true)
+        }) else { throw PositionTradeError.dependentLegacyRecord }
+        let currentBalances = Dictionary(uniqueKeysWithValues: current.map { ($0.id.uuidString, PositionTradeReplay.Balance(quantity: $0.quantity, cost: $0.totalCost)) })
+        var opening = currentBalances
+        for record in old {
+            var asset = opening[record.asset.id] ?? .init(quantity: 0, cost: 0)
+            asset.quantity -= record.quantityDelta
+            asset.cost -= record.costDelta
+            opening[record.asset.id] = asset
+            if let account = record.cash {
+                var cash = opening[account.id] ?? .init(quantity: 0, cost: 0)
+                cash.quantity -= record.cashDelta
+                cash.cost = cash.quantity
+                opening[account.id] = cash
+            }
+        }
+        for (id, balance) in opening where balance.quantity == 0 && abs(balance.cost.doubleValue) < 0.00000001 {
+            opening[id]?.cost = 0
+        }
+        guard opening.values.allSatisfy({ $0.quantity >= 0 && $0.cost >= 0 && !$0.cost.isNaN }) else { throw PositionTradeError.historicalCorrection }
+        // A reconciliation is an absolute balance, not a trade. Never reinterpret it as a cash flow.
+        for id in ids {
+            let statement = try prepare("SELECT created_at, snapshot_json FROM position_revisions WHERE position_id = ? AND operation IN ('update', 'balance_update', 'delete') ORDER BY created_at")
+            defer { sqlite3_finalize(statement) }
+            try bind(id, to: 1, in: statement)
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let timestamp = text(at: 0, in: statement)
+                guard let revisionDate = ISO8601DateFormatter().date(from: timestamp) else { continue }
+                let revisionDay = Self.dayString(from: revisionDate)
+                let afterBoundary = recordedBoundary.map { timestamp >= $0 } ?? (revisionDay > day)
+                guard afterBoundary, revisionDay <= today else { continue }
+                let snapshot = try decoder.decode([String: String].self, from: Data(text(at: 1, in: statement).utf8))
+                var expected = opening[id] ?? .init(quantity: 0, cost: 0)
+                for trade in old where trade.recordedAt < timestamp {
+                    if trade.asset.id == id { expected.quantity += trade.quantityDelta; expected.cost += trade.costDelta }
+                    if trade.cash?.id == id { expected.quantity += trade.cashDelta; expected.cost += trade.cashDelta }
+                }
+                var possibleBalances = [expected]
+                // Older revision timestamps have second precision; preserve valid ordering within that second.
+                for trade in old.filter({ $0.recordedAt == timestamp }).sorted(by: { $0.sequence < $1.sequence }) {
+                    if trade.asset.id == id { expected.quantity += trade.quantityDelta; expected.cost += trade.costDelta }
+                    if trade.cash?.id == id { expected.quantity += trade.cashDelta; expected.cost += trade.cashDelta }
+                    possibleBalances.append(expected)
+                }
+                guard possibleBalances.contains(where: {
+                    snapshot["quantity"].flatMap(PositionClosureMath.decimal) == $0.quantity &&
+                    snapshot["totalCost"].flatMap(PositionClosureMath.decimal) == $0.cost
+                }) else { throw PositionTradeError.historicalCorrection }
+            }
+        }
+        var balances = opening
+        var replayed: [PositionTradeRecord] = []
+        for var trade in new.sorted(by: { $0.tradeDate == $1.tradeDate ? $0.sequence < $1.sequence : $0.tradeDate < $1.tradeDate }) {
+            try PositionTradeReplay.apply(&trade, to: &balances)
+            try trade.validate()
+            replayed.append(trade)
+        }
+        var identities = Set<String>()
+        for (id, template) in templates where (balances[id]?.quantity ?? 0) > 0 {
+            guard identities.insert("\(template.category.rawValue)/\(template.symbol.uppercased())").inserted else {
+                throw PositionTradeError.identityConflict
+            }
+        }
+        let history = try ids.flatMap { try closureAssetSnapshots(positionID: $0, from: "1970-01-01") }
+        if day < today {
+            for id in ids where (opening[id]?.quantity ?? 0) > 0 {
+                guard history.contains(where: { $0.assetID == id && $0.date <= day }) else { throw PositionTradeError.missingHistory }
+            }
+        }
+        // Check imported history too: imported backups may not contain revision rows.
+        for snapshot in history where snapshot.date >= day && snapshot.date < today {
+            var expected = opening[snapshot.assetID] ?? .init(quantity: 0, cost: 0)
+            for trade in old where trade.tradeDate <= snapshot.date {
+                if trade.asset.id == snapshot.assetID { expected.quantity += trade.quantityDelta; expected.cost += trade.costDelta }
+                if trade.cash?.id == snapshot.assetID { expected.quantity += trade.cashDelta; expected.cost += trade.cashDelta }
+            }
+            guard PositionClosureMath.decimal(snapshot.quantity) == expected.quantity,
+                  abs(((PositionClosureMath.decimal(snapshot.averageCost) ?? 0) * expected.quantity - expected.cost).doubleValue) < 0.000001 else {
+                throw PositionTradeError.historicalCorrection
+            }
+        }
+        let archive = all.flatMap(\.priceHistory)
+        let portfolio = try closurePortfolioSnapshots(from: day)
+        let dates = Set(history.filter { $0.date >= day }.map(\.date) + portfolio.map(\.date) + all.map(\.tradeDate) + [day])
+        for date in dates.sorted() where date >= day && date <= today {
+            for id in ids {
+                guard let template = templates[id] else { continue }
+                let snapshot = history.first { $0.assetID == id && $0.date == date }
+                let reference = snapshot ?? archive.first { $0.assetID == id && $0.date == date }
+                    ?? (history + archive).filter { $0.assetID == id && $0.date <= date }.max { $0.date < $1.date }
+                let oldQuantity = snapshot.flatMap { PositionClosureMath.decimal($0.quantity) } ?? 0
+                let oldCost = oldQuantity * (snapshot.flatMap { PositionClosureMath.decimal($0.averageCost) } ?? 0)
+                var deltaQuantity = Decimal.zero
+                var deltaCost = Decimal.zero
+                for (trades, sign) in [(old, Decimal(-1)), (replayed, Decimal(1))] {
+                    for trade in trades where trade.tradeDate <= date {
+                        if trade.asset.id == id { deltaQuantity += sign * trade.quantityDelta; deltaCost += sign * trade.costDelta }
+                        if trade.cash?.id == id { deltaQuantity += sign * trade.cashDelta; deltaCost += sign * trade.cashDelta }
+                    }
+                }
+                guard deltaQuantity != 0 || deltaCost != 0 else { continue }
+                let quantity = oldQuantity + deltaQuantity
+                let rawCost = oldCost + deltaCost
+                // A stored average can round repeating decimals; a fully sold position has exactly zero cost.
+                let cost: Decimal = quantity == 0 && abs(rawCost.doubleValue) < 0.00000001 ? 0 : rawCost
+                guard quantity >= 0, cost >= 0 else { throw PositionTradeError.historicalCorrection }
+                let price = reference.flatMap { PositionClosureMath.decimal($0.latestPrice) }
+                    ?? (template.category == .cash ? 1 : replayed.last { $0.asset.id == id && $0.tradeDate <= date }?.price)
+                    ?? template.latestPrice
+                let referenceQuantity = reference.flatMap { PositionClosureMath.decimal($0.quantity) } ?? 0
+                let referencePrice = reference.flatMap { PositionClosureMath.decimal($0.latestPrice) } ?? 0
+                let unitRate = referenceQuantity > 0 && referencePrice > 0
+                    ? (reference.flatMap { PositionClosureMath.decimal($0.marketValueCNY) } ?? 0) / referenceQuantity / referencePrice
+                    : 1 / template.quoteCurrency.rateFromCNY
+                let oldValue = snapshot.flatMap { PositionClosureMath.decimal($0.marketValueCNY) } ?? 0
+                if portfolio.contains(where: { $0.date == date }) {
+                    try adjustClosurePortfolioSnapshot(day: date, valueDelta: quantity * price * unitRate - oldValue, costDelta: deltaCost * unitRate)
+                }
+                if quantity == 0 {
+                    // Retain only prices being removed. Partial trades do not duplicate a year's history.
+                    if let snapshot, let index = replayed.firstIndex(where: { $0.accountIDs.contains(id) }),
+                       !replayed[index].priceHistory.contains(where: { $0.assetID == id && $0.date == date }) {
+                        replayed[index].priceHistory.append(snapshot)
+                    }
+                    try deleteClosureAssetSnapshot(id: id, day: date)
+                }
+                else {
+                    try writeClosureAssetSnapshot(.init(assetID: id, date: date, name: template.name, symbol: template.symbol,
+                        category: template.category.rawValue, quoteCurrency: template.quoteCurrency.rawValue,
+                        quantity: Self.decimalString(quantity), averageCost: Self.decimalString(cost / quantity),
+                        latestPrice: Self.decimalString(price), marketValueCNY: Self.decimalString(quantity * price * unitRate),
+                        source: reference?.source ?? "交易记账", quoteTime: reference?.quoteTime ?? date,
+                        freshness: reference?.freshness ?? Freshness.manual.rawValue, updatedAt: Self.timestamp(from: now)))
+                }
+            }
+        }
+        for id in ids {
+            guard let template = templates[id], let uuid = UUID(uuidString: id) else { throw PositionTradeError.invalidInput }
+            let balance = balances[id] ?? .init(quantity: 0, cost: 0)
+            if balance.quantity == 0 { try removeActiveClosurePosition(id: uuid); try deleteClosureAssetSnapshot(id: id, day: today) }
+            else {
+                let updated = Position(id: uuid, name: template.name, symbol: template.symbol, category: template.category,
+                    quoteCurrency: template.quoteCurrency, quantity: balance.quantity, totalCost: balance.cost,
+                    averageCost: balance.cost / balance.quantity, latestPrice: template.latestPrice,
+                    marketValueCNY: balance.quantity * template.latestPrice / template.quoteCurrency.rateFromCNY,
+                    profitRate: balance.cost == 0 ? 0 : (balance.quantity * template.latestPrice / balance.cost - 1) * 100,
+                    weeklyTrend: template.weeklyTrend, source: template.source, quoteTime: template.quoteTime,
+                    fetchedAt: template.fetchedAt, freshness: template.freshness)
+                try PositionInputValidator.validate(updated)
+                try save(updated, operation: "trade")
+            }
+        }
+        for record in replayed { try saveTrade(record) }
+        try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+        return replayed
+    }
+
+    // Corrections remove the artificial P&L caused by applying end-of-day balances to pre-trade prices.
+    func tradeDailyProfitAdjustments(through date: Date = .now) throws -> [String: [String: Decimal]] {
+        let end = Self.dayString(from: date)
+        let trades = try fetchPositionTrades().filter { !$0.isReversed && $0.tradeDate <= end }
+        guard !trades.isEmpty else { return [:] }
+        let statement = try prepare("SELECT asset_id, snapshot_date, quantity, market_value_cny FROM asset_price_snapshots WHERE snapshot_date <= ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(end, to: 1, in: statement)
+        var units: [String: [String: Decimal]] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let quantity = PositionClosureMath.decimal(text(at: 2, in: statement)), quantity > 0,
+                  let value = PositionClosureMath.decimal(text(at: 3, in: statement)) else { throw PositionTradeError.invalidInput }
+            units[text(at: 0, in: statement), default: [:]][text(at: 1, in: statement)] = value / quantity
+        }
+        let inputs = trades.map { RecordedTradeProfit(assetID: $0.asset.id, cashID: $0.cash?.id, side: $0.side.rawValue,
+            tradeDate: $0.tradeDate, quantity: $0.quantity, executionPrice: $0.executionPrice, fees: $0.fees,
+            cashAmount: $0.cashAmount, rateFromCNY: $0.rateFromCNY,
+            priceHistory: $0.priceHistory.map { .init(assetID: $0.assetID, date: $0.date, quantity: $0.quantity, marketValueCNY: $0.marketValueCNY) }) }
+        return RecordedTradeProfit.adjustments(trades: inputs, unitValues: units, through: end)
     }
 }
 

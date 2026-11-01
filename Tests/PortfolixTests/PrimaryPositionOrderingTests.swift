@@ -99,6 +99,22 @@ struct PrimaryPositionOrderingTests {
         #expect(byReturnRate.map(\.name) == ["First", "Third", "Second"])
     }
 
+    @Test
+    func holdingSequenceNumbersFollowTheCurrentlySortedAndFilteredRows() {
+        let positions = [makePosition(name: "First", marketValue: 300, profitRate: -5),
+                         makePosition(name: "Second", marketValue: 100, profitRate: 15),
+                         makePosition(name: "Third", marketValue: 200, profitRate: 5)]
+        for order: SortOrder in [.forward, .reverse] {
+            let sorted = PositionDetailOrdering.sorted(positions, using: [KeyPathComparator(\Position.marketValueCNY, order: order)])
+            let numbers = PositionDetailOrdering.displayNumbers(for: sorted)
+            #expect(sorted.compactMap { numbers[$0.id] } == [1, 2, 3])
+            let filtered = sorted.filter { $0.name != "Second" }
+            let filteredNumbers = PositionDetailOrdering.displayNumbers(for: filtered)
+            #expect(filtered.compactMap { filteredNumbers[$0.id] } == [1, 2])
+        }
+        #expect(PositionDetailOrdering.displayNumbers(for: []).isEmpty)
+    }
+
     private func makePosition(
         name: String,
         marketValue: Decimal,

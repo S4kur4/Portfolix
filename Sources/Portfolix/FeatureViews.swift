@@ -4,12 +4,14 @@ import SwiftUI
 struct PositionsView: View {
     @Environment(PortfolioStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
-    @State private var pendingDeletionID: Position.ID?
-    @State private var selectedBatchPositionIDs: Set<Position.ID> = []
-    @State private var isBatchDeletionConfirmationPresented = false
-    @State private var isPositionUpdatePresented = false
     @State private var operationErrorMessage: String?
     @State private var positionSortOrder: [KeyPathComparator<Position>] = []
+    @State private var showsClosedPositions = false
+    @State private var pendingClosure: Position?
+    @State private var selectedClosureID: UUID?
+    @State private var pendingReversal: PositionTransactionRow?
+    @State private var pendingOpeningReview: PositionOpeningBalanceRecord?
+    @State private var pendingCashReduction: Position?
     @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
@@ -18,47 +20,23 @@ struct PositionsView: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             PageHeader(title: localizedText("持仓明细", "Holdings", language: store.appLanguage)) {
                 HStack(spacing: PortfolixSpacing.sm) {
-                    if hasBatchSelection {
-                        Text(
-                            store.appLanguage == .english
-                                ? "\(selectedBatchPositionIDs.count) selected"
-                                : "\(selectedBatchPositionIDs.count) 项已选"
-                        )
-                            .font(PortfolixTypography.captionEmphasis)
-                            .foregroundStyle(PortfolixTheme.secondaryText)
-                            .monospacedDigit()
-
-                        Button(localizedText("全选", "Select All", language: store.appLanguage)) {
-                            selectAllVisiblePositions()
-                        }
-                        .buttonStyle(QuietButtonStyle())
-                        .disabled(store.filteredPositions.isEmpty || allVisiblePositionsSelected)
-
-                        Button(localizedText("取消", "Cancel", language: store.appLanguage)) {
-                            clearBatchSelection()
-                        }
-                        .buttonStyle(QuietButtonStyle())
-
-                        Button(role: .destructive) {
-                            isBatchDeletionConfirmationPresented = true
-                        } label: {
-                            Label(localizedText("删除", "Delete", language: store.appLanguage), systemImage: "trash")
-                        }
-                        .buttonStyle(QuietButtonStyle())
-                        .disabled(selectedBatchPositionIDs.isEmpty)
-                    } else {
+                    if !showsClosedPositions {
                         Button {
-                            isPositionUpdatePresented = true
+                            guard let target = reductionTarget else { return }
+                            if target.category == .cash { pendingCashReduction = target }
+                            else { pendingClosure = target }
                         } label: {
-                            Label(localizedText("更新持仓", "Update Holdings", language: store.appLanguage), systemImage: "square.and.pencil")
+                            Label(reductionTarget?.category == .cash
+                                ? localizedText("减少现金", "Reduce Cash", language: store.appLanguage)
+                                : localizedText("卖出资产", "Sell Asset", language: store.appLanguage), systemImage: "minus")
                         }
                         .buttonStyle(QuietButtonStyle())
-                        .disabled(store.positions.isEmpty)
+                        .disabled(reductionTarget == nil)
 
                         Button {
                             store.presentNewPositionEditor()
                         } label: {
-                            Label(localizedText("添加持仓", "Add Holding", language: store.appLanguage), systemImage: "plus")
+                            Label(localizedText("添加资产", "Add Asset", language: store.appLanguage), systemImage: "plus")
                         }
                         .buttonStyle(PrimaryButtonStyle())
                     }
@@ -68,6 +46,13 @@ struct PositionsView: View {
             Panel(padding: 0) {
                 VStack(spacing: 0) {
                     HStack {
+                        PortfolixGlassSegmentedPicker(
+                            title: localizedText("持仓状态", "Holding Status", language: store.appLanguage),
+                            selection: $showsClosedPositions, options: [false, true],
+                            optionTitle: { $0 ? localizedText("交易记录", "Transactions", language: store.appLanguage)
+                                : localizedText("持有中", "Open", language: store.appLanguage) },
+                            width: 184, height: PortfolixLayout.positionsToolbarControlHeight
+                        )
                         HStack(spacing: PortfolixSpacing.sm) {
                             Image(systemName: "magnifyingglass")
                                 .foregroundStyle(PortfolixTheme.tertiaryText)
@@ -77,7 +62,7 @@ struct PositionsView: View {
                                 .focused($isSearchFieldFocused)
                         }
                         .padding(.horizontal, PortfolixSpacing.md)
-                        .frame(width: 260, height: PortfolixLayout.positionsToolbarControlHeight)
+                        .frame(width: 220, height: PortfolixLayout.positionsToolbarControlHeight)
                         .portfolixGlass(
                             in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
                             fallbackTint: PortfolixTheme.panelElevated,
@@ -111,103 +96,82 @@ struct PositionsView: View {
 
                     Divider().overlay(PortfolixTheme.border)
 
-                    positionsTable
+                    if showsClosedPositions { closedPositionsTable }
+                    else { positionsTable }
                 }
             }
         }
-        .alert(localizedText("删除持仓？", "Delete holding?", language: store.appLanguage), isPresented: deletionAlertPresented) {
+        .alert(localizedText("撤销这条记录？", "Reverse this record?", language: store.appLanguage), isPresented: reversalAlertPresented, presenting: pendingReversal) { record in
             Button(localizedText("取消", "Cancel", language: store.appLanguage), role: .cancel) {
-                pendingDeletionID = nil
+                pendingReversal = nil
             }
-            Button(localizedText("删除", "Delete", language: store.appLanguage), role: .destructive) {
-                guard let pendingDeletionID else { return }
+            Button(localizedText("撤销记录", "Reverse Record", language: store.appLanguage), role: .destructive) {
                 do {
-                    try store.deletePosition(for: pendingDeletionID)
+                    try store.reverseRecord(record)
+                    selectedClosureID = nil
+                    operationErrorMessage = nil
                 } catch {
-                    operationErrorMessage = error.localizedDescription
+                    operationErrorMessage = (error as? PositionTradeError)?.message(language: store.appLanguage)
+                        ?? (error as? PositionClosureError)?.message(language: store.appLanguage)
+                        ?? (error as? PositionOpeningBalanceError)?.message(language: store.appLanguage) ?? error.localizedDescription
                 }
-                self.pendingDeletionID = nil
+                pendingReversal = nil
             }
-        } message: {
-            Text(deletionMessage)
+        } message: { record in
+            Text(record.opening != nil
+                ? localizedText("将撤销 \(record.name) 的期初持仓，并移除该资产的余额及相关历史。", "Reverse the opening balance for \(record.name) and remove its balance and related history.", language: store.appLanguage)
+                : localizedText("将撤销 \(record.name) 的这条记录，并重新计算相关份额、现金和后续记录。", "Reverse this record for \(record.name) and recalculate related units, cash, and later records.", language: store.appLanguage))
         }
-        .alert(localizedText("删除所选持仓？", "Delete selected holdings?", language: store.appLanguage), isPresented: $isBatchDeletionConfirmationPresented) {
-            Button(localizedText("取消", "Cancel", language: store.appLanguage), role: .cancel) {}
-            Button(localizedText("删除", "Delete", language: store.appLanguage), role: .destructive) {
-                deleteSelectedPositions()
-            }
-        } message: {
-            Text(
-                store.appLanguage == .english
-                    ? "This will delete \(selectedBatchPositionIDs.count) holdings. This cannot be undone"
-                    : "将删除 \(selectedBatchPositionIDs.count) 项持仓，此操作无法撤销"
-            )
-        }
-        .alert(localizedText("无法删除持仓", "Unable to delete holding", language: store.appLanguage), isPresented: operationErrorAlertPresented) {
+        .alert(localizedText("操作未完成", "Operation Not Completed", language: store.appLanguage), isPresented: operationErrorPresented) {
             Button(localizedText("好", "OK", language: store.appLanguage), role: .cancel) {
                 operationErrorMessage = nil
             }
         } message: {
-            Text(operationErrorMessage ?? localizedText("请稍后重试", "Please try again later", language: store.appLanguage))
+            Text(operationErrorMessage ?? "")
         }
-        .sheet(isPresented: $isPositionUpdatePresented) {
-            BatchPositionUpdateSheet(positions: store.positions)
-                .environment(store)
+        .sheet(item: $pendingClosure) { position in
+            PositionTradeSheet(position: position).environment(store)
         }
-        .onChange(of: store.positions.map(\.id)) { _, positionIDs in
-            selectedBatchPositionIDs.formIntersection(positionIDs)
+        .sheet(item: $pendingOpeningReview) { record in
+            PositionOpeningBalanceSheet(record: record).environment(store)
+        }
+        .sheet(item: $pendingCashReduction) { position in
+            CashReductionSheet(position: position).environment(store)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var deletionAlertPresented: Binding<Bool> {
+    private var reversalAlertPresented: Binding<Bool> {
         Binding(
-            get: { pendingDeletionID != nil },
+            get: { pendingReversal != nil },
             set: { isPresented in
                 if !isPresented {
-                    pendingDeletionID = nil
+                    pendingReversal = nil
                 }
             }
         )
     }
 
-    private var deletionMessage: String {
-        guard
-            let pendingDeletionID,
-            let position = store.positions.first(where: { $0.id == pendingDeletionID })
-        else {
-            return localizedText("此操作无法撤销", "This cannot be undone", language: store.appLanguage)
-        }
-        return store.appLanguage == .english
-            ? "This will delete \(position.name) (\(position.symbol)). This cannot be undone"
-            : "将删除 \(position.name)（\(position.symbol)），此操作无法撤销"
-    }
-
-    private var operationErrorAlertPresented: Binding<Bool> {
+    private var operationErrorPresented: Binding<Bool> {
         Binding(
             get: { operationErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    operationErrorMessage = nil
-                }
-            }
+            set: { if !$0 { operationErrorMessage = nil } }
         )
     }
 
     private var positionsTable: some View {
-        Table(sortedFilteredPositions, selection: selectedPositionBinding, sortOrder: $positionSortOrder) {
-            TableColumn("") { position in
-                Toggle("", isOn: batchSelectionBinding(for: position.id))
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-                    .frame(width: 16, alignment: .center)
-                    .accessibilityLabel(
-                        store.appLanguage == .english
-                            ? "Select \(position.name)"
-                            : "选择 \(position.name)"
-                    )
+        let positions = sortedFilteredPositions
+        let numbers = PositionDetailOrdering.displayNumbers(for: positions)
+        return Table(positions, selection: selectedPositionBinding, sortOrder: $positionSortOrder) {
+            TableColumn(localizedText("序号", "No.", language: store.appLanguage)) { position in
+                Text(String(numbers[position.id] ?? 0))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .monospacedDigit()
+                    .padding(.leading, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .width(20)
+            .width(36)
+            .alignment(.leading)
 
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { position in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
@@ -220,7 +184,7 @@ struct PositionsView: View {
                         .lineLimit(1)
                 }
             }
-            .width(min: 112, ideal: 140)
+            .width(min: 96, ideal: 124)
 
             TableColumn(localizedText("类别", "Type", language: store.appLanguage)) { position in
                 HStack(spacing: PortfolixSpacing.xs) {
@@ -285,29 +249,35 @@ struct PositionsView: View {
         }
         .contextMenu(forSelectionType: Position.ID.self) { selection in
             if let positionID = selection.first {
-                Button {
-                    store.refreshPosition(id: positionID)
-                } label: {
-                    Label(localizedText("更新价格", "Refresh Price", language: store.appLanguage), systemImage: "arrow.clockwise")
+                if canRefresh(positionID: positionID) {
+                    Button {
+                        store.refreshPosition(id: positionID)
+                    } label: {
+                        Label(localizedText("更新价格", "Refresh Price", language: store.appLanguage), systemImage: "arrow.clockwise")
+                    }
                 }
-                .disabled(!canRefresh(positionID: positionID))
 
                 Button {
                     store.presentPositionEditor(for: positionID)
                 } label: {
-                    Label(localizedText("编辑持仓", "Edit Holding", language: store.appLanguage), systemImage: "square.and.pencil")
+                    Label(localizedText("添加资产", "Add Asset", language: store.appLanguage), systemImage: "plus")
                 }
 
-                Divider()
-
-                Button(role: .destructive) {
-                    pendingDeletionID = positionID
-                } label: {
-                    Label(localizedText("删除持仓", "Delete Holding", language: store.appLanguage), systemImage: "trash")
+                if let position = store.positions.first(where: { $0.id == positionID }) {
+                    if position.category == .cash {
+                        Button { pendingCashReduction = position } label: {
+                            Label(localizedText("减少现金", "Reduce Cash", language: store.appLanguage), systemImage: "minus.circle")
+                        }
+                    } else {
+                        Button { pendingClosure = position } label: {
+                            Label(localizedText("卖出资产", "Sell Asset", language: store.appLanguage), systemImage: "arrow.down.right.circle")
+                        }
+                    }
                 }
+
             }
         } primaryAction: { selection in
-            if !hasBatchSelection, let positionID = selection.first {
+            if let positionID = selection.first {
                 store.presentPositionEditor(for: positionID)
             }
         }
@@ -320,6 +290,77 @@ struct PositionsView: View {
         )
     }
 
+    private var closedPositionsTable: some View {
+        let records = PositionTransactionRow.listed(trades: store.positionTrades, closures: store.positionClosures,
+            openings: store.positionOpeningBalances, query: store.searchText)
+        return Table(records, selection: $selectedClosureID) {
+            TableColumn(localizedText("序号", "No.", language: store.appLanguage)) {
+                Text(String($0.displayNumber))
+                    .monospacedDigit()
+                    // Match the native header label's inset within the column.
+                    .padding(.leading, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }.width(36)
+                .alignment(.leading)
+            TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { record in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(record.name).lineLimit(1)
+                    Text(record.symbol).font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondaryText)
+                }
+            }.width(min: 96, ideal: 140)
+            TableColumn(localizedText("记录时间", "Record Time", language: store.appLanguage)) { record in
+                VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
+                    Text(record.recordedDateText)
+                    Text(record.recordedClockText).font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondaryText)
+                }.monospacedDigit()
+            }.width(88)
+            TableColumn(localizedText("类型", "Type", language: store.appLanguage)) {
+                Text($0.needsOpeningReview ? localizedText("期初待核对", "Review Opening", language: store.appLanguage) : $0.kind.title(language: store.appLanguage)).lineLimit(1)
+            }.width(76)
+            TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { Text($0.needsOpeningReview ? "—" : $0.quantity).monospacedDigit() }.width(72)
+            TableColumn(localizedText("成交均价", "Trade Price", language: store.appLanguage)) {
+                Text($0.opening != nil || $0.kind == .withdraw ? "—" : formatMoney($0.price, currency: $0.currency)).monospacedDigit()
+            }.width(96)
+            TableColumn(localizedText("手续费", "Fees", language: store.appLanguage)) {
+                Text($0.opening != nil || $0.kind == .withdraw ? "—" : formatMoney($0.fee, currency: $0.currency)).monospacedDigit()
+            }.width(72)
+            TableColumn(localizedText("记录金额", "Recorded Amount", language: store.appLanguage)) {
+                Text($0.needsOpeningReview ? "—" : formatMoney($0.amount, currency: $0.currency)).monospacedDigit()
+            }.width(104)
+            TableColumn(localizedText("已实现盈亏", "Realized P&L", language: store.appLanguage)) { record in
+                Text(record.profit(in: store.displayCurrency).map { formatSignedMoney($0, currency: store.displayCurrency) } ?? "—")
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: record.profit ?? 0, scheme: store.performanceColorScheme)))
+                    .monospacedDigit()
+            }.width(116)
+        }
+        .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark))
+        .scrollContentBackground(.hidden).background(PortfolixTheme.panel)
+        .contextMenu(forSelectionType: UUID.self) { selection in
+            if let record = records.first(where: { selection.contains($0.id) }) {
+                if let opening = record.opening, opening.requiresReview {
+                    Button(localizedText("核对期初持仓", "Review Opening Balance", language: store.appLanguage)) {
+                        pendingOpeningReview = opening
+                    }
+                }
+                Button {
+                    operationErrorMessage = nil
+                    pendingReversal = record
+                } label: {
+                    Label(localizedText("撤销记录", "Reverse Record", language: store.appLanguage), systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!record.canReverse() || (record.opening.map { opening in
+                    PositionRecordLinks.activeAccountIDs(trades: store.positionTrades, closures: store.positionClosures).contains(opening.id)
+                } ?? false))
+            }
+        }
+        .overlay {
+            if records.isEmpty {
+                Text(localizedText("暂无交易记录", "No transactions", language: store.appLanguage))
+                    .font(PortfolixTypography.body).foregroundStyle(PortfolixTheme.secondaryText).allowsHitTesting(false)
+            }
+        }
+    }
+
     private var sortedFilteredPositions: [Position] {
         PositionDetailOrdering.sorted(
             store.filteredPositions,
@@ -327,8 +368,14 @@ struct PositionsView: View {
         )
     }
 
+    private var reductionTarget: Position? {
+        store.positions.first { $0.id == store.selectedPositionID }
+            ?? store.positions.first { $0.category != .cash }
+            ?? store.positions.first
+    }
+
     private func canRefresh(_ position: Position) -> Bool {
-        position.category != .cash
+        MarketDataAdapter.supportsQuote(for: position)
     }
 
     private func canRefresh(positionID: Position.ID) -> Bool {
@@ -336,45 +383,6 @@ struct PositionsView: View {
         return canRefresh(position)
     }
 
-    private var allVisiblePositionsSelected: Bool {
-        let visibleIDs = Set(store.filteredPositions.map(\.id))
-        return !visibleIDs.isEmpty && visibleIDs.isSubset(of: selectedBatchPositionIDs)
-    }
-
-    private var hasBatchSelection: Bool {
-        !selectedBatchPositionIDs.isEmpty
-    }
-
-    private func clearBatchSelection() {
-        selectedBatchPositionIDs = []
-    }
-
-    private func selectAllVisiblePositions() {
-        let visibleIDs = Set(store.filteredPositions.map(\.id))
-        selectedBatchPositionIDs.formUnion(visibleIDs)
-    }
-
-    private func batchSelectionBinding(for positionID: Position.ID) -> Binding<Bool> {
-        Binding(
-            get: { selectedBatchPositionIDs.contains(positionID) },
-            set: { isSelected in
-                if isSelected {
-                    selectedBatchPositionIDs.insert(positionID)
-                } else {
-                    selectedBatchPositionIDs.remove(positionID)
-                }
-            }
-        )
-    }
-
-    private func deleteSelectedPositions() {
-        do {
-            try store.deletePositions(for: selectedBatchPositionIDs)
-            clearBatchSelection()
-        } catch {
-            operationErrorMessage = error.localizedDescription
-        }
-    }
 }
 
 // Resolve selection styling with the native row background, rather than redrawing
@@ -411,7 +419,7 @@ struct PositionSourceCell: View {
 
             Spacer(minLength: PortfolixSpacing.sm)
 
-            if position.category != .cash {
+            if MarketDataAdapter.supportsQuote(for: position) {
                 PositionRefreshButton(
                     position: position,
                     isRefreshing: store.refreshingPositionIDs.contains(position.id),
@@ -428,6 +436,10 @@ struct PositionSourceCell: View {
 }
 
 enum PositionDetailOrdering {
+    static func displayNumbers(for positions: [Position]) -> [Position.ID: Int] {
+        Dictionary(uniqueKeysWithValues: positions.enumerated().map { ($0.element.id, $0.offset + 1) })
+    }
+
     static func sorted(
         _ positions: [Position],
         using comparators: [KeyPathComparator<Position>]
