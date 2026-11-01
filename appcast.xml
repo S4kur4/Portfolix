@@ -3,54 +3,72 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.10</title>
-            <pubDate>Sat, 17 Oct 2026 22:03:50 +0800</pubDate>
+            <title>0.1.11</title>
+            <pubDate>Sun, 01 Nov 2026 10:33:10 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>22</sparkle:version>
-            <sparkle:shortVersionString>0.1.10</sparkle:shortVersionString>
+            <sparkle:version>23</sparkle:version>
+            <sparkle:shortVersionString>0.1.11</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.10 (Build 22)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.11 (Build 23)
 
-## 新功能
+## 资产记账
 
-- 新增投资云图：在“今日盈亏”和“投资分布”之间切换，以矩形面积呈现各资产的当日盈亏，或通过 AI 分析底层投资领域及其金额与占比。
-- 投资分布随行情更新，并优先复用已有分类；未启用 AI、缺少有效密钥或分析失败时，按资产类别展示。
-- 搜索 API 新增 DeepSeek Search 开关，复用 DeepSeek API Key，支持与 Parallel Search、Tavily、博查同时启用，由 Agent 按需选择并在失败时回退。
+- 重新设计持仓管理：通过“添加资产”录入新资产或增持已有资产，可选择外部新增资金或已有现金账户支付，并将手续费计入成本。
+- 新增“卖出资产”，支持部分卖出和全部卖出，自动更新剩余份额、持仓成本、收款现金余额及已实现盈亏。现金资产通过“减少现金”记录部分或全部转出，不作为卖出计算盈亏。
+- 新增统一交易记录，包含倒序序号、精确到秒的记录时间、份额、成交价格、手续费及已实现盈亏；可在右键菜单中撤销记录，并重新计算相关持仓与现金。
+- 旧版持仓自动生成期初记录，以兼容新的记账方式；无法可靠还原的期初信息可先核对确认。移除直接删除持仓和批量修改余额的入口，避免绕过操作记录。
+- 同步适配历史收益、盈亏日历、投资云图、行情更新、智能分析、MCP 和备份恢复，避免将资金转入转出误计为投资收益，或让后台行情覆盖已更新的份额。
 
-## 优化与修复
+## 智能分析与投资分布
 
-- 统一浅色与深色模式下的文字层级、卡片底色、选中状态和 Liquid Glass 按钮、选择器质感；保留旧版 macOS 的兼容外观。
-- 统一卡片内边距和标题、控件对齐，移除卡片外侧描边，优化侧边栏、弹出窗口及持仓表格的视觉一致性。
-- “每日盈亏”更名为“盈亏日历”，优化月份显示和日历底部间距，并调整其与投资云图的布局顺序。
-- 持仓占比改为按累计市值达到 90% 展示，其余合并为“其他”；悬停时显示对应金额，并去除柱状图灰色衬底和描边。
-- 移除旧投资画像、资产配置和计价币种分布卡片，清理旧画像的 AI 评分流程。
-- 智能分析输入区使用动态圆形按钮：空白时生成分析，输入文字后切换为发送。
-- 修复投资云图等显示选择未能持久保存的问题，优化持仓表格选择时的闪烁及相关稳定性。
-- 简化搜索配置说明，统一 Tavily 与 DeepSeek 的密钥验证提示文案、图标及状态颜色。
+- Agent 可按需调用只读持仓、历史收益和交易记录工具，不再依赖先生成报告才能获取组合数据。
+- 精简上下文并限制工具与修复调用预算；在每条回答下方显示本次回答消耗的 tokens。
+- 统一报告与问答的表达风格，减少重复和机械化文案；支持加粗、斜体、下划线及列表等基础 Markdown 显示。
+- 投资分布优先识别资产实际投资领域，按资产身份缓存分类，新增或身份变化时按需补充分类；价格和份额变化仅重算金额及占比。未配置 AI 或分类失败时保留本地分类回退。
+- 修复分类批次中部分失败导致已完成结果丢失，以及模型最终回复为空时误用中间内容的问题。
 
-DeepSeek Search 为独立计费服务，默认关闭。启用前请确认 DeepSeek 账户的服务可用性及费用。
+## 界面与兼容性
 
-## New Features
+- 新增可折叠侧边栏，优化图标对齐、页面切换稳定性及收起状态的新版本提示。
+- 新增绿涨红跌、红涨绿跌配色选择，统一数字变化动画，优化日历日期描边与卡片高度。
+- 调整浅色与深色背景为更中性的黑白色，统一空状态提示字体。
+- 将弹窗报错和验证反馈统一放在固定底栏，每次仅显示当前操作对应的一条提示；修复添加资产时需要点击两次确认的问题。
+- 隐藏不支持自动行情资产的刷新按钮，改善持仓与交易记录的序号对齐、币种切换及表格交互。
+- 加强只读 MCP 协议兼容性、输入边界和数据访问控制，新增交易与已清仓记录查询，并提供主流 Agent 客户端的紧凑配置参考。
+- 统一隐藏页面滚动条，减少不同 Mac 系统设置造成的外观差异。
 
-- Added the Investment Map, with Today's P&L and Distribution modes. Tile areas represent absolute daily gains or losses, or AI-assisted underlying investment-sector allocations with amounts and percentages.
-- Distribution updates with market data and reuses existing classifications. Asset-category distributions remain available when AI is disabled, credentials are unavailable, or analysis fails.
-- Added DeepSeek Search using the existing DeepSeek API key. Enable it alongside Parallel Search, Tavily, and Bocha, with agent-selected routing and provider fallback.
+升级前建议先导出备份。所有添加、卖出和现金转出均为本地记账，不会执行真实交易。安装要求：Apple Silicon Mac，macOS 15 或更高版本。
 
-## Improvements and Fixes
+## Asset Records
 
-- Unified text hierarchy, card surfaces, selection states, and Liquid Glass buttons and selectors in light and dark appearances, with compatible rendering on earlier macOS versions.
-- Standardized card padding and header alignment, removed outer card borders, and improved consistency across the sidebar, sheets, and holdings tables.
-- Renamed Daily P&L to P&L Calendar, improved month labels and bottom spacing, and rearranged the calendar and investment-map cards.
-- Holding Mix now shows holdings up to 90% of cumulative market value and groups the remainder as Other, displays hovered amounts, and removes the gray chart backing and outline.
-- Removed the retired investment-profile, asset-allocation, and quote-currency cards, along with the old AI radar-scoring workflow.
-- Added a dynamic circular composer button that generates analysis when empty and sends a question when text is entered.
-- Persisted display selections and improved holdings-table selection stability and flicker behavior.
-- Simplified search configuration descriptions and aligned Tavily validation messages, icons, and colors with DeepSeek.
+- Redesigned holding management: add new assets or increase existing positions, optionally fund additions from recorded cash, and include fees in the cost basis.
+- Record partial or full sales with updated remaining quantities, cost bases, cash proceeds, and realized P&L. Reduce cash through partial or full withdrawals without treating principal flows as investment losses.
+- Added a unified transaction ledger with descending row numbers, timestamps including seconds, prices, fees, and realized P&L. Reverse records from the context menu and recalculate related holdings and cash.
+- Migrate existing holdings into opening records, with confirmation available where the original balance cannot be reliably reconstructed. Removed direct holding deletion and bulk balance-editing entry points.
+- Updated historical returns, the P&L calendar, investment map, quote synchronization, AI tools, MCP, and backup recovery for the new ledger.
 
-DeepSeek Search is billed separately and is disabled by default. Check service availability and pricing before enabling it.
+## AI Analysis and Distribution
+
+- Let the Agent request read-only holdings, history, and transaction data when needed, without requiring an existing analysis report.
+- Reduced redundant context and bounded tool and repair calls. Display the tokens consumed by each answer.
+- Unified report and chat tone, improved concise explanations, and added basic Markdown rendering for emphasis, underlines, and lists.
+- Classify underlying investment sectors per asset and reuse cached classifications. Revalue amounts and percentages without reclassifying on price or quantity changes; retain local fallbacks when AI is unavailable.
+- Preserve completed classifications when later batches fail, and reject provisional content when the final model response is empty.
+
+## Interface and Compatibility
+
+- Added a collapsible sidebar with aligned icons, stable navigation, and compact update notifications.
+- Added gain/loss color conventions, consistent numeric transitions, refined calendar outlines, and balanced card heights.
+- Refined neutral light and dark surfaces and standardized empty-state typography.
+- Consolidated sheet feedback into a fixed footer with one current message, and fixed asset submission requiring a second click.
+- Improved table numbering, currency conversion, and refresh controls for assets without automatic quotes.
+- Hardened read-only MCP compatibility and access boundaries, added transaction and closed-holding queries, and refined client configuration references.
+- Hide page scroll indicators consistently across Mac system preferences.
+
+Export a backup before upgrading. Asset additions, sales, and cash withdrawals only update local records; they never execute real trades. Requires an Apple Silicon Mac running macOS 15 or later.
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.10/Portfolix-0.1.10.dmg" length="6223814" type="application/octet-stream" sparkle:edSignature="+NPOTlb8EiJeuoE8rOjVmqKBs9Ht385JQQOFI4sxpaMJRWWW+NQpwe1CMkuxvBP5fnG3GTu6vcFMPW12bAAHAQ=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.11/Portfolix-0.1.11.dmg" length="8072810" type="application/octet-stream" sparkle:edSignature="TIDPX67vyZDkm14qlxqrGG6SXXQiH3kmO9xhaiwXjDBYvWjw8I5JC8XE+NgI81VQRBCFXXvtq8aHglDIWzzhBw=="/>
         </item>
     </channel>
 </rss>
