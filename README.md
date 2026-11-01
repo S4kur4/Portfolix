@@ -7,7 +7,7 @@
 
 ## 简介
 
-Portfolix 是一个原生 macOS 投资组合管理 App，面向希望自主记录资产、理解组合结构、跟踪收益变化，并通过 AI 获得辅助分析的个人投资者。
+Portfolix 是一款轻量、简洁的原生 macOS 资产记账工具，专注持仓记录与收益跟踪。记录资产的添加、增持、卖出和现金变化，清楚了解组合价值与收益；需要更多参考时，再按需使用 AI 分析。
 
 <div align="center">
   <img src="/Resources/Screenshot-1.png?raw=true" alt="Overview" width="600">
@@ -17,20 +17,29 @@ Portfolix 是一个原生 macOS 投资组合管理 App，面向希望自主记�
   <img src="/Resources/Screenshot-2.png?raw=true" alt="Overview" width="600">
 </div>
 
-Portfolix 不连接券商账户，不要求输入任何第三方金融账户密码、Cookie 或交易 Session Token。持仓、历史收益、资产价格快照和设置默认保存在本机，由你自行记录、修改并跟踪。
+Portfolix 不连接券商账户，也不执行真实交易，无需提供券商或理财平台的密码、Cookie 或交易凭证。持仓、操作记录、历史收益、资产价格和风险偏好默认保存在本机，可自行导出备份。
 
 ## 功能
 
-- 目前支持记录和跟踪A股、B股、美股、港股、公募基金、数字货币和现金类资产
-- 通过添加资产、增持、部分或全部卖出及现金转出维护持仓，保留可撤销的操作记录，并支持本机语音输入
-- 查看组合价值、盈亏日历、持仓收益趋势和持仓占比
-- 通过投资云图查看今日盈亏和 AI 穿透分析的投资领域分布；未开启 AI 时按资产类别展示投资分布
-- 使用自行配置的 DeepSeek API 生成智能分析报告，并可按需启用免密钥的 Parallel Search、复用 DeepSeek API Key 的 DeepSeek Search，或配置 Tavily、博查提供联网搜索
-- 可将持仓明细、操作记录、每日收益、资产每日价格和风险偏好导出为结构化数据包，或通过只读 MCP 供本机 AI 工具按授权访问；提供 ChatGPT / Codex、Claude、DeepSeek Harness、WorkBuddy 的[配置参考](docs/MCP.md)
+- **多类资产**：记录 A 股、B 股、美股、港股、公募基金、数字货币和现金。
+- **操作记账**：添加或增持资产，记录部分或全部卖出、现金转出，保留可撤销的操作记录。
+- **收益跟踪**：查看组合价值、盈亏日历、持仓收益趋势和持仓占比。
+- **投资云图**：查看今日盈亏与投资分布；未开启 AI 时，按资产类别展示分布。
+- **语音录入**：通过本机语音输入资产信息，减少手动填写。
+- **本地备份**：导出和恢复持仓、操作记录、每日收益、资产价格及风险偏好。
 
-## 行情数据
+## 行情与持仓
 
-Portfolix 使用原生 Swift 行情适配器查询互联网上股票、基金和数字货币公开行情，无需额外配置 API Key。
+支持自动行情的股票、基金和数字货币可查询公开价格，无需额外配置行情 API Key。持仓份额与资金变化由你记录，不会自动同步券商或理财平台的账户。
+
+## 可选功能
+
+基础记账与收益跟踪无需配置 AI。
+
+- **AI 辅助分析**：使用自己的 DeepSeek API Key 生成报告、提问或分析资产的实际投资领域。联网增强可按需启用 Parallel Search、DeepSeek Search、Tavily 或博查。
+- **只读 MCP**：授权本机 Agent 查询持仓、收益和操作记录，提供 ChatGPT / Codex、Claude、DeepSeek Harness、WorkBuddy 的[配置参考](docs/MCP.md)。
+
+使用 AI 分析或授权其他 Agent 时，相关数据可能发送至所用模型服务。
 
 ## 许可证
 
@@ -44,25 +53,35 @@ Portfolix 名称、Logo、App Icon 和品牌资产不自动作为商标授权。
 
 [中文](#portfolix) | English
 
-**Portfolix is a local-first macOS app for personal portfolio records, tracking, and AI-assisted analysis.**
+**A lightweight, local-first macOS app for simple portfolio records and performance tracking, with optional AI insights.**
 
 ## Overview
 
-Portfolix is a native macOS portfolio management app designed for individual investors who want to independently record their assets, understand portfolio structure, track performance changes, and leverage AI-assisted analysis.
+Portfolix is a lightweight, native macOS app focused on recording holdings and tracking returns. Record asset additions, position increases, sales, and cash changes, follow your portfolio's value and performance, and use AI analysis when you need another perspective.
 
-Portfolix does not connect to brokerage accounts and does not require you to enter any third-party financial account passwords, cookies, or session tokens. Your holdings, historical returns, asset price snapshots, and settings are saved locally by default, allowing you to record, modify, and track them independently.
+Portfolix does not connect to brokerage accounts or execute real trades. It requires no brokerage or investment-platform passwords, cookies, or trading credentials. Holdings, transaction records, historical returns, asset prices, and risk preferences are stored locally by default and can be exported for backup.
 
 ## Features
 
-- Multi-Asset Tracking: Currently supports recording and tracking A-shares, B-shares, US stocks, Hong Kong stocks, public funds, digital currencies, and cash assets.
-- Holding Records: Add assets, increase positions, record partial or full sales, and withdraw cash with reversible records and on-device voice input.
-- Visual Analytics: View portfolio value, the P&L calendar, holding return trends, and holding allocations.
-- Investment Map: Explore today's P&L and AI-assisted underlying investment-sector distributions, with asset-category distributions when AI is disabled.
-- AI-Powered Analysis: Generate intelligent reports with your own DeepSeek API key and optionally enable keyless Parallel Search, reuse your DeepSeek API key for DeepSeek Search, or configure Tavily and Bocha for web research.
-- Data Access: Export holding details, transaction records, daily returns, daily asset prices, and risk preferences as structured data packages, or grant authorized local AI tools read-only MCP access, with [configuration references](docs/MCP.md) for ChatGPT / Codex, Claude, DeepSeek Harness, and WorkBuddy.
+- **Multiple asset types**: Record A-shares, B-shares, US and Hong Kong stocks, public funds, digital currencies, and cash.
+- **Transaction records**: Add assets, increase positions, and record partial or full sales and cash withdrawals, with reversible records.
+- **Performance tracking**: Follow portfolio value, the P&L calendar, holding return trends, and holding allocations.
+- **Investment map**: Explore today's P&L and investment distributions, with asset-category distributions when AI is disabled.
+- **Voice input**: Enter asset information using on-device speech recognition to reduce typing.
+- **Local backups**: Export and restore holdings, transaction records, daily returns, asset prices, and risk preferences.
 
-## Market Data
-Portfolix utilizes native Swift market data adapters to query public market data for stocks, funds, and digital currencies from the internet, requiring no additional API Key configuration.
+## Quotes and Holdings
+
+Automatic quotes are available for supported stocks, funds, and digital currencies without a separate market-data API key. You record position quantities and cash changes yourself; brokerage and investment-platform accounts are not automatically synchronized.
+
+## Optional Features
+
+Asset records and performance tracking work without configuring AI.
+
+- **AI-assisted analysis**: Use your own DeepSeek API key to generate reports, ask questions, or identify underlying investment sectors. Optionally enable Parallel Search, DeepSeek Search, Tavily, or Bocha for web research.
+- **Read-only MCP**: Authorize local agents to query holdings, returns, and transaction records, with [configuration references](docs/MCP.md) for ChatGPT / Codex, Claude, DeepSeek Harness, and WorkBuddy.
+
+When you use AI analysis or authorize other agents, relevant data may be sent to their model providers.
 
 ## License
 The Portfolix source code is licensed under the Apache License 2.0. See LICENSE for details.
