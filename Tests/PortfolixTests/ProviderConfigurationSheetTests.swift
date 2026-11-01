@@ -7,6 +7,69 @@ import Testing
 @MainActor
 struct ProviderConfigurationSheetTests {
     @Test
+    func footerNoticesKeepValidationIconsColorsAndProviderNames() {
+        let statuses: [ProviderConnectionStatus] = [.validatingAPI(language: .chinese), .validatedAPI(language: .english), .failure("Invalid key")]
+        for status in statuses {
+            let notice = status.footerNotice(prefix: "Tavily Search")
+            #expect(notice.symbol == status.symbol)
+            #expect(notice.color == status.color)
+            #expect(notice.message == "Tavily Search · \(status.message)")
+        }
+        let notices = statuses.map { $0.footerNotice() }
+        let footer = SheetActionFooter(errorMessage: nil, notices: notices) { Text("Save") }
+        #expect(footer.displayedNotices == Array(notices.suffix(1)))
+        let failed = SheetActionFooter(errorMessage: "Save failed", notices: notices) { Text("Save") }
+        #expect(failed.displayedNotices == [.init(message: "Save failed", kind: .error)])
+    }
+
+    @Test
+    func onlyOneFooterNoticeUsesOneLineInBothThemes() {
+        for scheme: ColorScheme in [.light, .dark] {
+            let notices = [
+                ProviderConnectionStatus.validatingAPI(language: .english).footerNotice(prefix: "DeepSeek Search"),
+                ProviderConnectionStatus.validatedAPI(language: .english).footerNotice(prefix: "Tavily Search"),
+                ProviderConnectionStatus.failure("API Key 无效或已失效，请检查后重新填写。").footerNotice(prefix: "博查")
+            ]
+            let host = NSHostingView(rootView: SheetActionFooter(errorMessage: nil, notices: notices) {
+                Button("Cancel") {}.buttonStyle(QuietButtonStyle())
+                Button("Save") {}.buttonStyle(PrimaryButtonStyle())
+            }.frame(width: 560).environment(\.colorScheme, scheme))
+            #expect(host.fittingSize.width == 560)
+            let baseline = NSHostingView(rootView: SheetActionFooter(errorMessage: nil) {
+                Button("Cancel") {}.buttonStyle(QuietButtonStyle())
+                Button("Save") {}.buttonStyle(PrimaryButtonStyle())
+            }.frame(width: 560).environment(\.colorScheme, scheme))
+            #expect(host.fittingSize.height == baseline.fittingSize.height)
+        }
+    }
+
+    @Test
+    func latestProviderOperationWinsEvenWhenAnOlderValidationFinishesLater() {
+        var state = SearchProviderNoticeState()
+        state.begin(.tavily)
+        state.update(.failure("请先填写 API Key"), for: .tavily)
+        #expect(state.currentNotice(language: .chinese)?.message == "Tavily · 请先填写 API Key")
+        state.begin(.bocha)
+        state.update(.validating("正在验证 API 配置"), for: .bocha)
+        state.update(.failure("Old Tavily request failed"), for: .tavily)
+        #expect(state.currentNotice(language: .chinese)?.message == "博查 · 正在验证 API 配置")
+        state.update(.failure("API Key 无效或已失效"), for: .bocha)
+        #expect(state.currentNotice(language: .chinese)?.message == "博查 · API Key 无效或已失效")
+        state.begin(.parallel)
+        state.update(.failure("Late Bocha failure"), for: .bocha)
+        #expect(state.currentNotice(language: .chinese) == nil)
+    }
+
+    @Test
+    func footerNormalizesLineBreaksWithoutCombiningMultipleErrors() {
+        let notice = SheetNotice(message: "First line\nSecond line\r\nThird line", kind: .error)
+        #expect(notice.singleLineMessage == "First line Second line Third line")
+        let footer = SheetActionFooter(errorMessage: "Current action failed", notices: [notice]) { Text("Save") }
+        #expect(footer.displayedNotices.count == 1)
+        #expect(footer.displayedNotices.first?.message == "Current action failed")
+    }
+
+    @Test
     func validatingProviderUsesTheDeepSeekAccentColor() {
         #expect(
             ProviderConnectionStatus.validating("Validating API").color

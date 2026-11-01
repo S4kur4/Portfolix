@@ -51,6 +51,7 @@ struct LLMConfigurationSheet: View {
     @State private var initialAPIKey = ""
     @State private var availableModels = AIProviderConfigurationStore.availableDeepSeekModels()
     @State private var connectionStatus: ProviderConnectionStatus?
+    @State private var saveErrorMessage: String?
     @State private var isValidatingAPIKey = false
     @State private var isAPIKeyVisible = false
     @State private var apiKeyValidationTask: Task<Void, Never>?
@@ -67,6 +68,8 @@ struct LLMConfigurationSheet: View {
             cancelTitle: text("取消", "Cancel"),
             primaryTitle: text("保存", "Save"),
             isPrimaryDisabled: isValidatingAPIKey,
+            errorMessage: saveErrorMessage,
+            notices: footerNotices,
             cancel: { dismiss() },
             primary: save
         ) {
@@ -124,15 +127,6 @@ struct LLMConfigurationSheet: View {
                     }
                 }
 
-                if shouldShowNotice {
-                    ProviderNoticeSection(
-                        symbol: noticeSymbol,
-                        title: noticeTitle,
-                        message: noticeMessage,
-                        tint: noticeTint,
-                        titleColor: noticeTitleColor
-                    )
-                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -241,8 +235,10 @@ struct LLMConfigurationSheet: View {
     }
 
     private func save() {
+        saveErrorMessage = nil
         didAttemptSave = true
         guard canSave else {
+            saveErrorMessage = noticeTitle
             return
         }
         do {
@@ -263,7 +259,7 @@ struct LLMConfigurationSheet: View {
             didAttemptSave = false
             dismiss()
         } catch {
-            connectionStatus = .failure(error.localizedDescription)
+            saveErrorMessage = error.localizedDescription
         }
     }
 
@@ -282,6 +278,7 @@ struct LLMConfigurationSheet: View {
     }
 
     private func scheduleAPIKeyValidation() {
+        saveErrorMessage = nil
         apiKeyValidationTask?.cancel()
         connectionStatus = nil
         connectionStatusFingerprint = nil
@@ -357,11 +354,11 @@ struct LLMConfigurationSheet: View {
         }
     }
 
-    private var noticeSymbol: String {
-        if let connectionStatus {
-            return connectionStatus.symbol
-        }
-        return isValidatingAPIKey ? "clock.arrow.circlepath" : "exclamationmark.circle.fill"
+    private var footerNotices: [SheetNotice] {
+        guard shouldShowNotice else { return [] }
+        if let connectionStatus { return [connectionStatus.footerNotice()] }
+        if isValidatingAPIKey { return [ProviderConnectionStatus.validatingAPI(language: store.appLanguage).footerNotice()] }
+        return [.init(message: noticeTitle, kind: .warning)]
     }
 
     private var noticeTitle: String {
@@ -384,33 +381,6 @@ struct LLMConfigurationSheet: View {
             return text("请填写模型名称", "Enter model name")
         }
         return text("请填写 API Key", "Enter API Key")
-    }
-
-    private var noticeMessage: String? {
-        if case .failure = connectionStatus {
-            return nil
-        }
-        return nil
-    }
-
-    private var noticeTint: Color {
-        if let connectionStatus {
-            return connectionStatus.color
-        }
-        if isValidatingAPIKey {
-            return PortfolixTheme.lilac
-        }
-        return PortfolixTheme.amber
-    }
-
-    private var noticeTitleColor: Color {
-        if let connectionStatus {
-            return connectionStatus.color
-        }
-        if isValidatingAPIKey {
-            return PortfolixTheme.lilac
-        }
-        return PortfolixTheme.amber
     }
 
     private var shouldShowNotice: Bool {
@@ -474,15 +444,13 @@ struct SearchConfigurationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var parallelEnabled = false
     @State private var deepseekEnabled = false
-    @State private var deepseekStatus: ProviderConnectionStatus?
     @State private var tavilyEnabled = false
     @State private var bochaEnabled = false
     @State private var tavilyAPIKey = ""
     @State private var bochaAPIKey = ""
     @State private var initialTavilyAPIKey = ""
     @State private var initialBochaAPIKey = ""
-    @State private var tavilyStatus: ProviderConnectionStatus?
-    @State private var bochaStatus: ProviderConnectionStatus?
+    @State private var providerNotices = SearchProviderNoticeState()
     @State private var isTavilyAPIKeyVisible = false
     @State private var isBochaAPIKeyVisible = false
     @State private var validatingProviders: Set<SearchProviderOption> = []
@@ -490,6 +458,7 @@ struct SearchConfigurationSheet: View {
     @State private var activationPromptProviders: Set<SearchProviderOption> = []
     @State private var didLoadConfiguration = false
     @State private var didAttemptSave = false
+    @State private var saveErrorMessage: String?
     @FocusState private var focusedField: ProviderConfigurationField?
 
     var body: some View {
@@ -500,6 +469,8 @@ struct SearchConfigurationSheet: View {
             cancelTitle: text("取消", "Cancel"),
             primaryTitle: text("保存", "Save"),
             isPrimaryDisabled: isValidating,
+            errorMessage: saveErrorMessage,
+            notices: footerNotices,
             cancel: { dismiss() },
             primary: validateAndSave
         ) {
@@ -511,8 +482,7 @@ struct SearchConfigurationSheet: View {
                     isEnabled: $tavilyEnabled,
                     apiKey: $tavilyAPIKey,
                     isVisible: $isTavilyAPIKeyVisible,
-                    field: .tavilyAPIKey,
-                    status: tavilyStatus
+                    field: .tavilyAPIKey
                 )
 
                 providerSection(
@@ -520,8 +490,7 @@ struct SearchConfigurationSheet: View {
                     isEnabled: $bochaEnabled,
                     apiKey: $bochaAPIKey,
                     isVisible: $isBochaAPIKeyVisible,
-                    field: .bochaAPIKey,
-                    status: bochaStatus
+                    field: .bochaAPIKey
                 )
             }
             .formStyle(.grouped)
@@ -543,8 +512,8 @@ struct SearchConfigurationSheet: View {
             initialBochaAPIKey = storedBochaAPIKey
             isTavilyAPIKeyVisible = false
             isBochaAPIKeyVisible = false
-            tavilyStatus = persistedStatus(for: .tavily)
-            bochaStatus = persistedStatus(for: .bocha)
+            providerNotices.update(persistedStatus(for: .tavily), for: .tavily)
+            providerNotices.update(persistedStatus(for: .bocha), for: .bocha)
             Task { @MainActor in
                 await Task.yield()
                 didLoadConfiguration = true
@@ -559,6 +528,11 @@ struct SearchConfigurationSheet: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .accessibilityLabel(text("启用 Parallel Search", "Enable Parallel Search"))
+                .onChange(of: parallelEnabled) { _, _ in
+                    guard didLoadConfiguration else { return }
+                    saveErrorMessage = nil
+                    providerNotices.begin(.parallel)
+                }
             }
 
             ProviderFormRow(label: SearchProviderOption.deepseek.title(language: store.appLanguage)) {
@@ -568,19 +542,17 @@ struct SearchConfigurationSheet: View {
                         if enabled {
                             enable(.deepseek, isEnabled: $deepseekEnabled, field: .llmAPIKey)
                         } else {
+                            saveErrorMessage = nil
+                            providerNotices.begin(.deepseek)
                             deepseekEnabled = false
                             validatingProviders.remove(.deepseek)
                             validationRequestIDs[.deepseek] = nil
-                            deepseekStatus = nil
                         }
                     }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .accessibilityLabel(text("启用 DeepSeek Search", "Enable DeepSeek Search"))
-            }
-            if let deepseekStatus {
-                ProviderNoticeRow(status: deepseekStatus)
             }
         }
     }
@@ -591,8 +563,7 @@ struct SearchConfigurationSheet: View {
         isEnabled: Binding<Bool>,
         apiKey: Binding<String>,
         isVisible: Binding<Bool>,
-        field: ProviderConfigurationField,
-        status: ProviderConnectionStatus?
+        field: ProviderConfigurationField
     ) -> some View {
         Section {
             ProviderFormRow(label: provider.title(language: store.appLanguage)) {
@@ -621,6 +592,8 @@ struct SearchConfigurationSheet: View {
                 )
                 .onChange(of: apiKey.wrappedValue) { _, _ in
                     guard didLoadConfiguration else { return }
+                    saveErrorMessage = nil
+                    providerNotices.begin(provider)
                     activationPromptProviders.remove(provider)
                     validatingProviders.remove(provider)
                     validationRequestIDs[provider] = nil
@@ -631,15 +604,21 @@ struct SearchConfigurationSheet: View {
                 }
             }
 
-            if let status {
-                ProviderNoticeRow(status: status)
-            }
         }
     }
 
+    private var footerNotices: [SheetNotice] {
+        providerNotices.currentNotice(language: store.appLanguage).map { [$0] } ?? []
+    }
+
     private func validateAndSave() {
+        saveErrorMessage = nil
         didAttemptSave = true
-        guard hasRequiredKeys, persistConfiguration() else { return }
+        guard hasRequiredKeys else {
+            saveErrorMessage = text("请填写已启用搜索服务的 API Key。", "Enter an API Key for each enabled search service.")
+            return
+        }
+        guard persistConfiguration() else { return }
         dismiss()
     }
 
@@ -655,6 +634,8 @@ struct SearchConfigurationSheet: View {
         Binding(
             get: { isEnabled.wrappedValue },
             set: { requestedValue in
+                saveErrorMessage = nil
+                providerNotices.begin(provider)
                 if !requestedValue {
                     validatingProviders.remove(provider)
                     validationRequestIDs[provider] = nil
@@ -672,6 +653,8 @@ struct SearchConfigurationSheet: View {
         isEnabled: Binding<Bool>,
         field: ProviderConfigurationField
     ) {
+        saveErrorMessage = nil
+        providerNotices.begin(provider)
         let key = activeKey(for: provider)
         guard !key.isEmpty else {
             activationPromptProviders.insert(provider)
@@ -752,7 +735,7 @@ struct SearchConfigurationSheet: View {
                     try store.saveProviderAPIKeyValidationState(.valid, kind: credentialKind)
                 }
             } catch {
-                setStatus(.failure(error.localizedDescription), for: provider)
+                saveErrorMessage = error.localizedDescription
                 return false
             }
         }
@@ -827,20 +810,30 @@ struct SearchConfigurationSheet: View {
     }
 
     private func setStatus(_ status: ProviderConnectionStatus?, for provider: SearchProviderOption) {
-        switch provider {
-        case .parallel:
-            break
-        case .deepseek:
-            deepseekStatus = status
-        case .tavily:
-            tavilyStatus = status
-        case .bocha:
-            bochaStatus = status
-        }
+        providerNotices.update(status, for: provider)
     }
 
     private func text(_ chinese: String, _ english: String) -> String {
         localizedText(chinese, english, language: store.appLanguage)
+    }
+}
+
+struct SearchProviderNoticeState {
+    private(set) var activeProvider: SearchProviderOption?
+    private var statuses: [SearchProviderOption: ProviderConnectionStatus] = [:]
+
+    mutating func begin(_ provider: SearchProviderOption) {
+        activeProvider = provider
+        statuses[provider] = nil
+    }
+
+    mutating func update(_ status: ProviderConnectionStatus?, for provider: SearchProviderOption) {
+        statuses[provider] = status
+    }
+
+    func currentNotice(language: AppLanguage) -> SheetNotice? {
+        guard let activeProvider, let status = statuses[activeProvider] else { return nil }
+        return status.footerNotice(prefix: activeProvider.title(language: language))
     }
 }
 
@@ -878,6 +871,15 @@ enum ProviderConnectionStatus: Equatable {
         case .validating: PortfolixTheme.lilac
         }
     }
+
+    func footerNotice(prefix: String? = nil) -> SheetNotice {
+        let kind: SheetNotice.Kind = switch self {
+        case .success: .success
+        case .failure: .error
+        case .validating: .progress
+        }
+        return SheetNotice(message: prefix.map { "\($0) · \(message)" } ?? message, kind: kind)
+    }
 }
 
 private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
@@ -887,6 +889,8 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
     let cancelTitle: String
     let primaryTitle: String
     let isPrimaryDisabled: Bool
+    let errorMessage: String?
+    let notices: [SheetNotice]
     let cancel: () -> Void
     let primary: () -> Void
     let content: Content
@@ -899,6 +903,8 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
         cancelTitle: String,
         primaryTitle: String,
         isPrimaryDisabled: Bool,
+        errorMessage: String? = nil,
+        notices: [SheetNotice] = [],
         cancel: @escaping () -> Void,
         primary: @escaping () -> Void,
         @ViewBuilder content: () -> Content,
@@ -910,6 +916,8 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
         self.cancelTitle = cancelTitle
         self.primaryTitle = primaryTitle
         self.isPrimaryDisabled = isPrimaryDisabled
+        self.errorMessage = errorMessage
+        self.notices = notices
         self.cancel = cancel
         self.primary = primary
         self.content = content()
@@ -927,22 +935,15 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
 
             Divider().overlay(PortfolixTheme.border)
 
-            HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
-                HStack(spacing: PortfolixSpacing.sm) {
-                    secondary
-                }
-                Spacer()
-                HStack(spacing: PortfolixSpacing.sm) {
-                    Button(cancelTitle, action: cancel)
-                        .buttonStyle(QuietButtonStyle())
-                        .keyboardShortcut(.cancelAction)
-                    Button(primaryTitle, action: primary)
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(isPrimaryDisabled)
-                        .keyboardShortcut(.defaultAction)
-                }
+            SheetActionFooter(errorMessage: errorMessage, notices: notices, leading: { secondary }) {
+                Button(cancelTitle, action: cancel)
+                    .buttonStyle(QuietButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button(primaryTitle, action: primary)
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(isPrimaryDisabled)
+                    .keyboardShortcut(.defaultAction)
             }
-            .padding(PortfolixSpacing.xl)
         }
         .frame(width: 560, height: height)
         .background {

@@ -91,27 +91,20 @@ struct MCPConnectionSheet: View {
                 .foregroundStyle(PortfolixTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
-                if !helperAvailable {
-                    Text(text("MCP 组件缺失，请重新安装完整 App。", "MCP helper missing. Reinstall the complete App."))
-                        .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.danger)
-                }
             }
             .padding(PortfolixSpacing.xl)
             Divider().overlay(PortfolixTheme.border)
-            HStack {
+            SheetActionFooter(errorMessage: helperAvailable ? nil : text("MCP 组件缺失，请重新安装完整 App。", "MCP helper missing. Reinstall the complete App.")) {
                 Button {
                     NSWorkspace.shared.open(client.documentationURL)
                 } label: {
                     Label(text("官方文档", "Official documentation"), systemImage: "arrow.up.right.square")
                 }
                 .buttonStyle(QuietButtonStyle())
-                Spacer()
                 Button(text("完成", "Done")) { dismiss() }
                     .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(PortfolixSpacing.xl)
         }
         .frame(width: sheetWidth)
         .fixedSize(horizontal: false, vertical: true)

@@ -104,9 +104,7 @@ struct RiskQuestionnaireSheet: View {
 
             Divider().overlay(PortfolixTheme.border)
 
-            HStack {
-                Spacer()
-
+            SheetActionFooter(errorMessage: nil) {
                 Button(localizedText("取消", "Cancel", language: store.appLanguage)) {
                     dismiss()
                 }
@@ -120,7 +118,6 @@ struct RiskQuestionnaireSheet: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(PortfolixSpacing.xl)
         }
         .frame(width: 640, height: 680)
         .background {

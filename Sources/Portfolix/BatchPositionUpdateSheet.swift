@@ -55,14 +55,13 @@ struct BatchPositionUpdateSheet: View {
 
             Divider().overlay(PortfolixTheme.border)
 
-            HStack(spacing: PortfolixSpacing.sm) {
+            SheetActionFooter(errorMessage: saveErrorMessage) {
                 Text(pendingUpdateText)
                     .font(PortfolixTypography.caption)
                     .foregroundStyle(PortfolixTheme.secondaryText)
                     .monospacedDigit()
 
-                Spacer()
-
+            } actions: {
                 Button(text("取消", "Cancel")) {
                     dismiss()
                 }
@@ -76,19 +75,12 @@ struct BatchPositionUpdateSheet: View {
                 .disabled(!hasEditedInput)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(PortfolixSpacing.xl)
         }
         .frame(width: PositionUpdateLayout.sheetWidth, height: 640)
         .background {
             PortfolixSheetBackground()
         }
-        .alert(text("无法更新持仓", "Unable to update holdings"), isPresented: errorAlertPresented) {
-            Button(text("好", "OK"), role: .cancel) {
-                saveErrorMessage = nil
-            }
-        } message: {
-            Text(saveErrorMessage ?? text("请稍后重试", "Please try again later"))
-        }
+        .onChange(of: pendingUpdates) { _, _ in saveErrorMessage = nil }
     }
 
     private var pendingUpdates: [PositionBalanceUpdate] {
@@ -107,20 +99,12 @@ struct BatchPositionUpdateSheet: View {
         return "\(count) 项待更新"
     }
 
-    private var errorAlertPresented: Binding<Bool> {
-        Binding(
-            get: { saveErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    saveErrorMessage = nil
-                }
-            }
-        )
-    }
-
     private func saveUpdates() {
         didAttemptSave = true
-        guard drafts.allSatisfy(\.isValid), !pendingUpdates.isEmpty else { return }
+        guard drafts.allSatisfy(\.isValid), !pendingUpdates.isEmpty else {
+            saveErrorMessage = text("请核对份额和成本后再保存。", "Check quantities and costs before saving.")
+            return
+        }
 
         do {
             try store.updatePositionBalances(pendingUpdates)
