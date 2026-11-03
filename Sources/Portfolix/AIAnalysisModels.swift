@@ -465,7 +465,8 @@ struct AICitationCatalogEntry: Codable, Equatable, Sendable {
 
 enum AIMessageCitationResolver {
     private static let markerExpression = try! NSRegularExpression(
-        pattern: #"\[\[cite:([^\]\r\n]{1,64})\]\]"#,
+        // Accept grouped IDs and Markdown links, but resolve only against the trusted catalog.
+        pattern: #"\[\[cite:([^\]\r\n]{1,512})\]\]|(?<!!)\[([^\[\]\r\n]{1,512})\]\(\s*([^\s()]{1,4096})\s*\)"#,
         options: []
     )
 
@@ -488,7 +489,9 @@ enum AIMessageCitationResolver {
         _ answer: String,
         catalog: [AICitationCatalogEntry]
     ) -> (text: String, citations: [AIMessageCitation]) {
-        let sourceByID = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0) })
+        let trusted = catalog.filter { (try? LLMBaseURLValidator.validatedComponents(from: $0.url)) != nil }
+        let sourceByID = Dictionary(trusted.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let sourceByURL = Dictionary(trusted.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
         let source = answer as NSString
         let matches = markerExpression.matches(
             in: answer,
@@ -504,8 +507,27 @@ enum AIMessageCitationResolver {
             if precedingLength > 0 {
                 clean.append(source.substring(with: NSRange(location: cursor, length: precedingLength)))
             }
-            let sourceID = source.substring(with: match.range(at: 1))
-            if let entry = sourceByID[sourceID] {
+            let entries: [AICitationCatalogEntry]
+            if match.range(at: 1).location != NSNotFound {
+                let ids = source.substring(with: match.range(at: 1)).split(whereSeparator: { ",;，；".contains($0) })
+                var seen = Set<String>()
+                entries = ids.compactMap { id in
+                    let key = id.trimmingCharacters(in: .whitespaces)
+                    guard seen.insert(key).inserted else { return nil }
+                    return sourceByID[key]
+                }
+            } else {
+                let destination = source.substring(with: match.range(at: 3))
+                if let entry = sourceByID[destination] ?? sourceByURL[destination] {
+                    clean.append(source.substring(with: match.range(at: 2)))
+                    entries = [entry]
+                } else {
+                    // Preserve unrelated Markdown; the renderer does not make it interactive.
+                    clean.append(source.substring(with: match.range))
+                    entries = []
+                }
+            }
+            for entry in entries {
                 citations.append(
                     AIMessageCitation(
                         utf16Offset: clean.length,
@@ -592,6 +614,20 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         modelUsage ?? followUpRunSnapshot?.modelUsage
     }
 
+    var displayedCitations: [AIMessageCitation] {
+        let citations = citations ?? []
+        guard kind == .assistant, let text else { return citations }
+        let visible = AIFollowUpResponseParser.displayText(text)
+        guard visible != text else { return citations }
+        let range = (text as NSString).range(of: visible)
+        guard range.location != NSNotFound else { return [] }
+        return citations.compactMap { citation in
+            guard (range.location...NSMaxRange(range)).contains(citation.utf16Offset) else { return nil }
+            return AIMessageCitation(id: citation.id, utf16Offset: citation.utf16Offset - range.location,
+                                     title: citation.title, url: citation.url)
+        }
+    }
+
     init(
         id: UUID,
         createdAt: Date,
@@ -619,7 +655,7 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         case .user:
             .user(text ?? "")
         case .assistant:
-            .assistant(text ?? "")
+            .assistant(AIFollowUpResponseParser.displayText(text ?? ""))
         case .report:
             if let report {
                 .report(report, runSnapshot?.run ?? AIAnalysisRun(status: .completed, model: report.model))

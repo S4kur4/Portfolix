@@ -119,6 +119,55 @@ struct ParallelSearchAndCitationTests {
     }
 
     @Test @MainActor
+    func catalogReferencesSurviveMarkdownAndGroupedMarkers() {
+        let catalog = [
+            AICitationCatalogEntry(id: "source_1", title: "行情", url: "https://example.com/gold"),
+            AICitationCatalogEntry(id: "source_2", title: "说明", url: "https://example.com/note"),
+        ]
+        let resolved = AIMessageCitationResolver.resolve(
+            "上涨。[来源](source_1)观察。[[cite: source_1, source_2]]核对。[原文](https://example.com/note)",
+            catalog: catalog
+        )
+        #expect(resolved.text == "上涨。来源观察。核对。原文")
+        #expect(resolved.citations.map(\.url) == [catalog[0].url, catalog[0].url, catalog[1].url, catalog[1].url])
+        let rendered = AIMessageMarkdownRenderer.render(resolved.text, citations: resolved.citations, citationColor: .labelColor)
+        #expect(rendered.string == "上涨。来源\u{FFFC}观察。\u{FFFC}\u{FFFC}核对。原文\u{FFFC}")
+        var links: [String] = []
+        rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, _, _ in
+            if let url = value as? URL { links.append(url.absoluteString) }
+        }
+        #expect(links == resolved.citations.map(\.url))
+    }
+
+    @Test
+    func resolvedCitationsSurviveEnvelopeParsingAndHistoryRoundTrip() throws {
+        let raw = #"{"answer":"**黄金🪙**。[来源](source_1)再观察。[[cite:source_1, source_99, source_1]]","limitations":[]}"#
+        let payload = try #require(AIFollowUpResponseParser.decode(raw))
+        let resolved = AIMessageCitationResolver.resolve(payload.answer, catalog: [
+            AICitationCatalogEntry(id: "source_1", title: "来源", url: "https://example.com/gold"),
+        ])
+        let item = AIReportChatItem.assistant(resolved.text, citations: resolved.citations)
+        let restored = try JSONDecoder().decode(AIReportChatItem.self, from: JSONEncoder().encode(item))
+        #expect(restored.displayedCitations == resolved.citations)
+        #expect(resolved.citations.map(\.utf16Offset) == ["**黄金🪙**。来源".utf16.count, resolved.text.utf16.count])
+        guard case let .assistant(visible) = restored.content else {
+            Issue.record("Expected an assistant reply")
+            return
+        }
+        #expect(visible == "**黄金🪙**。来源再观察。")
+    }
+
+    @Test
+    func citationResolutionDoesNotTrustUncataloguedOrUnsafeLinks() {
+        let resolved = AIMessageCitationResolver.resolve(
+            "[未知](https://evil.example) [本地](source_1) [[cite:source_1]]",
+            catalog: [AICitationCatalogEntry(id: "source_1", title: "本地", url: "https://127.0.0.1/private")]
+        )
+        #expect(resolved.citations.isEmpty)
+        #expect(resolved.text.contains("[未知](https://evil.example)"))
+    }
+
+    @Test @MainActor
     func citationViewOpensValidatedURLsWithoutChangingItsMeasuredHeight() throws {
         let view = AIReportCitationTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 40))
         view.update(

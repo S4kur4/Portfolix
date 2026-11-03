@@ -5,6 +5,39 @@ import Testing
 @Suite("DeepSeek Responses client")
 struct DeepSeekResponsesClientTests {
     @Test
+    func usesOnlyTheFinalAssistantMessageRatherThanJoiningDraftsAndMetadata() throws {
+        let final = #"{"answer":"Final answer.","limitations":[]}"#
+        let body: [String: Any] = ["output": [
+            ["type": "reasoning", "content": [["type": "output_text", "text": "PRIVATE_REASONING"]]],
+            ["type": "message", "role": "user", "content": [["type": "output_text", "text": "USER_ECHO"]]],
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "Provisional draft."]]],
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": final]]],
+        ], "metadata": ["type": "output_text", "text": "INTERNAL_METADATA"]]
+        let result = try DeepSeekResponsesClient.parseResponseObject(JSONSerialization.data(withJSONObject: body))
+        #expect(result.content == final)
+    }
+
+    @Test
+    func preservesOrderedTextPartsWithinTheFinalMessage() throws {
+        let body: [String: Any] = ["output": [["type": "message", "role": "assistant", "content": [
+            ["type": "output_text", "text": "{\"answer\":\"正文"],
+            ["type": "output_text", "text": "。\",\"limitations\":[]}"],
+        ]]]]
+        let result = try DeepSeekResponsesClient.parseResponseObject(JSONSerialization.data(withJSONObject: body))
+        #expect(result.content == #"{"answer":"正文。","limitations":[]}"#)
+    }
+
+    @Test
+    func emptyFinalMessageDoesNotFallBackToAnEarlierDraft() throws {
+        let body: [String: Any] = ["output": [
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "Draft only."]]],
+            ["type": "message", "role": "assistant", "content": []],
+        ]]
+        let result = try DeepSeekResponsesClient.parseResponseObject(JSONSerialization.data(withJSONObject: body))
+        #expect(result.content.isEmpty)
+    }
+
+    @Test
     func parsesStructuredOutputSearchMetadataAndHTTPSCitations() throws {
         let payload = #"""
         {

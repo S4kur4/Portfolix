@@ -2145,20 +2145,8 @@ struct AIAnalysisAgent: Sendable {
     }
 
     static func decodeFollowUpPayload(_ raw: String) -> LLMFollowUpPayload? {
-        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("```json") {
-            guard trimmed.hasSuffix("```"), trimmed.count >= 10 else { return nil }
-            trimmed = String(trimmed.dropFirst(7).dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if trimmed.hasPrefix("```"), trimmed.hasSuffix("```"),
-                  trimmed.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
-            trimmed = String(trimmed.dropFirst(3).dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard (try? AIInformationSecurityGuardrail.validateGeneratedText(trimmed)) != nil else { return nil }
-        guard let data = trimmed.data(using: .utf8) else { return nil }
-        if let payload = try? JSONDecoder().decode(LLMFollowUpPayload.self, from: data) { return payload }
-        // A complete plain-language answer does not need another model call just to wrap it in JSON.
-        guard !trimmed.isEmpty, !["{", "[", "\""].contains(where: { trimmed.hasPrefix($0) }) else { return nil }
-        return LLMFollowUpPayload(answer: trimmed, limitations: [])
+        guard (try? AIInformationSecurityGuardrail.validateGeneratedText(raw)) != nil else { return nil }
+        return AIFollowUpResponseParser.decode(raw)
     }
 
     static func validatedFollowUpPayload(

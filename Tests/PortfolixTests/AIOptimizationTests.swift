@@ -93,6 +93,34 @@ struct AIOptimizationTests {
   }
 
   @Test
+  func mixedNarrativeAndEnvelopeProduceOneAnswerWithoutAnExtraModelCall() async throws {
+    let expected = "先核对报价时间，再看组合变化。"
+    let envelope = #"{"answer":"先核对报价时间，再看组合变化。","limitations":[]}"#
+    let (client, key) = transport([expected + "\n\n" + envelope])
+    let result = try await AIAnalysisAgent(
+      llm: client, credentialStore: OptimizationCredentials(key: key)
+    ).answerFollowUp(
+      question: "怎么看这次变化？", report: nil, artifacts: nil, positions: [],
+      llmConfiguration: .default, searchConfiguration: .default)
+    #expect(result.answer == expected)
+    #expect(result.modelUsage?.calls.count == 1)
+    #expect(!result.guardrailResultJSON.contains("follow_up_response_repaired"))
+  }
+
+  @Test
+  func malformedEnvelopeUsesTheBoundedRepairRatherThanPublishingInternalText() async throws {
+    let (client, key) = transport(["先核对资产记录。\n{\"answer\":7}", answer])
+    let result = try await AIAnalysisAgent(
+      llm: client, credentialStore: OptimizationCredentials(key: key)
+    ).answerFollowUp(
+      question: "怎么看这次变化？", report: nil, artifacts: nil, positions: [],
+      llmConfiguration: .default, searchConfiguration: .default)
+    #expect(result.modelUsage?.calls.map(\.stage) == ["follow_up_answer", "follow_up_repair"])
+    #expect(!result.answer.contains("\"answer\""))
+    #expect(result.guardrailResultJSON.contains("invalid_structure"))
+  }
+
+  @Test
   func finalResponseReplacesIncompleteDeltasWithoutARepair() async throws {
     let (client, key) = transport([answer], partialDelta: "{\"answer\":\"尚未完成")
     let result = try await AIAnalysisAgent(

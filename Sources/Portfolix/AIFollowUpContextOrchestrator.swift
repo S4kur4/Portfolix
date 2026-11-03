@@ -207,8 +207,7 @@ enum AIFollowUpContextOrchestrator {
         guard item.kind != .assistant || AIChatDisclosurePolicy.shouldShowDisclosure(for: item.text ?? "") else {
             return false
         }
-        return item.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            || item.report != nil
+        return !content(for: item).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.report != nil
     }
 
     private static func removeDuplicatedCurrentQuestion(
@@ -238,6 +237,7 @@ enum AIFollowUpContextOrchestrator {
 
     private static func content(for item: AIReportChatItem) -> String {
         if let text = item.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            if item.kind == .assistant { return AIFollowUpResponseParser.readableText(text) ?? "" }
             return text
         }
         guard let report = item.report else { return "" }

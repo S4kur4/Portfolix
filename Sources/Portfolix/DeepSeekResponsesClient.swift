@@ -433,7 +433,12 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             let filtered = item.filter { allowedKeys.contains($0.key) }
             return try JSONDecoder().decode(AIJSONValue.self, from: JSONSerialization.data(withJSONObject: filtered))
         }
-        let texts = allDictionaries(in: object).compactMap { dictionary -> String? in
+        // Only the final assistant message is an answer; drafts and nested metadata are not.
+        let message = output.last {
+            $0["type"] as? String == "message"
+                && ($0["role"] == nil || $0["role"] as? String == "assistant")
+        }
+        let texts = (message?["content"] as? [[String: Any]] ?? []).compactMap { dictionary -> String? in
             guard dictionary["type"] as? String == "output_text" else { return nil }
             return dictionary["text"] as? String
         }

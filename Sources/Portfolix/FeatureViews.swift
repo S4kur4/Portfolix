@@ -692,7 +692,7 @@ private struct AIReportChatSurface: View {
                                         AIReportAgentBubble {
                                             AIReportFollowUpMessage(
                                                 text: text,
-                                                citations: item.citations ?? [],
+                                                citations: item.displayedCitations,
                                                 createdAt: item.createdAt,
                                                 language: language,
                                                 modelUsage: item.responseModelUsage,
