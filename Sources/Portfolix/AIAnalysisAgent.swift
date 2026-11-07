@@ -70,6 +70,13 @@ struct AIAnalysisPipelineError: LocalizedError, Sendable, CustomStringConvertibl
         )
     }
 
+    func attachingArtifacts(_ artifacts: AIAnalysisArtifactBundle) -> AIAnalysisPipelineError {
+        var copy = AIAnalysisPipelineError(stage: stage, underlyingDescription: underlyingDescription,
+            partialArtifacts: artifacts, trace: trace)
+        copy.modelUsage = modelUsage
+        return copy
+    }
+
     var errorDescription: String? {
         "\(stage.failureContext(language: .chinese))：\(underlyingDescription)"
     }
@@ -163,6 +170,9 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
         case let .invalidJSON(detail):
             return "只返回一个合法 JSON 对象；修复 JSON 语法，不要输出 Markdown 或解释。解析问题：\(detail)。"
         case let .invalidField(field):
+            if field.hasSuffix(".asset_association") {
+                return "修复 \(field) 的证据归属：scope=portfolio 的证据可提供组合背景；scope=positions 的证据，其 position_refs 必须至少包含本条对应资产之一。核对 related_refs 或 asset_name/symbol，替换错配的 evidence_refs；无法支持本条时省略或据真实依据改写，不要伪造证据或把无关资产的事实套用到本资产。"
+            }
             return "修复字段 \(field) 的类型、长度或必填内容，使其符合目标结构。"
         case let .invalidEnum(field):
             return "修复字段 \(field) 的枚举值，只能使用目标结构列出的允许值。"
@@ -1317,6 +1327,20 @@ struct AIAnalysisAgent: Sendable {
             )
         }
         let totalValidationAttempts = AIReportRepairPolicy.maxRepairAttempts + 1
+        func failureArtifacts(repaired: String?, error: Error) -> AIAnalysisArtifactBundle {
+            func safeResponse(_ text: String) -> String {
+                guard (try? AIInformationSecurityGuardrail.validateGeneratedText(text)) != nil else {
+                    return #"{"status":"redacted_unsafe_response"}"#
+                }
+                return text
+            }
+            let guardrail = AIReportGuardrailResult(status: "rejected", validator: "AIReportWriterNode",
+                checkedAt: ISO8601DateFormatter().string(from: .now), notes: [error.localizedDescription])
+            return AIAnalysisArtifactBundle(inputJSON: inputJSON, toolResultsJSON: toolResultsJSON,
+                toolPlanJSON: "{}", evidenceLedgerJSON: String(data: (try? Self.encoder.encode(effectiveEvidenceLedger)) ?? Data(), encoding: .utf8),
+                rawReportJSON: safeResponse(raw), repairedReportJSON: repaired.map(safeResponse), finalReportJSON: "{}",
+                guardrailResultJSON: String(data: (try? Self.encoder.encode(guardrail)) ?? Data(), encoding: .utf8) ?? "{}")
+        }
         await progress?(.validatingModelOutput(attempt: 1, total: totalValidationAttempts))
         do {
             let payload = try Self.validatedPayload(raw, expectedLanguage: input.outputLanguage)
@@ -1356,7 +1380,8 @@ struct AIAnalysisAgent: Sendable {
                     )
                     lastRepaired = candidate
                 } catch {
-                    throw AIAnalysisPipelineError(stage: repairProgress, underlying: error)
+                    throw AIAnalysisPipelineError(stage: repairProgress, underlying: error,
+                        partialArtifacts: failureArtifacts(repaired: lastRepaired, error: error))
                 }
 
                 await progress?(.validatingModelOutput(attempt: attempt + 1, total: totalValidationAttempts))
@@ -1382,7 +1407,8 @@ struct AIAnalysisAgent: Sendable {
                     total: AIReportRepairPolicy.maxRepairAttempts,
                     reason: validationError.progressReason
                 ),
-                underlying: validationError
+                underlying: validationError,
+                partialArtifacts: failureArtifacts(repaired: lastRepaired, error: validationError)
             )
         }
     }
@@ -2646,6 +2672,13 @@ struct AIAnalysisHarness {
                     "error_type": String(describing: type(of: error)),
                 ]
             )
+            if let pipeline = error as? AIAnalysisPipelineError, let artifacts = pipeline.partialArtifacts {
+                throw pipeline.attachingArtifacts(AIAnalysisArtifactBundle(
+                    inputJSON: inputJSON, toolResultsJSON: toolResultsJSON, toolPlanJSON: toolPlanJSON,
+                    evidenceLedgerJSON: artifacts.evidenceLedgerJSON ?? evidenceLedgerJSON, loopStateJSON: loopStateJSON,
+                    rawReportJSON: artifacts.rawReportJSON, repairedReportJSON: artifacts.repairedReportJSON,
+                    finalReportJSON: artifacts.finalReportJSON, guardrailResultJSON: artifacts.guardrailResultJSON))
+            }
             throw error
         }
         toolResults = reportPayloadResult.toolResults

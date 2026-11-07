@@ -124,7 +124,13 @@ private struct PositionReconciliationForm: View {
         }
         .onChange(of: unitCost) { old, new in
             if let value = PositionClosureMath.decimal(cost), let units = PositionClosureMath.decimal(quantity), units > 0 {
-                cost = PositionClosureMath.string(new ? value / units : value * units)
+                var converted = new ? value / units : value * units
+                if new {
+                    var rounded = Decimal()
+                    NSDecimalRound(&rounded, &converted, 8, .plain)
+                    converted = rounded
+                }
+                cost = PositionClosureMath.string(converted)
             }
         }
     }

@@ -7,6 +7,10 @@ enum AILocalFinancialToolName: String, Codable, CaseIterable, Sendable {
     case constraintEvaluation = "constraint_evaluation"
 }
 
+enum AIEvidenceScope: String, Codable, Sendable {
+    case portfolio, positions
+}
+
 struct AIEvidenceItem: Codable, Equatable, Sendable {
     let id: String
     let kind: String
@@ -23,6 +27,17 @@ struct AIEvidenceItem: Codable, Equatable, Sendable {
     var sourcePublishedDate: String? = nil
     var sourceQuery: String? = nil
     var sourceCallID: String? = nil
+    var scope: AIEvidenceScope? = nil
+
+    var associationScope: AIEvidenceScope {
+        if let scope { return scope }
+        // Older aggregate entries list contributors, not an exclusive asset scope.
+        if kind == "calculation", source == "portfolix_local_financial_tool",
+           ["local.concentration.", "local.performance."].contains(where: { id.hasPrefix($0) }) {
+            return .portfolio
+        }
+        return positionRefs.isEmpty ? .portfolio : .positions
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -40,6 +55,7 @@ struct AIEvidenceItem: Codable, Equatable, Sendable {
         case sourcePublishedDate = "source_published_date"
         case sourceQuery = "source_query"
         case sourceCallID = "source_call_id"
+        case scope
     }
 }
 
@@ -252,7 +268,8 @@ enum AILocalFinancialToolExecutor {
                 numericValue: flag.metricValue,
                 unit: flag.unit,
                 positionRefs: flag.relatedRefs,
-                asOf: asOf
+                asOf: asOf,
+                scope: flag.relatedRefs.isEmpty ? .portfolio : .positions
             )
         })
         return AILocalFinancialToolResult(
@@ -310,7 +327,8 @@ enum AILocalFinancialToolExecutor {
         numericValue: Double?,
         unit: String,
         positionRefs: [String] = [],
-        asOf: String
+        asOf: String,
+        scope: AIEvidenceScope = .portfolio
     ) -> AIEvidenceItem {
         AIEvidenceItem(
             id: id,
@@ -323,7 +341,8 @@ enum AILocalFinancialToolExecutor {
             asOf: asOf,
             source: "portfolix_local_financial_tool",
             confidence: numericValue == nil ? "unavailable" : "deterministic",
-            sourceURL: nil
+            sourceURL: nil,
+            scope: scope
         )
     }
 

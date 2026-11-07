@@ -4,31 +4,27 @@
         <title>Portfolix</title>
         <item>
             <title>0.1.12</title>
-            <pubDate>Sat, 07 Nov 2026 22:11:31 +0800</pubDate>
+            <pubDate>Sat, 07 Nov 2026 23:49:04 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>24</sparkle:version>
+            <sparkle:version>25</sparkle:version>
             <sparkle:shortVersionString>0.1.12</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.12 (Build 24)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.12 (Build 25)
 
-- 新增“更新持仓”，快速核对份额和成本，支持成本暂不确定。
-- 修复增持及校准后的今日收益计算，改善撤销和备份恢复。
-- 持仓新增成本价列，统一表单与日期选择器，支持双击查看记录详情。
-- 优化 AI 回答与引用展示，完善 AI／MCP 的持仓校准支持。
-
-新版备份需使用 v0.1.12 或更高版本恢复。
+- 修复 Agent 分析中证据校验误判导致的报错与回退。
+- 改善分析自动修复和失败诊断。
+- 更新持仓时，自动换算的成本价最多保留 8 位小数。
 
 ## What's New
 
-- Added holding reconciliation for quick quantity and cost updates, including unknown costs.
-- Fixed daily P&L after additions and reconciliation; improved reversals and backup recovery.
-- Added unit cost, consistent forms and date pickers, and double-click activity details.
-- Improved AI answers, citations and reconciliation data in AI/MCP tools.
+- Fixed incorrect evidence validation causing Agent analysis failures and fallback.
+- Improved automatic report repair and failure diagnostics.
+- Limited calculated unit costs in holding updates to 8 decimal places.
 
-New backups require v0.1.12 or later to restore. Apple Silicon · macOS 15+
+Apple Silicon · macOS 15+
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12.dmg" length="8444766" type="application/octet-stream" sparkle:edSignature="2J3T8PVd4EOsTWi3AumnFz/Bn3FU1chNq0zuqcEXKpTypj60opJmErzTiMTLKf+g+odJtkDNDYjopubLmO4bBA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12-build25.dmg" length="8452100" type="application/octet-stream" sparkle:edSignature="p0CtyGw0oSw4OZ9EGe4oiuVF8oixdY5Nck5GwdKmzf/a9fxeJsLacxfoQdyI0MWdgWMG92bxahK4sZTqs1MZBA=="/>
         </item>
     </channel>
 </rss>

@@ -200,6 +200,49 @@ struct AIOptimizationLiveTests {
     }
   }
 
+  @Test(.enabled(if: ProcessInfo.processInfo.environment["PORTFOLIX_RUN_REPORT_SCOPE_LIVE"] == "1"))
+  func syntheticReportScopeUsesAtMostThreeRequestsWithoutExternalSearch() async throws {
+    let key = try readConfiguredKeyWithoutLoadingPortfolio()
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.urlCache = nil
+    sessionConfiguration.urlCredentialStorage = nil
+    sessionConfiguration.httpShouldSetCookies = false
+    let session = URLSession(configuration: sessionConfiguration,
+      delegate: LiveVerificationRedirectPolicy(), delegateQueue: nil)
+    defer { session.invalidateAndCancel() }
+    let client = LimitedReportScopeLiveClient(base: DeepSeekResponsesClient(session: session))
+    let positions = (1...16).map { index in
+      let quantity = Decimal(17 - index)
+      return Position(name: "虚构测试资产\(index)", symbol: "SYNTH\(index)", category: .usStock,
+        quoteCurrency: .cny, quantity: quantity, averageCost: 10, latestPrice: 12,
+        marketValueCNY: quantity * 12, profitRate: 20, weeklyTrend: [], source: "manual",
+        quoteTime: "2026-11-07", freshness: .manual)
+    }
+    let value = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
+    let cost = positions.reduce(Decimal.zero) { $0 + $1.totalCost }
+    let evaluation = RiskConstraintEvaluation.evaluate(positions: positions, positionLimit: 30,
+      cryptoLimit: 15, foreignCurrencyLimit: 50, liquidityMinimum: 10)
+    let context = AIAnalysisStoreContext(displayCurrency: .cny, convertedTotalValue: value,
+      convertedTotalProfit: value - cost, totalProfitRate: 20, riskProfileConfigured: true,
+      riskProfileVersion: 1, riskLevel: "稳健型", positionLimit: 30, cryptoLimit: 15,
+      foreignCurrencyLimit: 50, liquidityMinimum: 10, riskConstraintEvaluation: evaluation)
+    do {
+      let result = try await AIAnalysisAgent(llm: client, search: NoExternalReportScopeSearch(),
+        credentialStore: ReportScopeLiveCredentials(key: key)).generateReportResult(
+          positions: positions, storeContext: context, llmConfiguration: .default,
+          searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic), trigger: .manual)
+      #expect(!result.report.summary.isEmpty)
+      #expect(await client.callCount <= 3)
+      let planning = result.artifacts.trace?.events.first { $0.stageID == "planning_tool_calls" }
+      #expect(planning?.outcome == "passed")
+      #expect(result.artifacts.guardrailResultJSON.contains("passed") || result.artifacts.guardrailResultJSON.contains("needs_review"))
+      print("Report scope live QA passed requests=\(await client.callCount) external_search_requests=0 repairs=\(result.artifacts.modelUsage?.calls.filter { $0.stage == "report_repair" }.count ?? 0)")
+    } catch {
+      print("Report scope live QA failed requests=\(await client.callCount) error_type=\(type(of: error))")
+      throw error
+    }
+  }
+
   private func readConfiguredKeyWithoutLoadingPortfolio() throws -> String {
     let path = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/app.portfolix.mac/portfolix.sqlite3")
@@ -231,6 +274,56 @@ struct AIOptimizationLiveTests {
     guard !key.isEmpty else { throw ProviderCredentialError.invalidValue }
     return key
   }
+}
+
+private actor LimitedReportScopeLiveClient: LLMCompleting {
+  let base: DeepSeekResponsesClient
+  private(set) var callCount = 0
+  private let responseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("Portfolix-ReportScope-Live-\(UUID())")
+  init(base: DeepSeekResponsesClient) { self.base = base }
+  func completeJSON(systemPrompt: String, userPrompt: String,
+    configuration: AIProviderConfiguration, apiKey: String) async throws -> String {
+    try await completeJSONResult(systemPrompt: systemPrompt, userPrompt: userPrompt,
+      configuration: configuration, apiKey: apiKey, webSearchEnabled: false,
+      reasoningEffort: .low, webSearchProgress: nil).content
+  }
+  func completeJSONResult(systemPrompt: String, userPrompt: String,
+    configuration: AIProviderConfiguration, apiKey: String, webSearchEnabled: Bool,
+    reasoningEffort: DeepSeekReasoningEffort,
+    webSearchProgress: LLMWebSearchProgressHandler?) async throws -> LLMCompletionResult {
+    guard callCount < 3 else { throw AIModelBudgetError.exhausted }
+    guard let path = ProcessInfo.processInfo.environment["PORTFOLIX_REPORT_SCOPE_LIVE_BUDGET_FILE"],
+      URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path + "/"),
+      let reserved = Int(try String(contentsOfFile: path, encoding: .utf8)), reserved < 3
+    else { throw AIModelBudgetError.exhausted }
+    try String(reserved + 1).write(toFile: path, atomically: true, encoding: .utf8)
+    callCount += 1
+    print("Report scope live QA request=\(callCount) model=\(configuration.model)")
+    let result = try await base.completeJSONResult(systemPrompt: systemPrompt, userPrompt: userPrompt,
+      configuration: configuration.withRequestTimeout(120), apiKey: apiKey,
+      webSearchEnabled: false, reasoningEffort: reasoningEffort, webSearchProgress: webSearchProgress)
+    try FileManager.default.createDirectory(at: responseDirectory, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    let response = responseDirectory.appendingPathComponent("response-\(reserved + 1).json")
+    try result.content.write(to: response, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: response.path)
+    print("Report scope live QA response_file=\(response.path)")
+    return result
+  }
+}
+
+private struct NoExternalReportScopeSearch: WebSearching {
+  func search(query: String, positions: [Position], configuration: SearchConfiguration,
+    apiKey: String) async throws -> [AssetResearchSource] { [] }
+}
+
+private struct ReportScopeLiveCredentials: ProviderCredentialStoring {
+  let key: String
+  func read(kind: ProviderCredentialKind) throws -> String? { kind == .llm ? key : "synthetic-no-network" }
+  func save(_: String, kind _: ProviderCredentialKind) throws {}
+  func delete(kind _: ProviderCredentialKind) throws {}
+  func readValidationState(kind _: ProviderCredentialKind) throws -> ProviderCredentialValidationState { .valid }
+  func saveValidationState(_: ProviderCredentialValidationState, kind _: ProviderCredentialKind) throws {}
 }
 
 private actor LimitedDistributionLiveClient: LLMCompleting {

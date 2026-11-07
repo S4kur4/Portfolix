@@ -482,6 +482,7 @@ enum AIAnalysisPromptText {
         - asset_alerts.source_domains 只能使用 evidence_ledger 中 web_source 证据实际返回且直接支持该关注项的 source 域名；没有搜索或没有直接支持时返回空数组，不得虚构。tool_results 仅含执行状态，网页正文摘要只在证据账本中提供一次。
         - 输入事实中的数字必须保持原义；派生数字、目标仓位、目标价和情景估计必须明确标注计算依据或假设，不得伪装成输入事实。
         - evidence_refs 只能引用 evidence_ledger.items 中存在的 id；重要数字、风险判断与建议尽量提供至少一个证据引用。
+        - scope=portfolio 的证据是组合级背景，position_refs 可仅列出部分贡献资产；scope=positions 的证据只支持所列资产，引用时必须与本条的 related_refs 或 asset_name/symbol 对应。不得把组合加权表现当作单只资产收益。
         - confidence = deterministic 的证据是本地确定性计算结果；不得将 unavailable 的证据当作有效数字使用。
 
         【投资组合建议】
@@ -535,6 +536,7 @@ enum AIAnalysisPromptText {
     - 面向用户的文字必须服从 allowed_input.output_language；zh-CN 使用简体中文，en 使用英文。资产名称、代码和专有名词保持原文。
     - 保留候选报告原有简洁、亲切、专业的表达，不改成机械模板，不为结构修复而扩写或添加笑话。
     - 如果某字段无法安全修复，使用空数组或基于 allowed_input 的最小表述，不要伪造事实。
+    - 证据归属修复必须区分 scope：portfolio 可作组合背景；positions 的 position_refs 必须与该条资产至少有一项对应。纠正错配引用或省略缺乏依据的条目，不要只调整字段类型，也不得修改证据账本。
 
     【输出契约】
     只返回一个合法 JSON 对象，不得输出 Markdown、解释或 JSON 之外的文字。

@@ -47,29 +47,33 @@ enum AIReportEvidenceValidator {
         if let invalidRef = payloadEvidenceRefs(payload).first(where: { !allowedRefs.contains($0) }) {
             throw AIReportPayloadValidationError.invalidEvidenceRef(invalidRef)
         }
-        for risk in payload.riskItems {
-            try validateAssociation(evidenceRefs: risk.evidenceRefs ?? [], relatedRefs: risk.relatedRefs, ledger: ledger)
+        for (index, risk) in payload.riskItems.enumerated() {
+            try validateAssociation(evidenceRefs: risk.evidenceRefs ?? [], relatedRefs: risk.relatedRefs, ledger: ledger,
+                field: "risk_items[\(index)].evidence_refs")
         }
         if let input {
-            for alert in payload.assetAlerts {
+            for (index, alert) in payload.assetAlerts.enumerated() {
                 let refs = input.metrics.positions.filter { $0.displayLabel == alert.assetName || $0.symbol == alert.symbol }.map(\.positionRef)
-                try validateAssociation(evidenceRefs: alert.evidenceRefs ?? [], relatedRefs: refs, ledger: ledger)
+                try validateAssociation(evidenceRefs: alert.evidenceRefs ?? [], relatedRefs: refs, ledger: ledger,
+                    field: "asset_alerts[\(index)].evidence_refs")
             }
-            for action in payload.rebalanceActions {
+            for (index, action) in payload.rebalanceActions.enumerated() {
                 let refs = input.metrics.positions.filter {
                     (action.assetName != nil && $0.displayLabel == action.assetName)
                         || (action.symbol != nil && $0.symbol == action.symbol)
                 }.map(\.positionRef)
-                try validateAssociation(evidenceRefs: action.evidenceRefs ?? [], relatedRefs: refs, ledger: ledger)
+                try validateAssociation(evidenceRefs: action.evidenceRefs ?? [], relatedRefs: refs, ledger: ledger,
+                    field: "rebalance_actions[\(index)].evidence_refs")
             }
         }
     }
 
-    static func validateAssociation(evidenceRefs: [String], relatedRefs: [String], ledger: AIEvidenceLedger) throws {
+    static func validateAssociation(evidenceRefs: [String], relatedRefs: [String], ledger: AIEvidenceLedger,
+                                    field: String = "evidence_refs") throws {
         guard !relatedRefs.isEmpty else { return }
-        let scoped = ledger.items.filter { evidenceRefs.contains($0.id) && !$0.positionRefs.isEmpty }
+        let scoped = ledger.items.filter { evidenceRefs.contains($0.id) && $0.associationScope == .positions }
         guard scoped.isEmpty || scoped.contains(where: { !Set($0.positionRefs).isDisjoint(with: relatedRefs) }) else {
-            throw AIReportPayloadValidationError.invalidField("evidence_refs.asset_association")
+            throw AIReportPayloadValidationError.invalidField("\(field).asset_association")
         }
     }
 

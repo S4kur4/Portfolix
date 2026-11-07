@@ -72,6 +72,7 @@ enum AIContextProjection {
       var items = object["items"] as? [[String: Any]]
     else { return "{}" }
     for index in items.indices {
+      items[index]["scope"] = ledger.items[index].associationScope.rawValue
       if items[index]["numeric_value"] != nil { items[index]["value_text"] = nil }
       if items[index]["kind"] as? String == "calculation" {
         items[index]["source"] = nil
