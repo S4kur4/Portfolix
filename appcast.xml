@@ -3,72 +3,32 @@
     <channel>
         <title>Portfolix</title>
         <item>
-            <title>0.1.11</title>
-            <pubDate>Sun, 01 Nov 2026 10:33:10 +0800</pubDate>
+            <title>0.1.12</title>
+            <pubDate>Sat, 07 Nov 2026 22:11:31 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
-            <sparkle:version>23</sparkle:version>
-            <sparkle:shortVersionString>0.1.11</sparkle:shortVersionString>
+            <sparkle:version>24</sparkle:version>
+            <sparkle:shortVersionString>0.1.12</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.11 (Build 23)
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.12 (Build 24)
 
-## 资产记账
+- 新增“更新持仓”，快速核对份额和成本，支持成本暂不确定。
+- 修复增持及校准后的今日收益计算，改善撤销和备份恢复。
+- 持仓新增成本价列，统一表单与日期选择器，支持双击查看记录详情。
+- 优化 AI 回答与引用展示，完善 AI／MCP 的持仓校准支持。
 
-- 重新设计持仓管理：通过“添加资产”录入新资产或增持已有资产，可选择外部新增资金或已有现金账户支付，并将手续费计入成本。
-- 新增“卖出资产”，支持部分卖出和全部卖出，自动更新剩余份额、持仓成本、收款现金余额及已实现盈亏。现金资产通过“减少现金”记录部分或全部转出，不作为卖出计算盈亏。
-- 新增统一交易记录，包含倒序序号、精确到秒的记录时间、份额、成交价格、手续费及已实现盈亏；可在右键菜单中撤销记录，并重新计算相关持仓与现金。
-- 旧版持仓自动生成期初记录，以兼容新的记账方式；无法可靠还原的期初信息可先核对确认。移除直接删除持仓和批量修改余额的入口，避免绕过操作记录。
-- 同步适配历史收益、盈亏日历、投资云图、行情更新、智能分析、MCP 和备份恢复，避免将资金转入转出误计为投资收益，或让后台行情覆盖已更新的份额。
+新版备份需使用 v0.1.12 或更高版本恢复。
 
-## 智能分析与投资分布
+## What's New
 
-- Agent 可按需调用只读持仓、历史收益和交易记录工具，不再依赖先生成报告才能获取组合数据。
-- 精简上下文并限制工具与修复调用预算；在每条回答下方显示本次回答消耗的 tokens。
-- 统一报告与问答的表达风格，减少重复和机械化文案；支持加粗、斜体、下划线及列表等基础 Markdown 显示。
-- 投资分布优先识别资产实际投资领域，按资产身份缓存分类，新增或身份变化时按需补充分类；价格和份额变化仅重算金额及占比。未配置 AI 或分类失败时保留本地分类回退。
-- 修复分类批次中部分失败导致已完成结果丢失，以及模型最终回复为空时误用中间内容的问题。
+- Added holding reconciliation for quick quantity and cost updates, including unknown costs.
+- Fixed daily P&L after additions and reconciliation; improved reversals and backup recovery.
+- Added unit cost, consistent forms and date pickers, and double-click activity details.
+- Improved AI answers, citations and reconciliation data in AI/MCP tools.
 
-## 界面与兼容性
-
-- 新增可折叠侧边栏，优化图标对齐、页面切换稳定性及收起状态的新版本提示。
-- 新增绿涨红跌、红涨绿跌配色选择，统一数字变化动画，优化日历日期描边与卡片高度。
-- 调整浅色与深色背景为更中性的黑白色，统一空状态提示字体。
-- 将弹窗报错和验证反馈统一放在固定底栏，每次仅显示当前操作对应的一条提示；修复添加资产时需要点击两次确认的问题。
-- 隐藏不支持自动行情资产的刷新按钮，改善持仓与交易记录的序号对齐、币种切换及表格交互。
-- 加强只读 MCP 协议兼容性、输入边界和数据访问控制，新增交易与已清仓记录查询，并提供主流 Agent 客户端的紧凑配置参考。
-- 统一隐藏页面滚动条，减少不同 Mac 系统设置造成的外观差异。
-
-升级前建议先导出备份。所有添加、卖出和现金转出均为本地记账，不会执行真实交易。安装要求：Apple Silicon Mac，macOS 15 或更高版本。
-
-## Asset Records
-
-- Redesigned holding management: add new assets or increase existing positions, optionally fund additions from recorded cash, and include fees in the cost basis.
-- Record partial or full sales with updated remaining quantities, cost bases, cash proceeds, and realized P&L. Reduce cash through partial or full withdrawals without treating principal flows as investment losses.
-- Added a unified transaction ledger with descending row numbers, timestamps including seconds, prices, fees, and realized P&L. Reverse records from the context menu and recalculate related holdings and cash.
-- Migrate existing holdings into opening records, with confirmation available where the original balance cannot be reliably reconstructed. Removed direct holding deletion and bulk balance-editing entry points.
-- Updated historical returns, the P&L calendar, investment map, quote synchronization, AI tools, MCP, and backup recovery for the new ledger.
-
-## AI Analysis and Distribution
-
-- Let the Agent request read-only holdings, history, and transaction data when needed, without requiring an existing analysis report.
-- Reduced redundant context and bounded tool and repair calls. Display the tokens consumed by each answer.
-- Unified report and chat tone, improved concise explanations, and added basic Markdown rendering for emphasis, underlines, and lists.
-- Classify underlying investment sectors per asset and reuse cached classifications. Revalue amounts and percentages without reclassifying on price or quantity changes; retain local fallbacks when AI is unavailable.
-- Preserve completed classifications when later batches fail, and reject provisional content when the final model response is empty.
-
-## Interface and Compatibility
-
-- Added a collapsible sidebar with aligned icons, stable navigation, and compact update notifications.
-- Added gain/loss color conventions, consistent numeric transitions, refined calendar outlines, and balanced card heights.
-- Refined neutral light and dark surfaces and standardized empty-state typography.
-- Consolidated sheet feedback into a fixed footer with one current message, and fixed asset submission requiring a second click.
-- Improved table numbering, currency conversion, and refresh controls for assets without automatic quotes.
-- Hardened read-only MCP compatibility and access boundaries, added transaction and closed-holding queries, and refined client configuration references.
-- Hide page scroll indicators consistently across Mac system preferences.
-
-Export a backup before upgrading. Asset additions, sales, and cash withdrawals only update local records; they never execute real trades. Requires an Apple Silicon Mac running macOS 15 or later.
+New backups require v0.1.12 or later to restore. Apple Silicon · macOS 15+
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.11/Portfolix-0.1.11.dmg" length="8072810" type="application/octet-stream" sparkle:edSignature="TIDPX67vyZDkm14qlxqrGG6SXXQiH3kmO9xhaiwXjDBYvWjw8I5JC8XE+NgI81VQRBCFXXvtq8aHglDIWzzhBw=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12.dmg" length="8444766" type="application/octet-stream" sparkle:edSignature="2J3T8PVd4EOsTWi3AumnFz/Bn3FU1chNq0zuqcEXKpTypj60opJmErzTiMTLKf+g+odJtkDNDYjopubLmO4bBA=="/>
         </item>
     </channel>
 </rss>
