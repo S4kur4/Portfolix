@@ -24,7 +24,7 @@
 
 Apple Silicon · macOS 15+
 ]]></description>
-            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12.dmg" length="8452100" type="application/octet-stream" sparkle:edSignature="p0CtyGw0oSw4OZ9EGe4oiuVF8oixdY5Nck5GwdKmzf/a9fxeJsLacxfoQdyI0MWdgWMG92bxahK4sZTqs1MZBA=="/>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12-build25.dmg" length="8452100" type="application/octet-stream" sparkle:edSignature="p0CtyGw0oSw4OZ9EGe4oiuVF8oixdY5Nck5GwdKmzf/a9fxeJsLacxfoQdyI0MWdgWMG92bxahK4sZTqs1MZBA=="/>
         </item>
     </channel>
 </rss>
