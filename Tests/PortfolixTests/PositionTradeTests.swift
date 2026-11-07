@@ -277,7 +277,7 @@ struct PositionTradeTests {
         #expect(PositionTradeSide.sell.title(language: .chinese) == "卖出")
         #expect(AssetEntryLayout.valueFieldWidth == 320)
         #expect(AssetEntryLayout.valueFieldHeight == 28)
-        #expect(AssetEntryLayout.minimumRowHeight == 36)
+        #expect(AssetEntryLayout.minimumRowHeight == 42)
         #expect(AssetEntryLayout.inlineControlHeight == PortfolixLayout.glassControlHeight)
     }
 
@@ -389,6 +389,85 @@ struct PositionTradeTests {
             let color = try #require(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
             #expect(color.redComponent > 0.7 && color.greenComponent < 0.5 && color.blueComponent < 0.5)
         }
+    }
+
+    @Test @MainActor
+    func additionUsesTheRefreshedQuoteForBothExistingAndAddedUnits() throws {
+        let (repo, holding, _) = try setup()
+        let store = PortfolioStore(positionRepository: repo, initialLanguage: .chinese)
+        let quote = AssetLookupCandidate(name: holding.name, symbol: holding.symbol, category: holding.category,
+            quoteCurrency: holding.quoteCurrency, latestPrice: 140, upstreamSource: holding.source,
+            quoteTime: ISO8601DateFormatter().string(from: .now))
+        let id = UUID()
+        try store.recordTrade(id: id, side: .add, position: holding, quantity: 2, price: 135,
+            fees: 1, tradeDate: .now, cashPositionID: nil, refreshedQuote: quote)
+        let current = try #require(store.positions.first { $0.id == holding.id })
+        #expect(current.quantity == 12)
+        #expect(current.totalCost == 1071)
+        #expect(current.latestPrice == 140)
+        #expect(store.todayProfitCNY == 209)
+        #expect(store.investmentCloudDailyProfitItems(asOf: .now).reduce(0) { $0 + $1.amountCNY } == 209)
+        #expect(try repo.fetchDailyProfitPoints().last?.amountCNY == 209)
+        #expect(PortfolioStore(positionRepository: repo).todayProfitCNY == 209)
+        try store.reverseTrade(try #require(store.positionTrades.first { $0.id == id }))
+        #expect(store.todayProfitCNY == 200)
+        #expect(store.positions.first { $0.id == holding.id }?.quantity == 10)
+    }
+
+    @Test @MainActor
+    func rejectedAdditionRollsBackItsQuoteAndSnapshotsAsWellAsBalances() throws {
+        let (repo, holding, cash) = try setup()
+        let store = PortfolioStore(positionRepository: repo, initialLanguage: .chinese)
+        let before = try repo.exportDataPayload()
+        let quote = AssetLookupCandidate(name: holding.name, symbol: holding.symbol, category: holding.category,
+            quoteCurrency: holding.quoteCurrency, latestPrice: 140, upstreamSource: holding.source,
+            quoteTime: ISO8601DateFormatter().string(from: .now))
+        #expect(throws: PositionTradeError.insufficientCash) {
+            try store.recordTrade(id: UUID(), side: .buy, position: holding, quantity: 100, price: 135,
+                fees: 1, tradeDate: .now, cashPositionID: cash.id, refreshedQuote: quote)
+        }
+        #expect(try repo.exportDataPayload() == before)
+        #expect(store.todayProfitCNY == 100)
+    }
+
+    @Test @MainActor
+    func fundAdditionKeepsTheExistingUnitsProfitWithSparsePriceHistory() throws {
+        let repo = try repository()
+        let holding = asset(category: .fund, name: "Synthetic Fund", symbol: "SYNTHETIC")
+        try repo.insert(holding)
+        try repo.replaceDailySnapshots(positions: [asset(id: holding.id, price: 120,
+            category: .fund, name: holding.name, symbol: holding.symbol)], snapshotDate: day(10))
+        try repo.replaceDailySnapshots(positions: [holding])
+        let store = PortfolioStore(positionRepository: repo, initialLanguage: .chinese)
+        #expect(store.todayProfitCNY == 100)
+
+        let id = UUID()
+        try store.recordTrade(id: id, side: .add, position: holding, quantity: 2, price: 125,
+            fees: 1, tradeDate: .now, cashPositionID: nil)
+        // Original units: 10 × (130 - 120); added units: 2 × (130 - 125), less the fee.
+        #expect(store.todayProfitCNY == 109)
+        #expect(try repo.fetchDailyProfitPoints().last?.amountCNY == 109)
+        #expect(PortfolioStore(positionRepository: repo).todayProfitCNY == 109)
+        try store.reverseTrade(try #require(store.positionTrades.first { $0.id == id }))
+        #expect(store.todayProfitCNY == 100)
+    }
+
+    @Test @MainActor
+    func todaysPriceChangeUsesThePreviousDayRatherThanTheLastTwoChartPoints() throws {
+        let repo = try repository()
+        let holding = asset(price: 125, category: .fund, name: "Synthetic Fund", symbol: "SYNTHETIC")
+        try repo.insert(holding)
+        for (ago, price): (Int, Decimal) in [(2, 100), (1, 120)] {
+            try repo.replaceDailySnapshots(positions: [asset(id: holding.id, price: price,
+                category: .fund, name: holding.name, symbol: holding.symbol)], snapshotDate: day(ago))
+        }
+        let store = PortfolioStore(positionRepository: repo, initialLanguage: .chinese)
+        // A current quote can exist before any snapshot has been written for today.
+        #expect(store.todayProfitCNY == 50)
+        try store.recordTrade(id: UUID(), side: .add, position: holding, quantity: 2, price: 124,
+            fees: 0, tradeDate: .now, cashPositionID: nil)
+        #expect(store.todayProfitCNY == 52)
+        #expect(try repo.fetchDailyProfitPoints().last?.amountCNY == 52)
     }
 
     @Test @MainActor
@@ -597,7 +676,7 @@ struct PositionTradeTests {
         store.presentPositionEditor(for: cash.id)
         #expect(store.positionEditorPresentation?.position?.category == .cash)
         let host = NSHostingView(rootView: PositionEditorSheet(presentation: .init(position: cash)).environment(store))
-        #expect(host.fittingSize == CGSize(width: 620, height: 560))
+        #expect(host.fittingSize == CGSize(width: 620, height: 620))
     }
 
     @Test
@@ -746,14 +825,35 @@ struct PositionTradeTests {
 
     @Test @MainActor
     func newSheetsFitBothLanguagesAndAppearances() throws {
-        let (repo, holding, _) = try setup()
+        let (repo, holding, cash) = try setup()
         for language: AppLanguage in [.chinese, .english] {
             let store = PortfolioStore(positionRepository: repo, initialLanguage: language)
             for scheme: ColorScheme in [.light, .dark] {
+                if let path = ProcessInfo.processInfo.environment["PORTFOLIX_TRADE_PREVIEW_DIRECTORY"] {
+                    let editor = PortfolixDateTimeEditor(selection: .constant(.now), language: language, onDone: {})
+                    let host = NSHostingView(rootView: editor.environment(\.colorScheme, scheme))
+                    host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                    host.frame = CGRect(origin: .zero, size: host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let directory = URL(fileURLWithPath: path)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    let data = try #require(bitmap.representation(using: .png, properties: [:]))
+                    try data.write(to: directory.appendingPathComponent("date-editor-\(language == .english ? "en" : "zh")-\(scheme == .dark ? "dark" : "light").png"))
+                }
                 let views: [(String, AnyView, CGSize)] = [
-                    ("sell", AnyView(PositionTradeSheet(position: holding).environment(store)), CGSize(width: 620, height: 640)),
-                    ("add-new", AnyView(PositionEditorSheet(presentation: .init(position: nil)).environment(store)), CGSize(width: 620, height: 720)),
-                    ("add-existing", AnyView(PositionEditorSheet(presentation: .init(position: holding)).environment(store)), CGSize(width: 620, height: 720))]
+                    ("reconcile", AnyView(PositionReconciliationSheet(position: holding).environment(store)), CGSize(width: 620, height: 760)),
+                    ("reconcile-cash", AnyView(PositionReconciliationSheet(position: cash).environment(store)), CGSize(width: 620, height: 580)),
+                    ("sell", AnyView(PositionTradeSheet(position: holding).environment(store)), CGSize(width: 620, height: 700)),
+                    ("add-new", AnyView(PositionEditorSheet(presentation: .init(position: nil)).environment(store)), CGSize(width: 620, height: 780)),
+                    ("add-existing", AnyView(PositionEditorSheet(presentation: .init(position: holding)).environment(store)), CGSize(width: 620, height: 780)),
+                    ("add-cash", AnyView(PositionEditorSheet(presentation: .init(position: cash)).environment(store)), CGSize(width: 620, height: 620)),
+                    ("cash", AnyView(CashReductionSheet(position: cash).environment(store)), CGSize(width: 620, height: 460)),
+                    ("risk", AnyView(RiskQuestionnaireSheet().environment(store)), CGSize(width: 640, height: 680)),
+                    ("model-settings", AnyView(LLMConfigurationSheet().environment(store)), CGSize(width: 560, height: 420)),
+                    ("search-settings", AnyView(SearchConfigurationSheet().environment(store)), CGSize(width: 560, height: 620)),
+                    ("holdings", AnyView(PositionsView().environment(store).frame(width: 960, height: 640)), CGSize(width: 960, height: 640))]
                 for (name, view, size) in views {
                     let host = NSHostingView(rootView: view.environment(\.colorScheme, scheme))
                     host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)

@@ -39,6 +39,7 @@ enum PortfolixDataPackage {
         let riskProfiles: Int?
         let closedHoldings: Int?
         let trades: Int?
+        let reconciliations: Int?
         let openingBalances: Int?
 
         init(
@@ -48,7 +49,8 @@ enum PortfolixDataPackage {
             riskProfiles: Int? = nil,
             closedHoldings: Int? = nil,
             trades: Int? = nil,
-            openingBalances: Int? = nil
+            openingBalances: Int? = nil,
+            reconciliations: Int? = nil
         ) {
             self.holdings = holdings
             self.portfolioSnapshots = portfolioSnapshots
@@ -57,6 +59,7 @@ enum PortfolixDataPackage {
             self.closedHoldings = closedHoldings
             self.trades = trades
             self.openingBalances = openingBalances
+            self.reconciliations = reconciliations
         }
     }
 
@@ -67,6 +70,7 @@ enum PortfolixDataPackage {
         let riskProfile: RiskProfile?
         let closedHoldings: [PositionClosureRecord]?
         let trades: [PositionTradeRecord]?
+        let reconciliations: [PositionReconciliationRecord]?
         let openingBalances: [PositionOpeningBalanceRecord]?
 
         init(
@@ -76,7 +80,8 @@ enum PortfolixDataPackage {
             riskProfile: RiskProfile? = nil,
             closedHoldings: [PositionClosureRecord]? = [],
             trades: [PositionTradeRecord]? = nil,
-            openingBalances: [PositionOpeningBalanceRecord]? = nil
+            openingBalances: [PositionOpeningBalanceRecord]? = nil,
+            reconciliations: [PositionReconciliationRecord]? = nil
         ) {
             self.holdings = holdings
             self.portfolioSnapshots = portfolioSnapshots
@@ -85,6 +90,7 @@ enum PortfolixDataPackage {
             self.closedHoldings = closedHoldings
             self.trades = trades
             self.openingBalances = openingBalances
+            self.reconciliations = reconciliations
         }
     }
 
@@ -118,6 +124,7 @@ enum PortfolixDataPackage {
         let weeklyTrend: [Double]
         let createdAt: String
         let updatedAt: String
+        var costKnown: Bool? = nil
     }
 
     struct PortfolioHistory: Codable, Equatable, Sendable {
@@ -127,6 +134,7 @@ enum PortfolixDataPackage {
         let totalProfitCNY: String
         let profitRate: String
         let updatedAt: String
+        var costKnown: Bool? = nil
     }
 
     struct AssetPriceHistory: Codable, Equatable, Sendable {
@@ -144,6 +152,7 @@ enum PortfolixDataPackage {
         let quoteTime: String
         let freshness: String
         let updatedAt: String
+        var costKnown: Bool? = nil
     }
 }
 
@@ -199,8 +208,8 @@ enum PortfolixDataPackageService {
     static let contentType = UTType.zip
 
     private static let formatIdentifier = "app.portfolix.data-export.archive"
-    private static let schemaVersion = 6
-    private static let supportedSchemaVersions = Set([2, 3, 4, 5, schemaVersion])
+    private static let schemaVersion = 7
+    private static let supportedSchemaVersions = Set([2, 3, 4, 5, 6, schemaVersion])
     private static let maximumFileSize = 64 * 1_024 * 1_024
     private static let maximumUncompressedSize = 128 * 1_024 * 1_024
     private static let maximumHoldingCount = 10_000
@@ -213,6 +222,7 @@ enum PortfolixDataPackageService {
     private static let riskProfileFilename = "risk_profile.json"
     private static let closedHoldingsFilename = "closed_holdings.json"
     private static let tradesFilename = "trades.json"
+    private static let reconciliationsFilename = "reconciliations.json"
     private static let openingBalancesFilename = "opening_balances.json"
 
     private static func archiveFilenames(for version: Int) -> [String] {
@@ -225,6 +235,7 @@ enum PortfolixDataPackageService {
             + (version >= 4 ? [closedHoldingsFilename] : [])
             + (version >= 5 ? [tradesFilename] : [])
             + (version >= 6 ? [openingBalancesFilename] : [])
+            + (version >= 7 ? [reconciliationsFilename] : [])
     }
 
     private static let encoder: JSONEncoder = {
@@ -246,9 +257,10 @@ enum PortfolixDataPackageService {
         let riskProfileData = try encoder.encode(payload.riskProfile)
         let closedHoldingsData = try encoder.encode(payload.closedHoldings ?? [])
         let tradesData = try encoder.encode(payload.trades ?? [])
+        let reconciliationsData = try encoder.encode(payload.reconciliations ?? [])
         let openingBalancesData = try encoder.encode(payload.openingBalances ?? [])
         let uncompressedDataSize = holdingsData.count + dailyReturnsData.count
-            + dailyAssetPricesData.count + riskProfileData.count + closedHoldingsData.count + tradesData.count + openingBalancesData.count
+            + dailyAssetPricesData.count + riskProfileData.count + closedHoldingsData.count + tradesData.count + openingBalancesData.count + reconciliationsData.count
         guard uncompressedDataSize <= maximumUncompressedSize else {
             throw PortfolixDataPackageError.fileTooLarge
         }
@@ -278,6 +290,8 @@ enum PortfolixDataPackageService {
                 recordCount: payload.closedHoldings?.count ?? 0, sha256: sha256(closedHoldingsData)),
             PortfolixDataPackage.ArchiveFile(name: tradesFilename,
                 recordCount: payload.trades?.count ?? 0, sha256: sha256(tradesData)),
+            PortfolixDataPackage.ArchiveFile(name: reconciliationsFilename,
+                recordCount: payload.reconciliations?.count ?? 0, sha256: sha256(reconciliationsData)),
             PortfolixDataPackage.ArchiveFile(name: openingBalancesFilename,
                 recordCount: payload.openingBalances?.count ?? 0, sha256: sha256(openingBalancesData)),
         ]
@@ -302,6 +316,7 @@ enum PortfolixDataPackageService {
         try riskProfileData.write(to: temporaryDirectory.appendingPathComponent(riskProfileFilename), options: .atomic)
         try closedHoldingsData.write(to: temporaryDirectory.appendingPathComponent(closedHoldingsFilename), options: .atomic)
         try tradesData.write(to: temporaryDirectory.appendingPathComponent(tradesFilename), options: .atomic)
+        try reconciliationsData.write(to: temporaryDirectory.appendingPathComponent(reconciliationsFilename), options: .atomic)
         try openingBalancesData.write(to: temporaryDirectory.appendingPathComponent(openingBalancesFilename), options: .atomic)
 
         let temporaryArchiveURL = temporaryDirectory.appendingPathComponent("Portfolix-Export-\(UUID().uuidString).zip")
@@ -452,7 +467,10 @@ enum PortfolixDataPackageService {
                         from: try requiredData(named: tradesFilename, in: fileData)) : nil,
                 openingBalances: manifest.schemaVersion >= 6
                     ? try decoder.decode([PositionOpeningBalanceRecord].self,
-                        from: try requiredData(named: openingBalancesFilename, in: fileData)) : nil
+                        from: try requiredData(named: openingBalancesFilename, in: fileData)) : nil,
+                reconciliations: manifest.schemaVersion >= 7
+                    ? try decoder.decode([PositionReconciliationRecord].self,
+                        from: try requiredData(named: reconciliationsFilename, in: fileData)) : nil
             )
         } catch let error as PortfolixDataPackageError {
             throw error
@@ -460,7 +478,7 @@ enum PortfolixDataPackageService {
             throw PortfolixDataPackageError.invalidPackage("无法解析结构化数据文件")
         }
         let expectedCounts = recordCounts(for: payload, includeClosures: manifest.schemaVersion >= 4,
-            includeTrades: manifest.schemaVersion >= 5, includeOpeningBalances: manifest.schemaVersion >= 6)
+            includeTrades: manifest.schemaVersion >= 5, includeOpeningBalances: manifest.schemaVersion >= 6, includeReconciliations: manifest.schemaVersion >= 7)
         guard manifest.recordCounts == expectedCounts,
               manifestFiles[holdingsFilename]?.recordCount == payload.holdings.count,
               manifestFiles[dailyReturnsFilename]?.recordCount == payload.portfolioSnapshots.count,
@@ -468,7 +486,8 @@ enum PortfolixDataPackageService {
               manifest.schemaVersion < 3 || manifestFiles[riskProfileFilename]?.recordCount == 1,
               manifest.schemaVersion < 4 || manifestFiles[closedHoldingsFilename]?.recordCount == payload.closedHoldings?.count,
               manifest.schemaVersion < 5 || manifestFiles[tradesFilename]?.recordCount == payload.trades?.count,
-              manifest.schemaVersion < 6 || manifestFiles[openingBalancesFilename]?.recordCount == payload.openingBalances?.count
+              manifest.schemaVersion < 6 || manifestFiles[openingBalancesFilename]?.recordCount == payload.openingBalances?.count,
+              manifest.schemaVersion < 7 || manifestFiles[reconciliationsFilename]?.recordCount == payload.reconciliations?.count
         else {
             throw PortfolixDataPackageError.invalidPackage("记录计数不一致")
         }
@@ -621,10 +640,24 @@ enum PortfolixDataPackageService {
             throw PortfolixDataPackageError.invalidPackage("期初持仓记录数量或标识无效")
         }
         for opening in openings { try opening.validate() }
+        let reconciliations = payload.reconciliations ?? []
+        guard reconciliations.count <= 10_000, Set(reconciliations.map(\.id)).count == reconciliations.count,
+              Set(reconciliations.map(\.sequence)).count == reconciliations.count,
+              Set(reconciliations.map(\.id)).isDisjoint(with: Set(trades.map(\.id) + closures.map(\.id) + openings.map(\.id))),
+              Set(reconciliations.map { $0.asset.id }).isSubset(of: Set(openings.map { $0.holding.id })) else {
+            throw PortfolixDataPackageError.invalidPackage("校准记录数量或标识无效")
+        }
+        for record in reconciliations { try record.validate() }
+        for holding in payload.holdings {
+            let latest = reconciliations.filter { !$0.isReversed && $0.asset.id == holding.id }.max { $0.sequence < $1.sequence }
+            guard (holding.costKnown != false) == (latest?.costKnown ?? true) else {
+                throw PortfolixDataPackageError.invalidPackage("持仓成本状态与校准记录不一致")
+            }
+        }
     }
 
     private static func recordCounts(for payload: PortfolixDataPackage.Payload, includeClosures: Bool = true, includeTrades: Bool = true,
-                                     includeOpeningBalances: Bool = true) -> PortfolixDataPackage.RecordCounts {
+                                     includeOpeningBalances: Bool = true, includeReconciliations: Bool = true) -> PortfolixDataPackage.RecordCounts {
         PortfolixDataPackage.RecordCounts(
             holdings: payload.holdings.count,
             portfolioSnapshots: payload.portfolioSnapshots.count,
@@ -632,7 +665,8 @@ enum PortfolixDataPackageService {
             riskProfiles: payload.riskProfile == nil ? nil : 1,
             closedHoldings: includeClosures ? payload.closedHoldings?.count ?? 0 : nil,
             trades: includeTrades ? payload.trades?.count ?? 0 : nil,
-            openingBalances: includeOpeningBalances ? payload.openingBalances?.count ?? 0 : nil
+            openingBalances: includeOpeningBalances ? payload.openingBalances?.count ?? 0 : nil,
+            reconciliations: includeReconciliations ? payload.reconciliations?.count ?? 0 : nil
         )
     }
 

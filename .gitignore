@@ -25,3 +25,6 @@ release/
 *.db-shm
 *.db-wal
 *.portfolix-export.zip
+
+# Private local documentation
+/docs/

@@ -368,7 +368,7 @@ enum InvestmentProfileEngine {
         let concentrationPenalty = max(context.riskConstraintEvaluation.largestPositionPercent - 14, 0) * 1.15
         let topThree = positions.sorted { $0.marketValueCNY > $1.marketValueCNY }.prefix(3)
             .reduce(0.0) { $0 + $1.marketValueCNY.doubleValue / totalValue * 100 }
-        let profitable = positions.filter { $0.profitRate > 0 }.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue / totalValue * 100 }
+        let profitable = positions.filter { $0.costIsKnown && $0.profitRate > 0 }.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue / totalValue * 100 }
         let stale = positions.filter { $0.freshness == .stale }.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue / totalValue * 100 }
         let riskBudget = (context.positionLimit - 30) * 0.06
             + (context.cryptoLimit - 15) * 0.08

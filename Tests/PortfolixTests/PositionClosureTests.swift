@@ -219,10 +219,11 @@ struct PositionClosureTests {
         if version < 4 { counts["closedHoldings"] = nil }
         if version < 5 { counts["trades"] = nil }
         counts["openingBalances"] = nil
+        counts["reconciliations"] = nil
         manifest["recordCounts"] = counts
         manifest["files"] = (manifest["files"] as? [[String: Any]])?.filter {
             let name = $0["name"] as? String ?? ""
-            return name != "opening_balances.json" && (version >= 5 || name != "trades.json") && (version >= 4 || name != "closed_holdings.json")
+            return name != "reconciliations.json" && name != "opening_balances.json" && (version >= 5 || name != "trades.json") && (version >= 4 || name != "closed_holdings.json")
         }
         try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
         let legacy = folder.appendingPathComponent("legacy.zip")

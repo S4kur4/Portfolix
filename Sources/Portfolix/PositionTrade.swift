@@ -44,8 +44,15 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
     let recordedAt: String
     var reversedAt: String?
     var priceHistory: [PortfolixDataPackage.AssetPriceHistory]
+    var effectiveAt: String? = nil
 
     var isReversed: Bool { reversedAt != nil }
+    var actualDate: Date {
+        effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? PositionClosureMath.date(tradeDate) ?? .distantPast
+    }
+    static func precedes(_ lhs: Self, _ rhs: Self) -> Bool {
+        lhs.actualDate == rhs.actualDate ? lhs.sequence < rhs.sequence : lhs.actualDate < rhs.actualDate
+    }
     var currency: DisplayCurrency { DisplayCurrency(rawValue: asset.quoteCurrency) ?? .cny }
     var units: Decimal { PositionClosureMath.decimal(quantity) ?? 0 }
     var price: Decimal { PositionClosureMath.decimal(executionPrice) ?? 0 }
@@ -57,7 +64,7 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
     var costDelta: Decimal { side.reducesBalance ? -cost : amount }
     var cashDelta: Decimal { side.usesCashAccount ? (side == .buy ? -amount : amount) : 0 }
     var accountIDs: Set<String> { Set([asset.id, cash?.id].compactMap { $0 }) }
-    var realizedProfit: Decimal? { side == .sell ? amount - cost : nil }
+    var realizedProfit: Decimal? { side == .sell && asset.costKnown != false ? amount - cost : nil }
 
     func remapping(_ ids: [String: String]) -> Self {
         Self(id: id, sequence: sequence, side: side,
@@ -69,7 +76,7 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
                     category: $0.category, quoteCurrency: $0.quoteCurrency, quantity: $0.quantity,
                     averageCost: $0.averageCost, latestPrice: $0.latestPrice, marketValueCNY: $0.marketValueCNY,
                     source: $0.source, quoteTime: $0.quoteTime, freshness: $0.freshness, updatedAt: $0.updatedAt)
-            })
+            }, effectiveAt: effectiveAt)
     }
 
     func validate() throws {
@@ -99,6 +106,13 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
               Set(priceHistory.map { "\($0.assetID)/\($0.date)" }).count == priceHistory.count,
               priceHistory.allSatisfy({ accountIDs.contains($0.assetID) }) else {
             throw PositionTradeError.invalidInput
+        }
+        if let effectiveAt {
+            guard let effective = ISO8601DateFormatter().date(from: effectiveAt),
+                  PositionClosureMath.day(effective) == tradeDate,
+                  let recorded = ISO8601DateFormatter().date(from: recordedAt), effective <= recorded else {
+                throw PositionTradeError.invalidInput
+            }
         }
         try PortfolixDataPackageService.validate(payload: .init(holdings: [], portfolioSnapshots: [], assetPriceSnapshots: priceHistory))
     }
@@ -170,7 +184,7 @@ enum PositionTradeInput {
 
 enum PositionTradeError: LocalizedError {
     case invalidInput, insufficientQuantity, insufficientCash, changed, historicalCorrection, missingHistory, dependentLegacyRecord
-    case identityConflict, recordedTradesExist, dependentTrade, invalidCashReduction
+    case identityConflict, recordedTradesExist, dependentTrade, invalidCashReduction, unchangedBalance
     func message(language: AppLanguage) -> String {
         switch self {
         case .invalidInput: localizedText("请核对份额、成本、成交价格和手续费。", "Check the quantity, cost, trade price, and fees.", language: language)
@@ -183,6 +197,7 @@ enum PositionTradeError: LocalizedError {
         case .identityConflict: localizedText("该资产已有新一轮持仓，请先撤销后续添加记录，再撤销这条记录。", "This asset has a new holding. Reverse its later addition before reversing this record.", language: language)
         case .recordedTradesExist: localizedText("该资产关联操作记录，不能直接删除。请先撤销关联记录。", "This asset is linked to records. Reverse those records before deleting it.", language: language)
         case .dependentTrade: localizedText("关联账户已有后续买卖，请先撤销后续交易。", "A linked account has later transactions. Reverse those transactions first.", language: language)
+        case .unchangedBalance: localizedText("持仓没有变化，请核对实际余额和成本。", "The balance is unchanged. Check the actual balance and cost.", language: language)
         case .invalidCashReduction: localizedText("请填写大于 0 的现金减少金额。", "Enter a cash reduction greater than zero.", language: language)
         }
     }
@@ -190,7 +205,7 @@ enum PositionTradeError: LocalizedError {
 }
 
 enum PositionTransactionKind: String {
-    case opening, add, buy, sell, withdraw
+    case opening, add, buy, sell, withdraw, reconciliation
 
     init(_ side: PositionTradeSide) {
         switch side { case .add: self = .add; case .buy: self = .buy; case .sell: self = .sell; case .withdraw: self = .withdraw }
@@ -198,6 +213,7 @@ enum PositionTransactionKind: String {
 
     func title(language: AppLanguage) -> String {
         switch self {
+        case .reconciliation: localizedText("持仓校准", "Reconcile", language: language)
         case .opening: localizedText("期初持仓", "Opening", language: language)
         case .add, .buy: localizedText("增持", "Increase", language: language)
         case .sell: localizedText("卖出", "Sell", language: language)
@@ -224,6 +240,7 @@ struct PositionTransactionRow: Identifiable {
     let trade: PositionTradeRecord?
     let closure: PositionClosureRecord?
     let opening: PositionOpeningBalanceRecord?
+    var reconciliation: PositionReconciliationRecord? = nil
     let recordedAt: Date?
     let rateFromCNY: Decimal
     var displayNumber = 0
@@ -256,14 +273,26 @@ struct PositionTransactionRow: Identifiable {
         trade = nil; closure = nil; opening = record; rateFromCNY = record.currency.rateFromCNY
     }
 
+    init(_ record: PositionReconciliationRecord) {
+        id = record.id; sequence = record.sequence; name = record.asset.name; symbol = record.asset.symbol
+        recordedAt = Self.recordedDate(record.effectiveAt); tradeDate = record.effectiveDay
+        kind = .reconciliation; quantity = record.quantity
+        price = record.units == 0 ? 0 : record.cost / record.units
+        fee = 0; amount = record.cost; profit = nil
+        currency = DisplayCurrency(rawValue: record.asset.quoteCurrency) ?? .cny
+        trade = nil; closure = nil; opening = nil; reconciliation = record
+        rateFromCNY = currency.rateFromCNY
+    }
+
     var needsOpeningReview: Bool { opening?.requiresReview == true }
-    var assetID: String { trade?.asset.id ?? closure?.holding.id ?? opening!.holding.id }
+    var assetID: String { trade?.asset.id ?? closure?.holding.id ?? reconciliation?.asset.id ?? opening!.holding.id }
 
     func profit(in displayCurrency: DisplayCurrency) -> Decimal? {
         profit.map { $0 / rateFromCNY * displayCurrency.rateFromCNY }
     }
 
     func canReverse(asOf date: Date = .now) -> Bool {
+        if let reconciliation { return !reconciliation.isReversed }
         if let opening { return !opening.isReversed && !opening.requiresReview && (opening.units ?? 0) > 0 }
         if let trade { return !trade.isReversed }
         guard let closure, !closure.isReversed, let recordedAt else { return false }
@@ -271,9 +300,9 @@ struct PositionTransactionRow: Identifiable {
     }
 
     static func listed(trades: [PositionTradeRecord], closures: [PositionClosureRecord],
-                       openings: [PositionOpeningBalanceRecord] = [], query: String = "") -> [Self] {
+                       openings: [PositionOpeningBalanceRecord] = [], reconciliations: [PositionReconciliationRecord] = [], query: String = "") -> [Self] {
         let rows = (trades.filter { !$0.isReversed }.map(Self.init) + closures.filter { !$0.isReversed }.map(Self.init)
-            + openings.filter(\.isVisible).map(Self.init))
+            + openings.filter(\.isVisible).map(Self.init) + reconciliations.filter { !$0.isReversed }.map(Self.init))
             .sorted {
                 if $0.recordedAt != $1.recordedAt { return ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
                 if $0.sequence != $1.sequence { return $0.sequence < $1.sequence }

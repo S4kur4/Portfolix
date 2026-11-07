@@ -2,8 +2,8 @@ import SwiftUI
 
 enum AssetEntryLayout {
     static let valueFieldWidth: CGFloat = 320
-    static let valueFieldHeight: CGFloat = 28
-    static let minimumRowHeight: CGFloat = 36
+    static let valueFieldHeight = SheetFormLayout.rowContentHeight
+    static let minimumRowHeight = SheetFormLayout.minimumRowHeight
     static let inlineControlHeight = PortfolixLayout.glassControlHeight
 }
 
@@ -96,10 +96,9 @@ struct AssetEntryFieldLabel: View {
         HStack(spacing: PortfolixSpacing.xs) {
             Text(title)
             if showsRequiredIndicator {
-                Text("·")
-                    .font(.system(size: 22, weight: .heavy))
-                    .baselineOffset(1)
+                Circle()
                     .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
+                    .frame(width: 4, height: 4)
                     .accessibilityHidden(true)
             }
         }

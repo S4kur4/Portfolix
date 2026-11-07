@@ -1414,6 +1414,8 @@ struct AIDataQualityContext: Encodable {
     let missingQuoteAllocationPct: Double
     let staleQuoteAllocationPct: Double
     let manualQuoteAllocationPct: Double
+    var balanceHistoryIncomplete: Bool? = nil
+    var balanceHistoryNote: String? = nil
 }
 
 struct AIRiskFlag: Encodable {

@@ -99,8 +99,7 @@ struct RiskQuestionnaireSheet: View {
                     )
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
+            .portfolixSheetForm()
 
             Divider().overlay(PortfolixTheme.border)
 

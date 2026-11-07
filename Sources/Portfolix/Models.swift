@@ -295,6 +295,12 @@ enum Freshness: String, Sendable {
     }
 }
 
+struct PositionDailyPriceBaseline: Sendable {
+    let day: String
+    let price: Decimal
+    var unitValueCNY: Decimal? = nil
+}
+
 struct Position: Identifiable, Sendable {
     let id: UUID
     let name: String
@@ -312,6 +318,8 @@ struct Position: Identifiable, Sendable {
     let quoteTime: String
     let fetchedAt: String
     let freshness: Freshness
+    let dailyPriceBaseline: PositionDailyPriceBaseline?
+    let costIsKnown: Bool
 
     init(
         id: UUID = UUID(),
@@ -329,7 +337,9 @@ struct Position: Identifiable, Sendable {
         source: String,
         quoteTime: String,
         fetchedAt: String = ISO8601DateFormatter().string(from: .now),
-        freshness: Freshness
+        freshness: Freshness,
+        dailyPriceBaseline: PositionDailyPriceBaseline? = nil,
+        costIsKnown: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -347,6 +357,8 @@ struct Position: Identifiable, Sendable {
         self.quoteTime = quoteTime
         self.fetchedAt = fetchedAt
         self.freshness = freshness
+        self.dailyPriceBaseline = dailyPriceBaseline
+        self.costIsKnown = costIsKnown
     }
 
     var relativeUpdateText: String {
@@ -549,6 +561,7 @@ struct PortfolioSnapshot: Identifiable, Sendable {
     let date: Date
     let totalValueCNY: Double
     let profitRate: Double
+    var costIsKnown: Bool = true
 
     var profitCNY: Double {
         guard profitRate != -100 else { return -totalValueCNY }
@@ -864,6 +877,7 @@ final class PortfolioStore {
     private(set) var positionClosures: [PositionClosureRecord] = []
     private(set) var positionTrades: [PositionTradeRecord] = []
     private(set) var positionOpeningBalances: [PositionOpeningBalanceRecord] = []
+    var positionReconciliations: [PositionReconciliationRecord] = []
     private var tradeProfitByDate: [String: [String: Decimal]] = [:]
     @ObservationIgnored private var positionClosureRevision = 0
     private var derivedMetrics = PortfolioDerivedMetrics.empty
@@ -1013,6 +1027,7 @@ final class PortfolioStore {
             positionTrades = try repository.fetchPositionTrades()
             positionOpeningBalances = try repository.fetchOpeningBalances()
             tradeProfitByDate = try repository.tradeDailyProfitAdjustments()
+            positionReconciliations = try repository.fetchReconciliations()
             let cutoff = savedChatRetentionPeriod.cutoffDate()
             try repository.deleteExpiredAIAnalysisContent(before: cutoff)
             let storedChatItems = try repository.fetchAIAnalysisChatItems(since: cutoff)
@@ -1088,6 +1103,17 @@ final class PortfolioStore {
         derivedMetrics.totalValueCNY
     }
 
+    func todayProfitIsAvailable(for position: Position? = nil, asOf date: Date = .now) -> Bool {
+        let day = PositionClosureMath.day(date)
+        return !positionReconciliations.contains { record in
+            (position == nil || record.asset.id == position!.id.uuidString)
+                && ((record.effectiveDay == day && record.profitAdjustmentCNY == nil)
+                    || (record.reversalDay == day && record.reversalProfitAdjustmentCNY == nil))
+        }
+    }
+
+    var hasKnownPortfolioCost: Bool { positions.allSatisfy(\.costIsKnown) }
+
     var totalProfitCNY: Decimal {
         totalValueCNY - totalCostCNY
     }
@@ -1127,8 +1153,12 @@ final class PortfolioStore {
 
     func todayProfitCNY(for position: Position, asOf date: Date = .now) -> Decimal {
         let adjustment = tradeProfitAdjustments(asOf: date)[position.id.uuidString] ?? 0
-        guard position.category != .cash, position.weeklyTrend.count >= 2 else { return adjustment }
+        guard position.category != .cash else { return adjustment }
         guard position.wasFetchedOnSameDay(as: date) else { return adjustment }
+        if let baseline = position.dailyPriceBaseline, baseline.day == PositionClosureMath.day(date) {
+            return position.quantity * (position.latestPrice / position.quoteCurrency.rateFromCNY - (baseline.unitValueCNY ?? baseline.price / position.quoteCurrency.rateFromCNY)) + adjustment
+        }
+        guard position.weeklyTrend.count >= 2 else { return adjustment }
         let latestPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 1])
         let previousPrice = Decimal(position.weeklyTrend[position.weeklyTrend.count - 2])
         let priceChange = latestPrice - previousPrice
@@ -1227,6 +1257,7 @@ final class PortfolioStore {
         positionTrades = try positionRepository.fetchPositionTrades()
         positionOpeningBalances = try positionRepository.fetchOpeningBalances()
         tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
         positionClosureRevision += 1
         snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
         dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
@@ -1466,7 +1497,7 @@ final class PortfolioStore {
     }
 
     var directlyDeletablePositionIDs: Set<Position.ID> {
-        let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: positionTrades, closures: positionClosures, openings: positionOpeningBalances)
+        let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: positionTrades, closures: positionClosures, openings: positionOpeningBalances).union(positionReconciliations.compactMap { UUID(uuidString: $0.asset.id) })
         return Set(positions.lazy.filter { !linkedIDs.contains($0.id) }.map(\.id))
     }
 
@@ -1481,7 +1512,7 @@ final class PortfolioStore {
     }
 
     func investmentCloudDailyProfitItems(asOf date: Date) -> [InvestmentCloudItem] {
-        let open = InvestmentCloudEngine.dailyProfitItems(positions: positions) { todayProfitCNY(for: $0, asOf: date) }
+        let open = InvestmentCloudEngine.dailyProfitItems(positions: positions.filter { todayProfitIsAvailable(for: $0, asOf: date) }) { todayProfitCNY(for: $0, asOf: date) }
         let closed = activePositionClosures.filter { $0.tradeDate == PositionClosureMath.day(date) }.compactMap { record -> InvestmentCloudItem? in
             guard let position = try? record.holding.position() else { return nil }
             let profit = PositionClosureMath.decimal(record.dailyProfitCNY ?? "") ?? -record.feeAmount / record.conversionRate
@@ -1498,15 +1529,28 @@ final class PortfolioStore {
                   let position = try? record.asset.position() else { return nil }
             return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
         }
-        return (open + closed + sold).sorted { $0.areaWeight > $1.areaWeight }
+        let calibrated = positionReconciliations.compactMap { record -> InvestmentCloudItem? in
+            guard record.effectiveDay == PositionClosureMath.day(date), !activeIDs.contains(record.asset.id),
+                  seen.insert(record.asset.id).inserted, let profit = adjustments[record.asset.id], profit != 0,
+                  let position = try? record.asset.position() else { return nil }
+            return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
+        }
+        return (open + closed + sold + calibrated).sorted { $0.areaWeight > $1.areaWeight }
     }
 
     func recordTrade(id: UUID, side: PositionTradeSide, position: Position, quantity: Decimal, price: Decimal,
-                     fees: Decimal, tradeDate: Date, cashPositionID: UUID?) throws {
+                     fees: Decimal, tradeDate: Date, cashPositionID: UUID?, refreshedQuote: AssetLookupCandidate? = nil) throws {
         guard let positionRepository else { throw PositionRepositoryError.database("本地存储不可用") }
+        let quoteUpdate = try refreshedQuote.flatMap { try self.position(applying: $0, to: position) }
         try positionRepository.recordTrade(id: id, side: side, expected: position, quantity: quantity, price: price,
             fees: fees, tradeDate: tradeDate, cashPositionID: cashPositionID,
-            cashName: PositionClosureMath.cashName(position.quoteCurrency, language: appLanguage))
+            cashName: PositionClosureMath.cashName(position.quoteCurrency, language: appLanguage), quoteUpdate: quoteUpdate)
+        try reloadPositionClosureState()
+    }
+
+    func reconcilePosition(_ position: Position, quantity: Decimal, totalCost: Decimal?, reason: String, note: String) throws {
+        guard let positionRepository else { throw PositionTradeError.changed }
+        try positionRepository.reconcilePosition(expected: position, quantity: quantity, totalCost: totalCost, reason: reason, note: note)
         try reloadPositionClosureState()
     }
 
@@ -1522,7 +1566,12 @@ final class PortfolioStore {
             if row.closure != nil { throw PositionClosureError.reversalExpired }
             throw PositionTradeError.changed
         }
-        if let record = row.opening {
+        if let record = row.reconciliation {
+            guard let positionRepository else { throw PositionTradeError.changed }
+            try positionRepository.reverseReconciliation(id: record.id)
+            try reloadPositionClosureState()
+        }
+        else if let record = row.opening {
             guard let positionRepository else { throw PositionOpeningBalanceError.changed }
             try positionRepository.reverseOpeningBalance(id: record.id)
             try reloadPositionClosureState()
@@ -1560,6 +1609,7 @@ final class PortfolioStore {
         positionTrades = try positionRepository.fetchPositionTrades()
         positionOpeningBalances = try positionRepository.fetchOpeningBalances()
         tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
         snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
         dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         positionClosureRevision += 1
@@ -1977,7 +2027,7 @@ final class PortfolioStore {
             positions: positions, portfolioContext: context, performance: performance,
             riskContext: makeAIStoreContext(positionPerformance: performance), report: aiAnalysisReport,
             history: snapshotHistory, dailyProfit: dailyProfitHistory, closures: positionClosures, trades: positionTrades,
-            openings: positionOpeningBalances, asOf: now
+            openings: positionOpeningBalances, reconciliations: positionReconciliations, asOf: now
         ))
     }
 
@@ -2060,6 +2110,10 @@ final class PortfolioStore {
             if !Task.isCancelled { isAIAnalysisGenerationInFlight = false }
         }
         refreshProviderCredentialState()
+        guard hasKnownPortfolioCost else {
+            aiAnalysisRun = AIAnalysisRun(status: .failed(localizedText("部分持仓成本暂不确定，请在“更新持仓”中核对成本后再生成报告。", "Verify unknown costs in Update Holding before generating a report.", language: appLanguage)))
+            return
+        }
         guard !positions.isEmpty else {
             aiAnalysisRun = AIAnalysisRun(status: .failed(localizedText("请先添加持仓", "Add holdings first", language: appLanguage)))
             return
@@ -2493,7 +2547,8 @@ final class PortfolioStore {
             foreignCurrencyLimit: foreignCurrencyLimit,
             liquidityMinimum: liquidityMinimum,
             riskConstraintEvaluation: riskConstraintEvaluation,
-            positionPerformance: positionPerformance
+            positionPerformance: positionPerformance,
+            hasReconciliationHistory: !positionReconciliations.isEmpty
         )
     }
 
@@ -2901,6 +2956,7 @@ final class PortfolioStore {
             positionTrades = try positionRepository.fetchPositionTrades()
             positionOpeningBalances = try positionRepository.fetchOpeningBalances()
             tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
             refreshInvestmentDistributionIfNeeded()
@@ -3113,6 +3169,7 @@ final class PortfolioStore {
                 snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
                 dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
                 tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
             } else if !replacements.isEmpty {
                 positions = mergedPositions
             }
@@ -3140,6 +3197,7 @@ final class PortfolioStore {
                     snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
                     dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
                     tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
                 } else {
                     positions = updatedPositions
                 }
@@ -3205,7 +3263,8 @@ final class PortfolioStore {
             source: resolvedSource,
             quoteTime: resolved.quoteTime ?? "刚刚",
             fetchedAt: fetchedAt,
-            freshness: .updated
+            freshness: .updated,
+            dailyPriceBaseline: current.dailyPriceBaseline
         )
     }
 
@@ -3271,6 +3330,7 @@ final class PortfolioStore {
     }
 
     func aiTodayReturnStatus(asOf date: Date) -> String {
+        guard todayProfitIsAvailable(asOf: date) else { return "unavailable" }
         let snapshotDate = Self.aiSnapshotDayFormatter.string(from: date)
         let nonCashPositions = positions.filter { $0.category != .cash }
         let availableTodayCount = nonCashPositions.filter { todayReturnStatus(for: $0, asOf: date) == "available" }.count
@@ -3298,6 +3358,7 @@ final class PortfolioStore {
     }
 
     private func todayReturnStatus(for position: Position, asOf date: Date) -> String {
+        guard todayProfitIsAvailable(for: position, asOf: date) else { return "unavailable" }
         guard position.category != .cash else { return "not_applicable_cash" }
         guard position.weeklyTrend.count >= 2, position.wasFetchedOnSameDay(as: date) else {
             return "unavailable"
@@ -3368,6 +3429,7 @@ final class PortfolioStore {
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
             tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
+        positionReconciliations = try positionRepository.fetchReconciliations()
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }

@@ -4,6 +4,7 @@ struct PositionClosureSheet: View {
     @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let position: Position
+    @State private var isDatePickerPresented = false
     @State private var draft: PositionClosureDraft
     @State private var tradeDate = Date()
     @State private var cashSelection = ""
@@ -42,9 +43,8 @@ struct PositionClosureSheet: View {
                     }
                     LabeledContent(text("清仓数量", "Quantity"), value: PositionClosureMath.string(position.quantity))
                     LabeledContent(text("成交日期", "Trade Date")) {
-                        DatePicker("", selection: $tradeDate, in: Date(timeIntervalSince1970: 0)...Date(), displayedComponents: .date)
-                            .labelsHidden().datePickerStyle(.field)
-                            .environment(\.locale, Locale(identifier: language == .english ? "en_US" : "zh_CN"))
+                        PortfolixDateTimePicker(title: text("成交日期", "Trade Date"), selection: $tradeDate,
+                            language: store.appLanguage, includesTime: false, isPresented: $isDatePickerPresented)
                     }
                 }
                 Section {
@@ -82,18 +82,17 @@ struct PositionClosureSheet: View {
                     }
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.never)
+            .portfolixSheetForm()
             .foregroundStyle(PortfolixTheme.primaryText)
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }
-                    .buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
+                    .buttonStyle(QuietButtonStyle()).keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
                 Button(text("确认清仓", "Record Closure"), action: save)
                     .buttonStyle(PrimaryButtonStyle()).disabled(isSaving)
             }
         }
+        .interactiveDismissDisabled(isDatePickerPresented)
         .frame(width: 600, height: 660)
         .background { PortfolixSheetBackground() }
         .onAppear { cashSelection = cashOptions.first?.id.uuidString ?? "" }
@@ -164,7 +163,7 @@ struct PositionClosureDetailSheet: View {
                     }
                 }
             }
-            .formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.never)
+            .portfolixSheetForm()
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 if canReverse {

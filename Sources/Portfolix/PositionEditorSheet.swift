@@ -33,6 +33,7 @@ struct PositionEditorSheet: View {
     @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let presentation: PositionEditorPresentation
+    @State private var isDatePickerPresented = false
     @State private var name: String
     @State private var symbol: String
     @State private var category: AssetCategory
@@ -57,6 +58,7 @@ struct PositionEditorSheet: View {
     @State private var purchaseCashID = ""
     @State private var purchaseAssetID = ""
     @State private var tradeID = UUID()
+    @State private var actualTradeDate = Date.now
     @FocusState private var focusedField: PositionEditorField?
 
     init(presentation: PositionEditorPresentation) {
@@ -78,6 +80,7 @@ struct PositionEditorSheet: View {
 
     private var selectedPosition: Position? { store.positions.first { $0.id.uuidString == purchaseAssetID } }
     private var locksAssetIdentity: Bool { !purchaseAssetID.isEmpty }
+    private var effectiveCostMode: CostEntryMode { locksAssetIdentity ? .averageCost : costMode }
     private var purchaseCashOptions: [Position] { store.positions.filter { $0.category == .cash && $0.quoteCurrency == costCurrency } }
 
     private var language: AppLanguage {
@@ -182,6 +185,9 @@ struct PositionEditorSheet: View {
                     didAttemptSave = false
                 }
                 Section {
+                    LabeledContent(sheetText("实际操作时间", "Actual Trade Time")) {
+                        PortfolixDateTimePicker(title: localizedText("实际操作时间", "Actual Trade Time", language: language), selection: $actualTradeDate, language: language, isPresented: $isDatePickerPresented)
+                    }
                     LabeledContent(sheetText("资产类别", "Asset Type")) {
                         PortfolixGlassMenuPicker(
                             title: sheetText("资产类别", "Asset Type"),
@@ -251,6 +257,14 @@ struct PositionEditorSheet: View {
                         .padding(.vertical, PortfolixSpacing.xs)
                     }
 
+                    if let selectedPosition {
+                        LabeledContent(sheetText("当前持有份额", "Current Quantity")) {
+                            Text(decimalString(selectedPosition.quantity)).monospacedDigit()
+                        }
+                        LabeledContent(sheetText("当前成本价", "Current Unit Cost")) {
+                            Text(selectedPosition.costIsKnown ? formatUnitCost(selectedPosition.averageCost, currency: selectedPosition.quoteCurrency) : "—").monospacedDigit()
+                        }
+                    }
                 }
                 .accessibilityElement(children: .contain)
 
@@ -266,22 +280,24 @@ struct PositionEditorSheet: View {
                 }
 
                 if !usesFixedCashPricing {
-                    LabeledContent(sheetText("成本录入方式", "Cost Input Method")) {
-                        PortfolixGlassSegmentedPicker(
-                            title: sheetText("成本录入方式", "Cost Input Method"),
-                            selection: $costMode,
-                            options: CostEntryMode.allCases,
-                            optionTitle: { $0 == .totalCost ? sheetText("总成本", "Total Cost") : sheetText("成本价", "Unit Cost") },
-                            width: AssetEntryLayout.valueFieldWidth
-                        )
+                    if !locksAssetIdentity {
+                        LabeledContent(sheetText("成本录入方式", "Cost Input Method")) {
+                            PortfolixGlassSegmentedPicker(
+                                title: sheetText("成本录入方式", "Cost Input Method"),
+                                selection: $costMode,
+                                options: CostEntryMode.allCases,
+                                optionTitle: { $0 == .totalCost ? sheetText("总成本", "Total Cost") : sheetText("成本价", "Unit Cost") },
+                                width: AssetEntryLayout.valueFieldWidth
+                            )
+                        }
                     }
 
                     editorTextField(
-                    title: additionCopy.costTitle(mode: costMode),
-                    text: $costValue,
-                    field: .cost,
-                    placeholder: additionCopy.costPlaceholder(mode: costMode),
-                    isLocked: usesFixedCashPricing
+                        title: additionCopy.costTitle(mode: effectiveCostMode),
+                        text: $costValue,
+                        field: .cost,
+                        placeholder: additionCopy.costPlaceholder(mode: effectiveCostMode),
+                        isLocked: usesFixedCashPricing
                     )
                     .onChange(of: costValue) { _, _ in
                         validationMessage = nil
@@ -316,7 +332,7 @@ struct PositionEditorSheet: View {
                         }
                         if !usesFixedCashPricing {
                             LabeledContent(additionCopy.totalCostTitle) {
-                                let gross = costMode == .totalCost ? (decimalValue(costValue) ?? 0) : (decimalValue(quantity) ?? 0) * (decimalValue(costValue) ?? 0)
+                                let gross = effectiveCostMode == .totalCost ? (decimalValue(costValue) ?? 0) : (decimalValue(quantity) ?? 0) * (decimalValue(costValue) ?? 0)
                                 Text(formatMoney(PositionClosureMath.rounded(gross, currency: costCurrency) + (PositionClosureMath.decimal(purchaseFees) ?? 0), currency: costCurrency)).monospacedDigit()
                             }
                         }
@@ -324,10 +340,7 @@ struct PositionEditorSheet: View {
                     .accessibilityElement(children: .contain)
 
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.never)
-            .environment(\.defaultMinListRowHeight, AssetEntryLayout.minimumRowHeight)
+            .portfolixSheetForm()
             .disabled(isSaving)
             .onChange(of: costMode) { oldMode, newMode in
                 convertCostEntry(from: oldMode, to: newMode)
@@ -347,7 +360,7 @@ struct PositionEditorSheet: View {
                     dismiss()
                 }
                 .buttonStyle(QuietButtonStyle())
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
                 .disabled(isSaving)
 
                 Button(sheetText("确认添加", "Add Asset")) {
@@ -360,10 +373,11 @@ struct PositionEditorSheet: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(isSaving)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(isDatePickerPresented ? nil : .defaultAction)
             }
         }
-        .frame(width: 620, height: usesFixedCashPricing ? 560 : 720)
+        .interactiveDismissDisabled(isDatePickerPresented)
+        .frame(width: 620, height: usesFixedCashPricing ? 620 : 780)
         .background {
             PortfolixSheetBackground()
         }
@@ -489,7 +503,7 @@ struct PositionEditorSheet: View {
         didAttemptSave = false
         let submittedPosition = selectedPosition
         let submittedAssetID = purchaseAssetID
-        let averageCost = costMode == .totalCost ? enteredCost / quantity : enteredCost
+        let averageCost = effectiveCostMode == .totalCost ? enteredCost / quantity : enteredCost
         let refreshedQuote: AssetLookupCandidate?
         do {
             refreshedQuote = try await latestQuoteForSaveIfNeeded(enteredPrice: latestPrice)
@@ -536,7 +550,7 @@ struct PositionEditorSheet: View {
                 source: quoteMetadata.source, quoteTime: quoteMetadata.quoteTime, freshness: quoteMetadata.freshness)
             try store.recordTrade(id: tradeID, side: cashID == nil ? .add : .buy, position: asset, quantity: quantity,
                 price: usesFixedCashPricing ? 1 : averageCost, fees: usesFixedCashPricing ? 0 : fees,
-                tradeDate: .now, cashPositionID: cashID)
+                tradeDate: actualTradeDate, cashPositionID: cashID, refreshedQuote: submittedPosition == nil ? nil : refreshedQuote)
             return true
         } catch {
             validationMessage = (error as? PositionTradeError)?.message(language: language) ?? error.localizedDescription

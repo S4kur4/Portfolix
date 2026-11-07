@@ -1505,7 +1505,7 @@ struct AIAnalysisAgent: Sendable {
                 allocationByAssetType: allocationByAssetType(positions: positions, totalValue: totalValue),
                 allocationByCurrency: allocationByCurrency(positions: positions, totalValue: totalValue),
                 positions: positionContexts,
-                dataQuality: dataQuality(positions: positions, totalValue: totalValue)
+                dataQuality: dataQuality(positions: positions, totalValue: totalValue, incompleteHistory: context.hasReconciliationHistory)
             ),
             rebalanceContext: rebalanceContext(from: evaluation, positions: positionContexts),
             previousReport: previousReportContext(from: previousReport),
@@ -2178,7 +2178,7 @@ struct AIAnalysisAgent: Sendable {
         }
     }
 
-    private static func dataQuality(positions: [Position], totalValue: Double) -> AIDataQualityContext {
+    private static func dataQuality(positions: [Position], totalValue: Double, incompleteHistory: Bool = false) -> AIDataQualityContext {
         func percent(where predicate: (Position) -> Bool) -> Double {
             let value = positions.filter(predicate).reduce(0) { $0 + $1.marketValueCNY.doubleValue }
             return allocationPercent(value, totalValue: totalValue)
@@ -2186,7 +2186,9 @@ struct AIAnalysisAgent: Sendable {
         return AIDataQualityContext(
             missingQuoteAllocationPct: 0,
             staleQuoteAllocationPct: percent { $0.freshness == .stale },
-            manualQuoteAllocationPct: percent { $0.freshness == .manual }
+            manualQuoteAllocationPct: percent { $0.freshness == .manual },
+            balanceHistoryIncomplete: incompleteHistory ? true : nil,
+            balanceHistoryNote: incompleteHistory ? "Absolute balance checkpoints exist. Missing historical trades or income were not reconstructed. Do not infer realized or account-period returns from balance differences." : nil
         )
     }
 
@@ -3539,6 +3541,7 @@ struct AIAnalysisStoreContext {
     let liquidityMinimum: Double
     let riskConstraintEvaluation: RiskConstraintEvaluation
     let positionPerformance: [Position.ID: AIPositionPerformanceContext]
+    let hasReconciliationHistory: Bool
 
     init(
         displayCurrency: DisplayCurrency,
@@ -3553,7 +3556,8 @@ struct AIAnalysisStoreContext {
         foreignCurrencyLimit: Double,
         liquidityMinimum: Double,
         riskConstraintEvaluation: RiskConstraintEvaluation,
-        positionPerformance: [Position.ID: AIPositionPerformanceContext] = [:]
+        positionPerformance: [Position.ID: AIPositionPerformanceContext] = [:],
+        hasReconciliationHistory: Bool = false
     ) {
         self.displayCurrency = displayCurrency
         self.convertedTotalValue = convertedTotalValue
@@ -3568,6 +3572,7 @@ struct AIAnalysisStoreContext {
         self.liquidityMinimum = liquidityMinimum
         self.riskConstraintEvaluation = riskConstraintEvaluation
         self.positionPerformance = positionPerformance
+        self.hasReconciliationHistory = hasReconciliationHistory
     }
 }
 

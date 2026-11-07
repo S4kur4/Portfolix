@@ -37,7 +37,7 @@ Portfolix 不连接券商账户，也不执行真实交易，无需提供券商�
 基础记账与收益跟踪无需配置 AI。
 
 - **AI 辅助分析**：使用自己的 DeepSeek API Key 生成报告、提问或分析资产的实际投资领域。联网增强可按需启用 Parallel Search、DeepSeek Search、Tavily 或博查。
-- **只读 MCP**：授权本机 Agent 查询持仓、收益和操作记录，提供 ChatGPT / Codex、Claude、DeepSeek Harness、WorkBuddy 的[配置参考](docs/MCP.md)。
+- **只读 MCP**：授权本机 Agent 查询持仓、收益和操作记录，支持 ChatGPT / Codex、Claude、DeepSeek Harness、WorkBuddy；客户端配置可在 App 中查看。
 
 使用 AI 分析或授权其他 Agent 时，相关数据可能发送至所用模型服务。
 
@@ -79,7 +79,7 @@ Automatic quotes are available for supported stocks, funds, and digital currenci
 Asset records and performance tracking work without configuring AI.
 
 - **AI-assisted analysis**: Use your own DeepSeek API key to generate reports, ask questions, or identify underlying investment sectors. Optionally enable Parallel Search, DeepSeek Search, Tavily, or Bocha for web research.
-- **Read-only MCP**: Authorize local agents to query holdings, returns, and transaction records, with [configuration references](docs/MCP.md) for ChatGPT / Codex, Claude, DeepSeek Harness, and WorkBuddy.
+- **Read-only MCP**: Authorize local agents to query holdings, returns, and transaction records. Supports ChatGPT / Codex, Claude, DeepSeek Harness, and WorkBuddy, with client configuration references available in the App.
 
 When you use AI analysis or authorize other agents, relevant data may be sent to their model providers.
 

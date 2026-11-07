@@ -154,6 +154,7 @@ struct AIPortfolioToolSnapshot {
   var closures: [PositionClosureRecord] = []
   var trades: [PositionTradeRecord] = []
   var openings: [PositionOpeningBalanceRecord] = []
+  var reconciliations: [PositionReconciliationRecord] = []
   var asOf: Date = .now
 }
 
@@ -170,10 +171,13 @@ enum AIPortfolioDataToolExecutor {
     var result: [String: Any] = [
       "status": "ok", "as_of": asOf, "source": "local_portfolix_records", "read_only": true,
     ]
+    let knownCost = positions.allSatisfy(\.costIsKnown)
+    result["history_complete"] = snapshot.reconciliations.isEmpty
     switch request.tool {
     case .summary:
       let value = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
       let cost = positions.reduce(Decimal.zero) { $0 + $1.totalCost / $1.quoteCurrency.rateFromCNY }
+      let knownRealized = snapshot.trades.filter { !$0.isReversed && $0.side == .sell }.allSatisfy { $0.asset.costKnown != false }
       let realized = snapshot.closures.filter { !$0.isReversed }.reduce(Decimal.zero) { $0 + $1.realizedProfitCNY }
         + snapshot.trades.filter { !$0.isReversed }.reduce(Decimal.zero) { $0 + ($1.realizedProfit ?? 0) / $1.rate }
       let openIDs = Set(positions.map { $0.id.uuidString })
@@ -182,12 +186,14 @@ enum AIPortfolioDataToolExecutor {
       result["data"] =
         [
           "holding_count": positions.count, "total_value_cny": decimal(value),
-          "total_cost_cny": decimal(cost), "unrealized_profit_cny": decimal(value - cost),
-          "realized_profit_cny": decimal(realized),
+          "cost_status": knownCost ? "known" : "unknown",
+          "total_cost_cny": knownCost ? decimal(cost) as Any : NSNull(), "unrealized_profit_cny": knownCost ? decimal(value - cost) as Any : NSNull(),
+          "realized_profit_status": knownRealized ? "known" : "incomplete",
+          "realized_profit_cny": knownRealized ? decimal(realized) as Any : NSNull(),
           "transaction_count": snapshot.trades.filter { !$0.isReversed }.count + snapshot.closures.filter { !$0.isReversed }.count,
           "opening_balance_count": snapshot.openings.filter(\.isVisible).count,
           "closed_holding_count": closedIDs.count,
-          "unrealized_profit_rate_pct": cost == 0
+          "unrealized_profit_rate_pct": !knownCost || cost == 0
             ? NSNull() : decimal((value - cost) / cost * 100) as Any,
           "display_currency": snapshot.portfolioContext?.displayCurrency ?? "CNY",
           "total_value_display": snapshot.portfolioContext?.totalValueDisplay ?? decimal(value),
@@ -218,11 +224,12 @@ enum AIPortfolioDataToolExecutor {
           "name": String(position.name.prefix(120)),
           "symbol": String(position.symbol.prefix(40)), "asset_type": position.category.aiCode,
           "quote_currency": position.quoteCurrency.rawValue, "quantity": decimal(position.quantity),
-          "average_cost": decimal(position.averageCost), "total_cost_quote": decimal(quoteCost),
+          "cost_status": position.costIsKnown ? "known" : "unknown",
+          "average_cost": position.costIsKnown ? decimal(position.averageCost) as Any : NSNull(), "total_cost_quote": position.costIsKnown ? decimal(quoteCost) as Any : NSNull(),
           "latest_price": decimal(position.latestPrice),
           "market_value_cny": decimal(position.marketValueCNY),
-          "unrealized_profit_quote": decimal(quoteValue - quoteCost),
-          "unrealized_profit_rate_pct": decimal(position.profitRate),
+          "unrealized_profit_quote": position.costIsKnown ? decimal(quoteValue - quoteCost) as Any : NSNull(),
+          "unrealized_profit_rate_pct": position.costIsKnown ? decimal(position.profitRate) as Any : NSNull(),
           "allocation_pct": totalValue > 0
             ? position.marketValueCNY.doubleValue / totalValue * 100 : 0,
           "today": todayByRef["position_\(position.id.uuidString)"].map(encoded) ?? [
@@ -236,7 +243,7 @@ enum AIPortfolioDataToolExecutor {
       }
     case .transactions:
       let filtered = PositionTransactionRow.listed(trades: snapshot.trades, closures: snapshot.closures,
-          openings: snapshot.openings, query: request.query)
+          openings: snapshot.openings, reconciliations: snapshot.reconciliations, query: request.query)
       let rows = filtered.dropFirst(min(request.offset, filtered.count)).prefix(request.limit)
       let next = min(filtered.count, request.offset + rows.count)
       result["matched_count"] = filtered.count
@@ -251,7 +258,14 @@ enum AIPortfolioDataToolExecutor {
         data["fees"] = decimal(row.fee)
         data["recorded_amount_quote"] = decimal(row.amount)
         data["cash_amount"] = decimal(row.kind.hasCashFlow ? row.amount : 0)
-        data["portfolio_flow"] = row.kind == .opening ? "none" : row.kind == .add ? "external_in" : row.kind == .withdraw ? "external_out" : "internal"
+        data["portfolio_flow"] = row.kind == .opening || row.reconciliation != nil ? "none" : row.kind == .add ? "external_in" : row.kind == .withdraw ? "external_out" : "internal"
+        if let record = row.reconciliation {
+          data["is_transaction"] = false
+          data["cost_status"] = record.costKnown ? "known" : "unknown"
+          data["before_quantity"] = record.asset.quantity
+          data["total_cost_quote"] = record.costKnown ? record.totalCost as Any : NSNull()
+          data["execution_price"] = NSNull(); data["recorded_amount_quote"] = NSNull()
+        }
         if row.kind == .withdraw {
           data["cash_flow_direction"] = "out"
           data["execution_price"] = NSNull()

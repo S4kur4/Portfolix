@@ -12,7 +12,7 @@ struct MCPPortfolioLedger {
         var isOpening: Bool { side == "opening" }
 
         var realizedProfitCNY: Decimal {
-            guard side == "sell", let amount = Self.decimal(fields["recorded_amount_quote"]),
+            guard side == "sell", fields["cost_known"] != "0", let amount = Self.decimal(fields["recorded_amount_quote"]),
                   let cost = Self.decimal(fields["allocated_cost_quote"]),
                   let rate = Self.decimal(fields["rate_from_cny"]), rate > 0 else { return 0 }
             return (amount - cost) / rate
@@ -22,7 +22,7 @@ struct MCPPortfolioLedger {
             var result: [String: Any] = [:]
             for key in MCPPortfolioLedger.outputFields { result[key] = fields[key] as Any? ?? NSNull() }
             result["number"] = String(number)
-            if side == "sell" {
+            if side == "sell", fields["cost_known"] != "0" {
                 let amount = Self.decimal(fields["recorded_amount_quote"])!
                 let cost = Self.decimal(fields["allocated_cost_quote"])!
                 result["realized_profit_quote"] = NSDecimalNumber(decimal: amount - cost).stringValue
@@ -40,12 +40,13 @@ struct MCPPortfolioLedger {
         }
     }
 
-    static let outputFields = "record_id asset_id name symbol category side trade_date recorded_at currency quantity execution_price fees recorded_amount_quote cash_account_id cash_account_name portfolio_flow opening_balance_status realized_profit_quote realized_profit_cny number".split(separator: " ").map(String.init)
+    static let outputFields = "record_id asset_id name symbol category side trade_date recorded_at currency cost_known before_quantity quantity execution_price fees recorded_amount_quote cash_account_id cash_account_name portfolio_flow opening_balance_status realized_profit_quote realized_profit_cny number".split(separator: " ").map(String.init)
     let records: [Record]
     let openAssetIDs: Set<String>
     var closedSales: [Record] { records.filter { $0.side == "sell" && !openAssetIDs.contains($0.assetID) } }
     var realizedProfitCNY: Decimal { records.reduce(0) { $0 + $1.realizedProfitCNY } }
-    var transactionCount: Int { records.filter { !$0.isOpening }.count }
+    var transactionCount: Int { records.filter { !$0.isOpening && $0.side != "reconciliation" }.count }
+    var hasKnownRealizedProfit: Bool { !records.contains { $0.side == "sell" && $0.fields["cost_known"] == "0" } }
     var openingCount: Int { records.filter(\.isOpening).count }
 
     init(database: MCPDatabase) throws {
@@ -60,7 +61,7 @@ struct MCPPortfolioLedger {
                 SELECT id AS record_id, json_extract(payload_json, '$.asset.id') AS asset_id,
                     json_extract(payload_json, '$.asset.name') AS name, json_extract(payload_json, '$.asset.symbol') AS symbol,
                     json_extract(payload_json, '$.asset.category') AS category, json_extract(payload_json, '$.side') AS side,
-                    trade_date, json_extract(payload_json, '$.recordedAt') AS recorded_at,
+                    trade_date, json_extract(payload_json, '$.asset.costKnown') AS cost_known, json_extract(payload_json, '$.recordedAt') AS recorded_at,
                     json_extract(payload_json, '$.asset.quoteCurrency') AS currency,
                     json_extract(payload_json, '$.quantity') AS quantity, json_extract(payload_json, '$.executionPrice') AS execution_price,
                     json_extract(payload_json, '$.fees') AS fees, json_extract(payload_json, '$.cashAmount') AS recorded_amount_quote,
@@ -77,6 +78,18 @@ struct MCPPortfolioLedger {
                 if side == "withdraw" { row["execution_price"] = nil }
                 records.append(try Self.record(row, plain: plain, fractional: fractional))
             }
+        }
+        if tables.contains("position_reconciliations") {
+            let rows = try database.query("""
+                SELECT id AS record_id, asset_id, 'reconciliation' AS side,
+                    json_extract(payload_json, '$.asset.name') AS name, json_extract(payload_json, '$.asset.symbol') AS symbol,
+                    json_extract(payload_json, '$.asset.category') AS category, json_extract(payload_json, '$.asset.quoteCurrency') AS currency,
+                    json_extract(payload_json, '$.asset.quantity') AS before_quantity,
+                    json_extract(payload_json, '$.quantity') AS quantity, json_extract(payload_json, '$.costKnown') AS cost_known,
+                    json_extract(payload_json, '$.effectiveAt') AS recorded_at, json_extract(payload_json, '$.effectiveDay') AS trade_date,
+                    sequence FROM position_reconciliations WHERE json_extract(payload_json, '$.reversedAt') IS NULL
+                """, limit: 10_000)
+            for var row in rows { row["portfolio_flow"] = "none"; records.append(try Self.record(row, plain: plain, fractional: fractional)) }
         }
         if tables.contains("position_closures") {
             let rows = try database.query("""
@@ -136,7 +149,9 @@ struct MCPPortfolioLedger {
               let name = row["name"], name.count <= 256, let symbol = row["symbol"], symbol.count <= 64,
               row["category"] != nil, let currency = row["currency"], ["CNY", "HKD", "USD", "USDT"].contains(currency),
               let recordedAt = row["recorded_at"], let timestamp = fractional.date(from: recordedAt) ?? plain.date(from: recordedAt) else { throw MCPFailure.invalidData }
-        if row["side"] != "opening" {
+        if row["side"] == "reconciliation" {
+            guard let units = Record.decimal(row["quantity"]), units >= 0 else { throw MCPFailure.invalidData }
+        } else if row["side"] != "opening" {
             guard let units = Record.decimal(row["quantity"]), units > 0,
                   let amount = Record.decimal(row["recorded_amount_quote"]), amount >= 0,
                   let cost = Record.decimal(row["allocated_cost_quote"]), cost >= 0,

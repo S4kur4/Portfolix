@@ -71,10 +71,7 @@ struct CashReductionSheet: View {
                     }
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.never)
-            .environment(\.defaultMinListRowHeight, AssetEntryLayout.minimumRowHeight)
+            .portfolixSheetForm()
             .disabled(isSaving)
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {

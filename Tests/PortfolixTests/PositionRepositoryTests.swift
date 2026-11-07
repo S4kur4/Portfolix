@@ -356,6 +356,7 @@ struct PositionRepositoryTests {
             "closed_holdings.json",
             "trades.json",
             "opening_balances.json",
+            "reconciliations.json",
         ]))
         let exportedText = try extractedNames
             .map { try String(contentsOf: extractedDirectory.appendingPathComponent($0), encoding: .utf8) }
@@ -448,9 +449,10 @@ struct PositionRepositoryTests {
         legacyCounts.removeValue(forKey: "closedHoldings")
         legacyCounts.removeValue(forKey: "trades")
         legacyCounts.removeValue(forKey: "openingBalances")
+        legacyCounts.removeValue(forKey: "reconciliations")
         legacyManifest["recordCounts"] = legacyCounts
         var legacyFiles = try #require(legacyManifest["files"] as? [[String: Any]])
-        legacyFiles.removeAll { ["risk_profile.json", "closed_holdings.json", "trades.json", "opening_balances.json"].contains($0["name"] as? String ?? "") }
+        legacyFiles.removeAll { ["risk_profile.json", "closed_holdings.json", "trades.json", "opening_balances.json", "reconciliations.json"].contains($0["name"] as? String ?? "") }
         legacyManifest["files"] = legacyFiles
         try JSONSerialization.data(withJSONObject: legacyManifest, options: [.prettyPrinted, .sortedKeys])
             .write(to: legacyManifestURL, options: .atomic)

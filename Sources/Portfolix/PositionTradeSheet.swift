@@ -5,11 +5,13 @@ struct PositionTradeSheet: View {
     @Environment(PortfolioStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let position: Position
+    @State private var isDatePickerPresented = false
     @State private var draft: PositionTradeDraft
     @State private var cashSelection = ""
     @State private var assetSelection: UUID
     @State private var errorMessage: String?
     @State private var tradeID = UUID()
+    @State private var actualTradeDate = Date.now
     @State private var isSaving = false
     @State private var didAttemptSave = false
     @FocusState private var focusedField: Field?
@@ -33,6 +35,9 @@ struct PositionTradeSheet: View {
             Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
+                    LabeledContent(text("实际操作时间", "Actual Trade Time")) {
+                        PortfolixDateTimePicker(title: localizedText("实际操作时间", "Actual Trade Time", language: store.appLanguage), selection: $actualTradeDate, language: store.appLanguage, isPresented: $isDatePickerPresented)
+                    }
                     LabeledContent(text("资产", "Asset")) {
                         PortfolixGlassMenuPicker(title: text("资产", "Asset"), selection: $assetSelection,
                             options: store.positions.filter { $0.category != .cash }.map(\.id),
@@ -81,23 +86,23 @@ struct PositionTradeSheet: View {
                         let values = try? draft.values(availableQuantity: asset.quantity)
                         let profit = PositionClosureMath.decimal(draft.quantityText) == 0 ? Decimal.zero
                             : values.map { $0.amount - asset.totalCost * $0.quantity / asset.quantity }
-                        Text(profit.map { formatSignedMoney($0, currency: asset.quoteCurrency) } ?? "—")
+                        Text(asset.costIsKnown ? profit.map { formatSignedMoney($0, currency: asset.quoteCurrency) } ?? "—" : "—")
                             .foregroundStyle(PortfolixTheme.performanceColor(for: profit ?? 0, scheme: store.performanceColorScheme)).monospacedDigit()
                     }
                 }
             }
-            .formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.never)
-            .environment(\.defaultMinListRowHeight, AssetEntryLayout.minimumRowHeight)
+            .portfolixSheetForm()
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
-                Button(text("取消", "Cancel")) { dismiss() }.buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(text("取消", "Cancel")) { dismiss() }.buttonStyle(QuietButtonStyle()).keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
                 Button(text("确认卖出", "Record Sell")) {
                     let window = NSApp.keyWindow
                     Task { await save(committing: window) }
                 }.buttonStyle(PrimaryButtonStyle()).disabled(isSaving)
             }
         }
-        .frame(width: 620, height: 640)
+        .interactiveDismissDisabled(isDatePickerPresented)
+        .frame(width: 620, height: 700)
         .background { PortfolixSheetBackground() }
         .onAppear { cashSelection = cashOptions.first?.id.uuidString ?? "" }
         .onChange(of: assetSelection) { _, _ in
@@ -146,7 +151,7 @@ struct PositionTradeSheet: View {
         do {
             let values = try draft.values(availableQuantity: asset.quantity)
             try store.recordTrade(id: tradeID, side: .sell, position: asset, quantity: values.quantity,
-                price: values.price, fees: values.fees, tradeDate: .now, cashPositionID: UUID(uuidString: cashSelection))
+                price: values.price, fees: values.fees, tradeDate: actualTradeDate, cashPositionID: UUID(uuidString: cashSelection))
             dismiss()
         } catch {
             didAttemptSave = true
@@ -171,6 +176,7 @@ struct PositionTradeDetailSheet: View {
                 Section {
                     LabeledContent(text("资产", "Asset"), value: "\(record.asset.name) · \(record.asset.symbol)")
                     LabeledContent(text("交易类型", "Type"), value: record.side.title(language: store.appLanguage))
+                    LabeledContent(text("实际操作时间", "Actual Trade Time"), value: record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
                     LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
                     LabeledContent(text("成交份额", "Quantity"), value: record.quantity)
                     LabeledContent(text("成交均价", "Trade Price"), value: formatMoney(record.price, currency: record.currency))
@@ -179,7 +185,7 @@ struct PositionTradeDetailSheet: View {
                     LabeledContent(text("资金来源 / 去向", "Funding / Destination"), value: record.cash?.name ?? text("外部增持", "External Funds"))
                     LabeledContent(text("已实现盈亏", "Realized P&L"), value: record.realizedProfit.map { formatSignedMoney($0, currency: record.currency) } ?? "—")
                 }
-            }.formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.never)
+            }.portfolixSheetForm()
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("撤销记录", "Reverse Record")) { confirmsReversal = true }.buttonStyle(QuietButtonStyle())

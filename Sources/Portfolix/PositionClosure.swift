@@ -209,7 +209,7 @@ extension PortfolixDataPackage.Holding {
         Self(id: value, name: name, symbol: symbol, category: category, quoteCurrency: quoteCurrency,
             quantity: quantity, totalCost: totalCost, averageCost: averageCost, latestPrice: latestPrice,
             marketValueCNY: marketValueCNY, profitRate: profitRate, source: source, quoteTime: quoteTime,
-            fetchedAt: fetchedAt, freshness: freshness, weeklyTrend: weeklyTrend, createdAt: createdAt, updatedAt: updatedAt)
+            fetchedAt: fetchedAt, freshness: freshness, weeklyTrend: weeklyTrend, createdAt: createdAt, updatedAt: updatedAt, costKnown: costKnown)
     }
     init(position: Position, timestamp: String) {
         self.init(id: position.id.uuidString, name: position.name, symbol: position.symbol,
@@ -218,7 +218,7 @@ extension PortfolixDataPackage.Holding {
             averageCost: PositionClosureMath.string(position.averageCost), latestPrice: PositionClosureMath.string(position.latestPrice),
             marketValueCNY: PositionClosureMath.string(position.marketValueCNY), profitRate: PositionClosureMath.string(position.profitRate),
             source: position.source, quoteTime: position.quoteTime, fetchedAt: position.fetchedAt,
-            freshness: position.freshness.rawValue, weeklyTrend: position.weeklyTrend, createdAt: timestamp, updatedAt: timestamp)
+            freshness: position.freshness.rawValue, weeklyTrend: position.weeklyTrend, createdAt: timestamp, updatedAt: timestamp, costKnown: position.costIsKnown ? nil : false)
     }
 
     func position() throws -> Position {
@@ -231,7 +231,7 @@ extension PortfolixDataPackage.Holding {
             quantity: quantity, totalCost: cost, averageCost: average, latestPrice: latest,
             marketValueCNY: quantity * latest / currency.rateFromCNY,
             profitRate: average == 0 ? 0 : (latest - average) / average * 100,
-            weeklyTrend: weeklyTrend, source: source, quoteTime: quoteTime, fetchedAt: fetchedAt, freshness: freshness)
+            weeklyTrend: weeklyTrend, source: source, quoteTime: quoteTime, fetchedAt: fetchedAt, freshness: freshness, costIsKnown: costKnown != false)
         try PositionInputValidator.validate(result)
         return result
     }
@@ -240,7 +240,7 @@ extension PortfolixDataPackage.Holding {
 enum PositionClosureValidation {
     static func validate(_ record: PositionClosureRecord) throws {
         let holding = try record.holding.position()
-        guard holding.category != .cash, let tradeDate = PositionClosureMath.date(record.tradeDate),
+        guard holding.costIsKnown, holding.category != .cash, let tradeDate = PositionClosureMath.date(record.tradeDate),
               let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt),
               PositionClosureMath.day(tradeDate) <= PositionClosureMath.day(recordedAt),
               let price = PositionClosureMath.decimal(record.executionPrice), price >= 0,

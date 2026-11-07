@@ -128,9 +128,10 @@ final class PositionRepository {
         )
         defer { sqlite3_finalize(statement) }
 
+        let costStates = Dictionary(grouping: try fetchReconciliations().filter { !$0.isReversed }, by: { $0.asset.id }).mapValues { $0.max { $0.sequence < $1.sequence }!.costKnown }
         var positions: [Position] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            positions.append(try position(from: statement))
+            positions.append(try position(from: statement, knownCost: costStates[text(at: 0, in: statement)] ?? true))
         }
         return positions
     }
@@ -139,6 +140,7 @@ final class PositionRepository {
         riskProfile: PortfolixDataPackage.RiskProfile? = nil
     ) throws -> PortfolixDataPackage.Payload {
         try migrateOpeningBalances()
+        let reconciliationRecords = try reconciliationInputs()
         let holdingStatement = try prepare(
             """
             SELECT
@@ -193,7 +195,8 @@ final class PositionRepository {
                     freshness: text(at: 12, in: holdingStatement),
                     weeklyTrend: weeklyTrend,
                     createdAt: text(at: 14, in: holdingStatement),
-                    updatedAt: text(at: 15, in: holdingStatement)
+                    updatedAt: text(at: 15, in: holdingStatement),
+                    costKnown: try UUID(uuidString: text(at: 0, in: holdingStatement)).map { try costIsKnown(for: $0) ? nil : false } ?? nil
                 )
             )
         }
@@ -215,7 +218,8 @@ final class PositionRepository {
                     totalCostCNY: text(at: 2, in: portfolioStatement),
                     totalProfitCNY: text(at: 3, in: portfolioStatement),
                     profitRate: text(at: 4, in: portfolioStatement),
-                    updatedAt: text(at: 5, in: portfolioStatement)
+                    updatedAt: text(at: 5, in: portfolioStatement),
+                    costKnown: try snapshotCostIsKnown(day: text(at: 0, in: portfolioStatement), records: reconciliationRecords) ? nil : false
                 )
             )
         }
@@ -248,7 +252,8 @@ final class PositionRepository {
                     source: text(at: 10, in: assetStatement),
                     quoteTime: text(at: 11, in: assetStatement),
                     freshness: text(at: 12, in: assetStatement),
-                    updatedAt: text(at: 13, in: assetStatement)
+                    updatedAt: text(at: 13, in: assetStatement),
+                    costKnown: RecordedReconciliation.costKnown(reconciliationRecords, assetID: text(at: 0, in: assetStatement), through: text(at: 1, in: assetStatement)) ? nil : false
                 )
             )
         }
@@ -260,7 +265,8 @@ final class PositionRepository {
             riskProfile: try riskProfile ?? storedRiskProfile(),
             closedHoldings: try fetchPositionClosures(),
             trades: try fetchPositionTrades(),
-            openingBalances: try fetchOpeningBalances()
+            openingBalances: try fetchOpeningBalances(),
+            reconciliations: try fetchReconciliations()
         )
         try PortfolixDataPackageService.validate(payload: payload, requiresRiskProfile: true)
         return payload
@@ -271,11 +277,15 @@ final class PositionRepository {
         var importedIDMap: [String: String] = [:]
         let archivedIDs = Set((payload.closedHoldings ?? []).filter { !$0.isReversed }.map { $0.holding.id })
         let activeImportIDs = Set(payload.holdings.map(\.id))
-        let historicalTradeIDs = Set((payload.trades ?? []).flatMap { $0.accountIDs }).subtracting(activeImportIDs)
+        let historicalTradeIDs = Set((payload.trades ?? []).flatMap { $0.accountIDs } + (payload.reconciliations ?? []).map { $0.asset.id }).subtracting(activeImportIDs)
         let reversedOpeningIDs = Set((payload.openingBalances ?? []).filter { $0.isReversed && !activeImportIDs.contains($0.holding.id) }.map { $0.holding.id })
         let existingClosedIDs = Set(try fetchPositionClosures().filter { !$0.isReversed }.map { $0.holding.id })
 
         try transaction {
+            let incomingReconciliations = payload.reconciliations ?? []
+            guard Set(try fetchReconciliations().map(\.id)).isSubset(of: Set(incomingReconciliations.map(\.id))) else {
+                throw PortfolixDataPackageError.invalidPackage("当前校准记录与备份不一致，不能合并覆盖余额")
+            }
             let existingTrades = try fetchPositionTrades()
             let incomingTradeIDs = Set((payload.trades ?? []).map(\.id))
             guard Set(existingTrades.map(\.id)).isSubset(of: incomingTradeIDs) else {
@@ -407,6 +417,9 @@ final class PositionRepository {
                 try saveTrade(trade.remapping(importedIDMap))
             }
 
+            for record in incomingReconciliations {
+                try saveReconciliation(record.remapping(importedIDMap))
+            }
             for opening in payload.openingBalances ?? [] {
                 try saveOpeningBalance(opening.remapping(importedIDMap))
             }
@@ -476,20 +489,25 @@ final class PositionRepository {
         try updatedPositions.forEach(PositionInputValidator.validate)
         try transaction {
             for position in updatedPositions {
-                guard let current = try fetchPosition(id: position.id),
-                      current.symbol == position.symbol, current.category == position.category,
-                      current.quoteCurrency == position.quoteCurrency else { continue }
-                let updated = Position(id: current.id, name: current.name, symbol: current.symbol,
-                    category: current.category, quoteCurrency: current.quoteCurrency, quantity: current.quantity,
-                    totalCost: current.totalCost, averageCost: current.averageCost, latestPrice: position.latestPrice,
-                    marketValueCNY: current.quantity * position.latestPrice / current.quoteCurrency.rateFromCNY,
-                    profitRate: current.averageCost == 0 ? 0 : (position.latestPrice - current.averageCost) / current.averageCost * 100,
-                    weeklyTrend: position.weeklyTrend, source: position.source, quoteTime: position.quoteTime,
-                    fetchedAt: position.fetchedAt, freshness: position.freshness)
-                try save(updated, operation: "quote_update")
+                _ = try updateQuote(position)
             }
             try writeDailySnapshots(positions: fetchPositions(), snapshotDate: snapshotDate)
         }
+    }
+
+    private func updateQuote(_ position: Position) throws -> Bool {
+        guard let current = try fetchPosition(id: position.id),
+              current.symbol == position.symbol, current.category == position.category,
+              current.quoteCurrency == position.quoteCurrency else { return false }
+        let updated = Position(id: current.id, name: current.name, symbol: current.symbol,
+            category: current.category, quoteCurrency: current.quoteCurrency, quantity: current.quantity,
+            totalCost: current.totalCost, averageCost: current.averageCost, latestPrice: position.latestPrice,
+            marketValueCNY: current.quantity * position.latestPrice / current.quoteCurrency.rateFromCNY,
+            profitRate: current.averageCost == 0 ? 0 : (position.latestPrice - current.averageCost) / current.averageCost * 100,
+            weeklyTrend: position.weeklyTrend, source: position.source, quoteTime: position.quoteTime,
+            fetchedAt: position.fetchedAt, freshness: position.freshness)
+        try save(updated, operation: "quote_update")
+        return true
     }
 
     func updateBalances(_ positions: [Position]) throws {
@@ -546,6 +564,8 @@ final class PositionRepository {
     @discardableResult
     func closePosition(expected: Position, settlement: PositionClosureSettlement, tradeDate: Date,
                        cashPositionID: Position.ID?, cashName: String, now: Date = .now) throws -> PositionClosureRecord {
+        guard expected.costIsKnown else { throw PositionTradeError.invalidInput }
+        try requireAfterReconciliation(accountIDs: Set([expected.id.uuidString, cashPositionID?.uuidString].compactMap { $0 }), date: tradeDate)
         let day = Self.dayString(from: tradeDate)
         let today = Self.dayString(from: now)
         guard day <= today, tradeDate >= Date(timeIntervalSince1970: 0) else { throw PositionClosureError.invalidDate }
@@ -676,6 +696,7 @@ final class PositionRepository {
             guard var record = try fetchPositionClosures().first(where: { $0.id == id }), !record.isReversed else {
                 throw PositionClosureError.invalidRecord
             }
+            try requireAfterReconciliation(accountIDs: Set([record.holding.id, record.cashPositionID].compactMap { $0 }), date: PositionClosureMath.date(record.tradeDate)!)
             guard let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt), Calendar.current.isDate(recordedAt, inSameDayAs: now) else {
                 throw PositionClosureError.reversalExpired
             }
@@ -728,6 +749,8 @@ final class PositionRepository {
     func delete(positionIDs: [Position.ID]) throws {
         guard !positionIDs.isEmpty else { return }
         try transaction {
+            let reconciledIDs = Set(try fetchReconciliations().compactMap { UUID(uuidString: $0.asset.id) })
+            guard Set(positionIDs).isDisjoint(with: reconciledIDs) else { throw PositionTradeError.recordedTradesExist }
             let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: try fetchPositionTrades(), closures: try fetchPositionClosures(),
                 openings: try fetchOpeningBalances())
             guard Set(positionIDs).isDisjoint(with: linkedIDs) else { throw PositionTradeError.recordedTradesExist }
@@ -749,6 +772,7 @@ final class PositionRepository {
         defer { sqlite3_finalize(statement) }
         try bind(limitDays, to: 1, in: statement)
 
+        let reconciliations = try reconciliationInputs()
         var snapshots: [PortfolioSnapshot] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard
@@ -762,7 +786,8 @@ final class PositionRepository {
                 PortfolioSnapshot(
                     date: date,
                     totalValueCNY: totalValue,
-                    profitRate: profitRate
+                    profitRate: profitRate,
+                    costIsKnown: try snapshotCostIsKnown(day: text(at: 0, in: statement), records: reconciliations)
                 )
             )
         }
@@ -893,8 +918,9 @@ final class PositionRepository {
             totalsByDate[day, default: 0] += values.values.reduce(0, +)
             contributionCountByDate[day, default: 0] += 1
         }
+        let incomplete = RecordedReconciliation.incompleteDays(try reconciliationInputs())
         return totalsByDate.keys
-            .filter { contributionCountByDate[$0, default: 0] > 0 }
+            .filter { contributionCountByDate[$0, default: 0] > 0 && !incomplete.contains(Self.dayString(from: $0)) }
             .sorted()
             .map { DailyProfitPoint(date: $0, amountCNY: totalsByDate[$0, default: 0]) }
     }
@@ -1455,6 +1481,8 @@ final class PositionRepository {
     }
 
     private func migrate() throws {
+        try execute("CREATE TABLE IF NOT EXISTS position_reconciliations (id TEXT PRIMARY KEY NOT NULL, asset_id TEXT NOT NULL, sequence INTEGER NOT NULL, payload_json TEXT NOT NULL)")
+        try execute("CREATE INDEX IF NOT EXISTS reconciliation_asset ON position_reconciliations(asset_id, sequence)")
         try execute("CREATE TABLE IF NOT EXISTS position_opening_balances (position_id TEXT PRIMARY KEY NOT NULL, payload_json TEXT NOT NULL)")
         try execute("CREATE TABLE IF NOT EXISTS position_trades (id TEXT PRIMARY KEY NOT NULL, trade_date TEXT NOT NULL, payload_json TEXT NOT NULL)")
         try execute("""
@@ -1782,7 +1810,7 @@ final class PositionRepository {
         try bind(position.quoteCurrency.rawValue, to: 3, in: quoteStatement)
         try bind(position.source, to: 4, in: quoteStatement)
         try bind(position.quoteTime, to: 5, in: quoteStatement)
-        try bind(now, to: 6, in: quoteStatement)
+        try bind(position.fetchedAt, to: 6, in: quoteStatement)
         try bind(position.freshness.rawValue, to: 7, in: quoteStatement)
         try bind(trendJSON, to: 8, in: quoteStatement)
         try stepDone(quoteStatement)
@@ -1953,7 +1981,7 @@ final class PositionRepository {
         return try position(from: statement)
     }
 
-    private func position(from statement: OpaquePointer) throws -> Position {
+    private func position(from statement: OpaquePointer, knownCost: Bool? = nil) throws -> Position {
         guard
             let id = UUID(uuidString: text(at: 0, in: statement)),
             let category = AssetCategory(rawValue: text(at: 3, in: statement)),
@@ -1989,8 +2017,33 @@ final class PositionRepository {
             source: normalizedQuoteSource(text(at: 9, in: statement), category: category),
             quoteTime: text(at: 10, in: statement),
             fetchedAt: text(at: 11, in: statement),
-            freshness: freshness
+            freshness: freshness,
+            dailyPriceBaseline: try dailyPriceBaseline(for: id),
+            costIsKnown: try knownCost ?? costIsKnown(for: id)
         )
+    }
+
+    private func dailyPriceBaseline(for assetID: UUID, asOf date: Date = .now) throws -> PositionDailyPriceBaseline? {
+        let day = Self.dayString(from: date)
+        let statement = try prepare("""
+            SELECT latest_price, quantity, market_value_cny FROM asset_price_snapshots
+            WHERE asset_id = ? AND snapshot_date < ?
+            ORDER BY snapshot_date DESC LIMIT 1
+            """)
+        defer { sqlite3_finalize(statement) }
+        try bind(assetID.uuidString, to: 1, in: statement)
+        try bind(day, to: 2, in: statement)
+        let status = sqlite3_step(statement)
+        if status == SQLITE_DONE { return nil }
+        guard status == SQLITE_ROW else {
+            throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+        }
+        guard let price = Decimal(string: text(at: 0, in: statement)) else {
+            throw PositionRepositoryError.invalidStoredData("无法解析当日收益参考价格")
+        }
+        let quantity = Decimal(string: text(at: 1, in: statement)) ?? 0
+        let value = Decimal(string: text(at: 2, in: statement)) ?? 0
+        return PositionDailyPriceBaseline(day: day, price: price, unitValueCNY: quantity > 0 ? value / quantity : nil)
     }
 
     private func weeklyTrend(for assetID: UUID, latestPrice: Decimal) throws -> [Double] {
@@ -2335,6 +2388,7 @@ extension PositionRepository {
 
     func confirmOpeningBalance(id: UUID, quantity: Decimal, totalCost: Decimal) throws {
         try transaction {
+            try requireAfterReconciliation(accountIDs: [id.uuidString], date: .distantPast)
             guard let record = try fetchOpeningBalances().first(where: { $0.id == id }), !record.isReversed else { throw PositionOpeningBalanceError.changed }
             let candidates = try PositionOpeningBalanceMath.reconstruct(positions: fetchPositions(), trades: fetchPositionTrades(),
                 closures: fetchPositionClosures(), recordedAt: record.recordedAt)
@@ -2347,6 +2401,7 @@ extension PositionRepository {
 
     func reverseOpeningBalance(id: UUID, now: Date = .now) throws {
         try transaction {
+            try requireAfterReconciliation(accountIDs: [id.uuidString], date: .distantPast)
             guard var record = try fetchOpeningBalances().first(where: { $0.id == id }), !record.isReversed else { throw PositionOpeningBalanceError.changed }
             guard !record.requiresReview, let units = record.units, let cost = record.cost, units > 0 else { throw PositionOpeningBalanceError.needsReview }
             let links = PositionRecordLinks.activeAccountIDs(trades: try fetchPositionTrades(), closures: try fetchPositionClosures())
@@ -2387,7 +2442,7 @@ extension PositionRepository {
     @discardableResult
     func recordTrade(id: UUID = UUID(), side: PositionTradeSide, expected: Position, quantity: Decimal,
                      price: Decimal, fees: Decimal, tradeDate: Date, cashPositionID: UUID?,
-                     cashName: String, now: Date = .now) throws -> PositionTradeRecord {
+                     cashName: String, now: Date = .now, quoteUpdate: Position? = nil) throws -> PositionTradeRecord {
         let day = Self.dayString(from: tradeDate)
         guard day <= Self.dayString(from: now), tradeDate >= Date(timeIntervalSince1970: 0),
               quantity > 0, price >= 0, side != .buy || price > 0, fees >= 0,
@@ -2400,7 +2455,7 @@ extension PositionRepository {
             try ensureOpeningBalances(now: now)
             let records = try fetchPositionTrades()
             guard !records.contains(where: { $0.id == id }) else { throw PositionTradeError.changed }
-            let positions = try fetchPositions()
+            var positions = try fetchPositions()
             if let current = positions.first(where: { $0.id == expected.id }) {
                 guard current.quantity == expected.quantity, current.totalCost == expected.totalCost,
                       current.symbol == expected.symbol, current.name == expected.name,
@@ -2408,6 +2463,13 @@ extension PositionRepository {
             } else {
                 guard !side.reducesBalance, !positions.contains(where: { $0.symbol == expected.symbol && $0.category == expected.category }),
                       !records.contains(where: { $0.asset.id == expected.id.uuidString }) else { throw PositionTradeError.changed }
+            }
+            if let quoteUpdate {
+                guard (side == .add || side == .buy), day == Self.dayString(from: now),
+                      quoteUpdate.id == expected.id else { throw PositionTradeError.invalidInput }
+                try PositionInputValidator.validate(quoteUpdate)
+                guard try updateQuote(quoteUpdate) else { throw PositionTradeError.changed }
+                positions = try fetchPositions()
             }
             let cash: Position?
             if !side.usesCashAccount {
@@ -2427,13 +2489,14 @@ extension PositionRepository {
                 : PositionClosureMath.rounded(quantity * price, currency: expected.quoteCurrency) + (side == .sell ? -fees : fees)
             guard amount >= 0, !amount.isNaN else { throw PositionTradeError.invalidInput }
             let candidate = PositionTradeRecord(id: id, sequence: (records.map(\.sequence).max() ?? 0) + 1,
-                side: side, asset: .init(position: expected, timestamp: Self.timestamp(from: now)),
+                side: side, asset: .init(position: positions.first { $0.id == expected.id } ?? expected, timestamp: Self.timestamp(from: now)),
                 cash: cash.map { .init(position: $0, timestamp: Self.timestamp(from: now)) }, tradeDate: day,
                 quantity: Self.decimalString(quantity), executionPrice: Self.decimalString(price), fees: Self.decimalString(fees),
                 cashAmount: Self.decimalString(amount), allocatedCost: "0", rateFromCNY: Self.decimalString(expected.quoteCurrency.rateFromCNY),
-                recordedAt: Self.timestamp(from: now), reversedAt: nil, priceHistory: [])
+                recordedAt: Self.timestamp(from: now), reversedAt: nil, priceHistory: [], effectiveAt: Self.timestamp(from: tradeDate))
             try candidate.validate()
-            let later = connectedTradeRecords(records.filter { !$0.isReversed && $0.tradeDate > day },
+            try requireAfterReconciliation(accountIDs: candidate.accountIDs, date: tradeDate)
+            let later = connectedTradeRecords(records.filter { !$0.isReversed && PositionTradeRecord.precedes(candidate, $0) },
                 accountIDs: candidate.accountIDs)
             try writeDailySnapshots(positions: positions, snapshotDate: now)
             let replayed = try replayTrades(old: later, new: [candidate] + later, from: day, now: now)
@@ -2449,7 +2512,7 @@ extension PositionRepository {
             let records = try fetchPositionTrades()
             guard var record = records.first(where: { $0.id == id }), !record.isReversed else { throw PositionTradeError.changed }
             let affected = connectedTradeRecords(records.filter {
-                !$0.isReversed && ($0.tradeDate > record.tradeDate || ($0.tradeDate == record.tradeDate && $0.sequence >= record.sequence))
+                !$0.isReversed && ($0.id == record.id || PositionTradeRecord.precedes(record, $0))
             }, accountIDs: record.accountIDs)
             _ = try replayTrades(old: affected, new: affected.filter { $0.id != id }, from: record.tradeDate, now: now,
                 recordedBoundary: record.recordedAt)
@@ -2492,6 +2555,11 @@ extension PositionRepository {
         }
         for position in current { templates[position.id.uuidString] = position }
         let ids = Set(all.flatMap { $0.accountIDs })
+        for record in all {
+            let effective = record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+                ?? PositionClosureMath.date(record.tradeDate)!
+            try requireAfterReconciliation(accountIDs: ids, date: effective)
+        }
         guard !(try fetchPositionClosures()).contains(where: { closure in
             !closure.isReversed && (closure.tradeDate > day ||
                 (closure.tradeDate == day && recordedBoundary.map { $0 < closure.recordedAt } == true)) &&
@@ -2547,7 +2615,7 @@ extension PositionRepository {
         }
         var balances = opening
         var replayed: [PositionTradeRecord] = []
-        for var trade in new.sorted(by: { $0.tradeDate == $1.tradeDate ? $0.sequence < $1.sequence : $0.tradeDate < $1.tradeDate }) {
+        for var trade in new.sorted(by: PositionTradeRecord.precedes) {
             try PositionTradeReplay.apply(&trade, to: &balances)
             try trade.validate()
             replayed.append(trade)
@@ -2656,7 +2724,7 @@ extension PositionRepository {
     func tradeDailyProfitAdjustments(through date: Date = .now) throws -> [String: [String: Decimal]] {
         let end = Self.dayString(from: date)
         let trades = try fetchPositionTrades().filter { !$0.isReversed && $0.tradeDate <= end }
-        guard !trades.isEmpty else { return [:] }
+
         let statement = try prepare("SELECT asset_id, snapshot_date, quantity, market_value_cny FROM asset_price_snapshots WHERE snapshot_date <= ?")
         defer { sqlite3_finalize(statement) }
         try bind(end, to: 1, in: statement)
@@ -2670,7 +2738,16 @@ extension PositionRepository {
             tradeDate: $0.tradeDate, quantity: $0.quantity, executionPrice: $0.executionPrice, fees: $0.fees,
             cashAmount: $0.cashAmount, rateFromCNY: $0.rateFromCNY,
             priceHistory: $0.priceHistory.map { .init(assetID: $0.assetID, date: $0.date, quantity: $0.quantity, marketValueCNY: $0.marketValueCNY) }) }
-        return RecordedTradeProfit.adjustments(trades: inputs, unitValues: units, through: end)
+        var adjustments = RecordedTradeProfit.adjustments(trades: inputs, unitValues: units, through: end)
+        for record in try fetchReconciliations() where record.effectiveDay <= end {
+            if let value = record.profitAdjustmentCNY.flatMap(PositionClosureMath.decimal) {
+                adjustments[record.effectiveDay, default: [:]][record.asset.id, default: 0] += value
+            }
+            if let day = record.reversalDay, day <= end, let value = record.reversalProfitAdjustmentCNY.flatMap(PositionClosureMath.decimal) {
+                adjustments[day, default: [:]][record.asset.id, default: 0] += value
+            }
+        }
+        return adjustments
     }
 }
 
@@ -2685,3 +2762,144 @@ private struct PositionRevisionSnapshot: Encodable {
 }
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+extension PositionRepository {
+    func fetchReconciliations() throws -> [PositionReconciliationRecord] {
+        let statement = try prepare("SELECT payload_json FROM position_reconciliations ORDER BY sequence")
+        defer { sqlite3_finalize(statement) }
+        var records: [PositionReconciliationRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let record = try decoder.decode(PositionReconciliationRecord.self, from: Data(text(at: 0, in: statement).utf8))
+            try record.validate()
+            records.append(record)
+        }
+        return records
+    }
+
+    private func saveReconciliation(_ record: PositionReconciliationRecord) throws {
+        try record.validate()
+        let statement = try prepare("INSERT INTO position_reconciliations(id, asset_id, sequence, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json")
+        defer { sqlite3_finalize(statement) }
+        try bind(record.id.uuidString, to: 1, in: statement)
+        try bind(record.asset.id, to: 2, in: statement)
+        try bind(record.sequence, to: 3, in: statement)
+        try bind(String(decoding: encoder.encode(record), as: UTF8.self), to: 4, in: statement)
+        try stepDone(statement)
+    }
+
+    private func snapshotCostIsKnown(day: String, records: [RecordedReconciliation]? = nil) throws -> Bool {
+        let records = try records ?? reconciliationInputs()
+        guard !records.isEmpty else { return true }
+        let statement = try prepare("SELECT asset_id FROM asset_price_snapshots WHERE snapshot_date = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(day, to: 1, in: statement)
+        var ids = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW { ids.insert(text(at: 0, in: statement)) }
+        return RecordedReconciliation.costKnown(records, assetIDs: ids, through: day)
+    }
+
+    private func reconciliationInputs() throws -> [RecordedReconciliation] {
+        try fetchReconciliations().map { try decoder.decode(RecordedReconciliation.self, from: encoder.encode($0)) }
+    }
+
+    private func costIsKnown(for id: UUID) throws -> Bool {
+        try fetchReconciliations().last { !$0.isReversed && $0.asset.id == id.uuidString }?.costKnown ?? true
+    }
+
+    private func requireAfterReconciliation(accountIDs: Set<String>, date: Date) throws {
+        for record in try fetchReconciliations() where accountIDs.contains(record.asset.id) {
+            guard let checkpoint = ISO8601DateFormatter().date(from: record.reversedAt ?? record.effectiveAt), date > checkpoint else {
+                throw PositionTradeError.historicalCorrection
+            }
+        }
+    }
+
+    @discardableResult
+    func reconcilePosition(expected: Position, quantity: Decimal, totalCost: Decimal?, reason: String,
+                           note: String = "", now: Date = .now) throws -> PositionReconciliationRecord {
+        guard !quantity.isNaN, quantity >= 0, abs(quantity.doubleValue) <= 1e28,
+              totalCost == nil || (!totalCost!.isNaN && totalCost! >= 0 && abs(totalCost!.doubleValue) <= 1e28)
+        else { throw PositionTradeError.invalidInput }
+        var result: PositionReconciliationRecord?
+        try transaction {
+            try ensureOpeningBalances(now: now)
+            guard let current = try fetchPosition(id: expected.id), current.quantity == expected.quantity,
+                  current.totalCost == expected.totalCost, current.costIsKnown == expected.costIsKnown,
+                  current.symbol == expected.symbol, current.category == expected.category,
+                  current.quoteCurrency == expected.quoteCurrency else { throw PositionTradeError.changed }
+            let records = try fetchReconciliations()
+            let timestamp = Self.timestamp(from: now)
+            // Unknown cost is carried internally; it must never be presented as a known zero cost.
+            let known = quantity == 0 || current.category == .cash || totalCost != nil
+            let cost = quantity == 0 ? 0 : current.category == .cash ? quantity : totalCost ?? current.totalCost
+            guard quantity != current.quantity || cost != current.totalCost || known != current.costIsKnown else {
+                throw PositionTradeError.unchangedBalance
+            }
+            let quote = current.latestPrice / current.quoteCurrency.rateFromCNY
+            let reference = try dailyPriceBaseline(for: current.id, asOf: now).map { $0.unitValueCNY ?? $0.price / current.quoteCurrency.rateFromCNY }
+            let reliable = current.category == .cash || current.wasFetchedOnSameDay(as: now)
+            let baseline = current.quantity == quantity ? (reference ?? quote) : current.category == .cash ? quote : reliable ? reference : nil
+            let adjustment = baseline.map { (current.quantity - quantity) * (quote - $0) }
+            let record = PositionReconciliationRecord(id: UUID(), sequence: (records.map(\.sequence).max() ?? 0) + 1,
+                asset: .init(position: current, timestamp: timestamp), quantity: Self.decimalString(quantity),
+                totalCost: Self.decimalString(cost), costKnown: known, effectiveAt: timestamp,
+                effectiveDay: Self.dayString(from: now), quoteUnitCNY: Self.decimalString(quote),
+                baselineUnitCNY: baseline.map(Self.decimalString), profitAdjustmentCNY: adjustment.map(Self.decimalString),
+                reason: reason, note: note, reversedAt: nil)
+            try record.validate()
+            if quantity == 0 {
+                try removeActiveClosurePosition(id: current.id)
+                try deleteClosureAssetSnapshot(id: current.id.uuidString, day: record.effectiveDay)
+            } else {
+                let updated = Position(id: current.id, name: current.name, symbol: current.symbol,
+                    category: current.category, quoteCurrency: current.quoteCurrency, quantity: quantity, totalCost: cost,
+                    averageCost: cost / quantity, latestPrice: current.latestPrice,
+                    marketValueCNY: quantity * quote, profitRate: cost == 0 ? 0 : (quantity * current.latestPrice / cost - 1) * 100,
+                    weeklyTrend: current.weeklyTrend, source: current.source, quoteTime: current.quoteTime,
+                    fetchedAt: current.fetchedAt, freshness: current.freshness, costIsKnown: known)
+                try PositionInputValidator.validate(updated)
+                try save(updated, operation: "reconciliation")
+            }
+            try saveReconciliation(record)
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+            result = record
+        }
+        guard let result else { throw PositionTradeError.changed }
+        return result
+    }
+
+    func reverseReconciliation(id: UUID, now: Date = .now) throws {
+        try transaction {
+            let records = try fetchReconciliations()
+            guard var record = records.first(where: { $0.id == id }), !record.isReversed else { throw PositionTradeError.changed }
+            guard !records.contains(where: { !$0.isReversed && $0.asset.id == record.asset.id && $0.sequence > record.sequence }),
+                  !(try fetchPositionTrades()).contains(where: { !$0.isReversed && $0.accountIDs.contains(record.asset.id) && $0.recordedAt >= record.effectiveAt }),
+                  !(try fetchPositionClosures()).contains(where: { !$0.isReversed && ($0.holding.id == record.asset.id || $0.cashPositionID == record.asset.id) && $0.recordedAt >= record.effectiveAt })
+            else { throw PositionTradeError.dependentTrade }
+            let before = try record.asset.position()
+            let current = try fetchPosition(id: before.id)
+            guard (current?.quantity ?? 0) == record.units,
+                  abs(((current?.totalCost ?? 0) - record.cost).doubleValue) < 0.000001 else { throw PositionTradeError.changed }
+            let quote = current ?? before
+            let restored = Position(id: before.id, name: before.name, symbol: before.symbol,
+                category: before.category, quoteCurrency: before.quoteCurrency, quantity: before.quantity,
+                totalCost: before.totalCost, averageCost: before.averageCost, latestPrice: quote.latestPrice,
+                marketValueCNY: before.quantity * quote.latestPrice / before.quoteCurrency.rateFromCNY,
+                profitRate: before.averageCost == 0 ? 0 : (quote.latestPrice / before.averageCost - 1) * 100,
+                weeklyTrend: quote.weeklyTrend, source: quote.source, quoteTime: quote.quoteTime,
+                fetchedAt: quote.fetchedAt, freshness: quote.freshness, costIsKnown: before.costIsKnown)
+            try save(restored, operation: "reconciliation_reverse")
+            record.reversedAt = Self.timestamp(from: now)
+            record.reversalDay = Self.dayString(from: now)
+            let baseline = try dailyPriceBaseline(for: before.id, asOf: now).map { $0.unitValueCNY ?? $0.price / before.quoteCurrency.rateFromCNY }
+            let reference = before.category == .cash ? quote.latestPrice / before.quoteCurrency.rateFromCNY : baseline
+            record.reversalProfitAdjustmentCNY = reference.flatMap { base in
+                (before.category == .cash || quote.wasFetchedOnSameDay(as: now))
+                    ? Self.decimalString((record.units - before.quantity) * (quote.latestPrice / before.quoteCurrency.rateFromCNY - base)) : nil
+            }
+            try saveReconciliation(record)
+            // Historical checkpoints remain historical. Only today's snapshot is refreshed.
+            try writeDailySnapshots(positions: fetchPositions(), snapshotDate: now)
+        }
+    }
+}

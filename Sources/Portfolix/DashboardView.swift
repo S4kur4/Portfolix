@@ -210,6 +210,7 @@ private struct PortfolioHeroCard: View {
     }
 
     private var todayProfitText: String {
+        guard store.todayProfitIsAvailable() else { return "—" }
         let convertedProfit = store.converted(store.todayProfitCNY)
         return store.todayProfitCNY == 0
             ? formatMoney(convertedProfit, currency: store.displayCurrency)
@@ -217,7 +218,7 @@ private struct PortfolioHeroCard: View {
     }
 
     private var todayProfitRateText: String {
-        store.todayProfitRate == 0 ? "0.00%" : formatPercent(store.todayProfitRate)
+        store.todayProfitIsAvailable() ? (store.todayProfitRate == 0 ? "0.00%" : formatPercent(store.todayProfitRate)) : "—"
     }
 
     private var todayProfitColor: Color {
@@ -437,7 +438,7 @@ private struct PerformanceTrendCard: View {
     @State private var highlightedSnapshotID: PortfolioSnapshot.ID?
 
     private var snapshots: [PortfolioSnapshot] {
-        store.visibleSnapshots
+        store.visibleSnapshots.filter(\.costIsKnown)
     }
 
     private var values: [Double] {
@@ -1277,7 +1278,7 @@ private struct CompactPositionRow: View {
                 .monospacedDigit()
                 .portfolixNumericTransition(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
 
-            Text(formatPercent(position.profitRate))
+            Text(position.costIsKnown ? formatPercent(position.profitRate) : "—")
                 .positionMetricColumn(width: 72)
                 .foregroundStyle(PortfolixTheme.performanceColor(for: position.profitRate, scheme: store.performanceColorScheme))
                 .monospacedDigit()
@@ -1286,7 +1287,7 @@ private struct CompactPositionRow: View {
             let todayProfit = store.todayProfitCNY(for: position)
             let isTodayProfitZero = todayProfit == 0
             Text(
-                isTodayProfitZero
+                !store.todayProfitIsAvailable(for: position) ? "—" : isTodayProfitZero
                     ? formatMoney(store.converted(todayProfit), currency: store.displayCurrency)
                     : formatSignedMoney(store.converted(todayProfit), currency: store.displayCurrency)
             )

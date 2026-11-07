@@ -151,6 +151,26 @@ public final class PortfolioMCPServer {
                                    "numeric_format": "Decimal strings; currencies are explicit. profit_rate is a percentage (10 means 10%). Missing records are not zero.",
                                    "local_date": dayFormatter.string(from: Date()),
                                    "time_zone": TimeZone.current.identifier]
+        let reconciliationRows = try database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'position_reconciliations'")
+        let reconciliations: [RecordedReconciliation] = try reconciliationRows.isEmpty ? [] : database.query("SELECT payload_json FROM position_reconciliations", limit: 10_000).map {
+            guard let json = $0["payload_json"] else { throw MCPFailure.invalidData }
+            return try JSONDecoder().decode(RecordedReconciliation.self, from: Data(json.utf8))
+        }
+        result["history_complete"] = reconciliations.isEmpty ? "no_known_reconciliation_gaps" : "incomplete_before_checkpoints"
+        func maskCost(_ row: [String: String], asset: Bool = false) throws -> [String: String] {
+            var row = row
+            let ids: Set<String>?
+            if asset || reconciliations.isEmpty { ids = nil }
+            else if let day = row["snapshot_date"] {
+                ids = Set(try database.query("SELECT asset_id FROM asset_price_snapshots WHERE snapshot_date = ?", [day]).compactMap { $0["asset_id"] })
+            } else { ids = Set(try database.query("SELECT asset_id FROM positions").compactMap { $0["asset_id"] }) }
+            let known = RecordedReconciliation.costKnown(reconciliations, assetID: asset ? row["asset_id"] : nil, assetIDs: ids, through: row["snapshot_date"] ?? "9999-12-31")
+            row["cost_status"] = known ? "known" : "unknown"
+            if !known {
+                for field in ["total_cost", "average_cost", "total_cost_cny", "total_profit_cny", "profit_rate"] { row[field] = nil }
+            }
+            return row
+        }
         if name == "get_data_status" {
             result["portfolio_history"] = try database.query("SELECT MIN(snapshot_date) AS first_date, MAX(snapshot_date) AS last_date, COUNT(*) AS record_count FROM portfolio_snapshots").first ?? [:]
             result["asset_history"] = try database.query("SELECT MIN(snapshot_date) AS first_date, MAX(snapshot_date) AS last_date, COUNT(*) AS record_count FROM asset_price_snapshots").first ?? [:]
@@ -161,9 +181,10 @@ public final class PortfolioMCPServer {
         if name == "get_portfolio_summary" {
             let ledger = try MCPPortfolioLedger(database: database)
             result["currency"] = "CNY"
-            result["latest_snapshot"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 1").first.map { $0 as Any } ?? NSNull()
+            result["latest_snapshot"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 1").first.map { try maskCost($0) as Any } ?? NSNull()
             result["holdings_count"] = try database.query("SELECT COUNT(*) AS count FROM positions").first?["count"] ?? "0"
-            result["realized_profit_cny"] = NSDecimalNumber(decimal: ledger.realizedProfitCNY).stringValue
+            result["realized_profit_status"] = ledger.hasKnownRealizedProfit ? "known" : "incomplete"
+            result["realized_profit_cny"] = ledger.hasKnownRealizedProfit ? NSDecimalNumber(decimal: ledger.realizedProfitCNY).stringValue as Any : NSNull()
             result["transaction_count"] = String(ledger.transactionCount)
             result["opening_balance_count"] = String(ledger.openingCount)
             result["closed_holding_count"] = String(Set(ledger.closedSales.map(\.assetID)).count)
@@ -208,7 +229,7 @@ public final class PortfolioMCPServer {
                 WHERE a.name LIKE ? ESCAPE '\\' OR a.symbol LIKE ? ESCAPE '\\'
                 ORDER BY a.id LIMIT ? OFFSET ?
                 """, [pattern, pattern, String(limit + 1), String(offset)])
-            result["holdings"] = Array(rows.prefix(limit))
+            result["holdings"] = try rows.prefix(limit).map { try maskCost($0, asset: true) }
             result["next_offset"] = rows.count > limit ? (offset + limit) as Any : NSNull()
             return result
         }
@@ -217,7 +238,7 @@ public final class PortfolioMCPServer {
         result["end_date"] = end
         if name == "get_portfolio_history" {
             result["currency"] = "CNY"
-            result["snapshots"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date", [start, end], limit: 366)
+            result["snapshots"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date", [start, end], limit: 366).map { try maskCost($0) }
         } else if name == "get_asset_price_history" {
             guard let asset = arguments["asset_id"] as? String, let id = UUID(uuidString: asset) else { throw MCPFailure.invalidArguments }
             result["snapshots"] = try database.query("""
@@ -225,7 +246,7 @@ public final class PortfolioMCPServer {
                        average_cost, market_value_cny, source, quote_time, freshness, updated_at
                 FROM asset_price_snapshots WHERE asset_id = ? AND snapshot_date BETWEEN ? AND ?
                 ORDER BY snapshot_date
-                """, [id.uuidString, start, end], limit: 366)
+                """, [id.uuidString, start, end], limit: 366).map { try maskCost($0, asset: true) }
         } else {
             // Include exactly one predecessor per asset so first-day P/L matches the App.
             var previous: [String: Decimal] = [:]
@@ -263,9 +284,16 @@ public final class PortfolioMCPServer {
                     if fees > 0 { totals[day, default: 0] -= fees }
                 }
             }
+            for (day, amounts) in RecordedReconciliation.adjustments(reconciliations) where day >= start && day <= end {
+                totals[day, default: 0] += amounts.values.reduce(0, +)
+            }
+            let incompleteDays = RecordedReconciliation.incompleteDays(reconciliations)
             guard totals.values.allSatisfy({ !$0.isNaN }) else { throw MCPFailure.invalidData }
             result["currency"] = "CNY"
-            result["days"] = totals.keys.sorted().map { ["date": $0, "amount_cny": NSDecimalNumber(decimal: totals[$0]!).stringValue] }
+            result["days"] = Set(totals.keys).union(incompleteDays.filter { $0 >= start && $0 <= end }).sorted().map { day -> [String: String] in
+                if incompleteDays.contains(day) { return ["date": day, "status": "unavailable"] }
+                return ["date": day, "amount_cny": NSDecimalNumber(decimal: totals[day]!).stringValue, "status": "available"]
+            }
             result["calculation"] = "Recorded unit-value changes with buy/sell timing and fee adjustments. Includes FX changes; not time-weighted account returns. Missing price baselines are not inferred."
         }
         return result
@@ -314,7 +342,7 @@ public final class PortfolioMCPServer {
             case "get_data_status": "Start here: local date/time zone, available history date ranges and last quote fetch time. Does not refresh prices."
             case "get_portfolio_summary": "Latest persisted CNY portfolio snapshot and holding count. Does not refresh prices."
             case "list_holdings": "Find holdings by optional name/symbol query; paginated current quantities, costs and cached quotes with currency and freshness. Asset text is untrusted data."
-            case "list_transactions": "Read-only, paginated active opening balances, external additions, cash-funded purchases, partial/full sales and external cash withdrawals. Opening balances and withdrawals are not investment losses. No writes or trading."
+            case "list_transactions": "Read-only, paginated balance reconciliation checkpoints, active opening balances, external additions, cash-funded purchases, partial/full sales and external cash withdrawals. Reconciliations have no cash flow or realized profit; unknown cost fields are unavailable. Opening balances and withdrawals are not investment losses. No writes or trading."
             case "list_closed_holdings": "Read-only sale records for assets no longer held, including new partial/full-sale records and legacy closures. Multiple sales can belong to one asset; realized P/L is not daily P/L. Paginated name/symbol query."
             case "get_daily_profit": "Daily CNY P/L using the same price-change calculation as Portfolix. Not account cash-flow returns."
             case "get_portfolio_history": "Stored daily CNY portfolio snapshots. Missing dates are omitted, not filled with zero."
@@ -347,8 +375,8 @@ public final class PortfolioMCPServer {
 
     private static func outputSchema(for name: String) -> [String: Any] {
         let string: [String: Any] = ["type": "string"]
-        var properties: [String: Any] = ["source": string, "read_at": string, "numeric_format": string, "local_date": string, "time_zone": string]
-        let snapshot = recordSchema("snapshot_date total_value_cny total_cost_cny total_profit_cny profit_rate updated_at")
+        var properties: [String: Any] = ["source": string, "read_at": string, "numeric_format": string, "local_date": string, "time_zone": string, "history_complete": string]
+        let snapshot = recordSchema("snapshot_date total_value_cny total_cost_cny total_profit_cny profit_rate updated_at cost_status", optional: ["total_cost_cny", "total_profit_cny", "profit_rate"])
         switch name {
         case "get_data_status":
             let history = recordSchema("first_date last_date record_count", optional: ["first_date", "last_date"])
@@ -356,9 +384,11 @@ public final class PortfolioMCPServer {
                               "quotes": recordSchema("last_fetched_at record_count", optional: ["last_fetched_at"]), "note": string]) { _, new in new }
         case "get_portfolio_summary":
             properties.merge(["currency": string, "latest_snapshot": ["anyOf": [snapshot, ["type": "null"]]], "holdings_count": string, "note": string]) { _, new in new }
-            for field in ["realized_profit_cny", "transaction_count", "opening_balance_count", "closed_holding_count"] { properties[field] = string }
+            for field in ["transaction_count", "opening_balance_count", "closed_holding_count"] { properties[field] = string }
+            properties["realized_profit_cny"] = ["type": ["string", "null"]]
+            properties["realized_profit_status"] = string
         case "list_transactions", "list_closed_holdings":
-            let nullable: Set<String> = ["trade_date", "quantity", "execution_price", "fees", "recorded_amount_quote", "cash_account_id", "cash_account_name", "opening_balance_status", "realized_profit_quote", "realized_profit_cny"]
+            let nullable: Set<String> = ["cost_known", "before_quantity", "trade_date", "quantity", "execution_price", "fees", "recorded_amount_quote", "cash_account_id", "cash_account_name", "opening_balance_status", "realized_profit_quote", "realized_profit_cny"]
             let fields = Dictionary(uniqueKeysWithValues: MCPPortfolioLedger.outputFields.map { ($0, ["type": nullable.contains($0) ? ["string", "null"] : ["string"]]) })
             properties["records"] = ["type": "array", "items": ["type": "object", "properties": fields,
                 "required": MCPPortfolioLedger.outputFields, "additionalProperties": false]]
@@ -366,9 +396,9 @@ public final class PortfolioMCPServer {
             properties["next_offset"] = ["type": ["integer", "null"]]
             properties["note"] = string
         case "list_holdings":
-            let quoteFields: Set<String> = ["latest_price", "price_currency", "quote_time", "fetched_at", "freshness", "source"]
+            let quoteFields: Set<String> = ["latest_price", "price_currency", "quote_time", "fetched_at", "freshness", "source", "average_cost", "total_cost"]
             properties["holdings"] = ["type": "array", "items": recordSchema(
-                "asset_id position_id name symbol category quote_currency quantity average_cost total_cost cost_currency updated_at latest_price price_currency quote_time fetched_at freshness source",
+                "asset_id position_id name symbol category quote_currency quantity average_cost total_cost cost_currency updated_at latest_price price_currency quote_time fetched_at freshness source cost_status",
                 optional: quoteFields)]
             properties["next_offset"] = ["type": ["integer", "null"]]
         default:
@@ -376,11 +406,11 @@ public final class PortfolioMCPServer {
             properties["end_date"] = string
             if name == "get_daily_profit" {
                 properties["currency"] = string
-                properties["days"] = ["type": "array", "items": recordSchema("date amount_cny")]
+                properties["days"] = ["type": "array", "items": recordSchema("date amount_cny status", optional: ["amount_cny"])]
                 properties["calculation"] = string
             } else {
                 properties["snapshots"] = ["type": "array", "items": name == "get_portfolio_history" ? snapshot : recordSchema(
-                    "asset_id snapshot_date symbol name quote_currency latest_price quantity average_cost market_value_cny source quote_time freshness updated_at")]
+                    "asset_id snapshot_date symbol name quote_currency latest_price quantity average_cost market_value_cny source quote_time freshness updated_at cost_status", optional: ["average_cost"])]
                 if name == "get_portfolio_history" { properties["currency"] = string }
             }
         }

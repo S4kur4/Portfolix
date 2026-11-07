@@ -251,6 +251,52 @@ private struct PortfolixGlassSurface<S: Shape>: ViewModifier {
     }
 }
 
+private struct PortfolixFormGlassKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var portfolixFormGlass: Bool {
+        get { self[PortfolixFormGlassKey.self] }
+        set { self[PortfolixFormGlassKey.self] = newValue }
+    }
+}
+
+private struct PortfolixGlassControlSurface: ViewModifier {
+    let height: CGFloat
+    @Environment(\.portfolixFormGlass) private var isInForm
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+    }
+
+    func body(content: Content) -> some View {
+        let label = content.frame(height: height).foregroundStyle(PortfolixTheme.glassControlText)
+        Group {
+            if isInForm && colorScheme == .light {
+                label.background {
+                    Group {
+                        if #available(macOS 26.0, *) {
+                            ButtonGlassBackground(tint: nil)
+                        } else {
+                            shape.fill(.regularMaterial)
+                                .overlay { shape.fill(PortfolixTheme.panelSoft.opacity(0.48)) }
+                        }
+                    }
+                    .clipShape(shape)
+                    .shadow(color: PortfolixTheme.buttonShadow, radius: 8, x: 0, y: 3)
+                    .allowsHitTesting(false)
+                }
+            } else {
+                label.portfolixGlass(in: shape, fallbackTint: PortfolixTheme.panelSoft,
+                    fallbackOpacity: 0.48, interactive: true)
+            }
+        }
+        .contentShape(shape)
+    }
+}
+
 extension View {
     func portfolixGlass<S: Shape>(
         in shape: S,
@@ -271,15 +317,7 @@ extension View {
     }
 
     func portfolixGlassControl(height: CGFloat = PortfolixLayout.glassControlHeight) -> some View {
-        frame(height: height)
-            .foregroundStyle(PortfolixTheme.glassControlText)
-            .portfolixGlass(
-                in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                fallbackTint: PortfolixTheme.panelSoft,
-                fallbackOpacity: 0.48,
-                interactive: true
-            )
-            .contentShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+        modifier(PortfolixGlassControlSurface(height: height))
     }
 }
 
@@ -693,6 +731,18 @@ private struct InteractiveButtonLabel: View {
 
 func formatMoney(_ value: Decimal, currency: DisplayCurrency, maximumFractionDigits: Int = 2) -> String {
     formattedMoney(value, currency: currency, maximumFractionDigits: maximumFractionDigits, separatesSymbol: false)
+}
+
+func formatUnitCost(_ value: Decimal, currency: DisplayCurrency) -> String {
+    if value != 0, abs(value) < Decimal(string: "0.00000001")! {
+        return formatMoney(value, currency: currency)
+    }
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .decimal
+    formatter.minimumFractionDigits = 2
+    formatter.maximumFractionDigits = abs(value) < 0.01 ? 8 : 6
+    formatter.groupingSeparator = ","
+    return "\(currency.symbol)\(formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00")"
 }
 
 func formatHeroMoney(_ value: Decimal, currency: DisplayCurrency, maximumFractionDigits: Int = 2) -> String {

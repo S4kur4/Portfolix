@@ -36,11 +36,8 @@ struct PositionOpeningBalanceSheet: View {
                     }
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.never)
+            .portfolixSheetForm()
             .disabled(isSaving)
-            .environment(\.defaultMinListRowHeight, AssetEntryLayout.minimumRowHeight)
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }
@@ -86,5 +83,39 @@ struct PositionOpeningBalanceSheet: View {
 
     private func text(_ chinese: String, _ english: String) -> String {
         localizedText(chinese, english, language: store.appLanguage)
+    }
+}
+
+struct PositionOpeningBalanceDetailSheet: View {
+    @Environment(PortfolioStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let record: PositionOpeningBalanceRecord
+
+    private func text(_ cn: String, _ en: String) -> String {
+        localizedText(cn, en, language: store.appLanguage)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SheetHeader(title: text("期初持仓", "Opening Balance"), symbol: "tray.full")
+            Divider().overlay(PortfolixTheme.border)
+            Form {
+                Section {
+                    LabeledContent(text("资产", "Asset"), value: record.holding.name)
+                    LabeledContent(text("资产代码", "Symbol"), value: record.holding.symbol)
+                    LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
+                    LabeledContent(text("计价币种", "Currency"), value: record.currency.rawValue)
+                    LabeledContent(text("期初份额", "Opening Quantity"), value: record.requiresReview ? "—" : record.quantity ?? "—")
+                    LabeledContent(text("期初总成本", "Opening Total Cost"), value: record.requiresReview ? "—" : record.cost.map { formatMoney($0, currency: record.currency) } ?? "—")
+                }
+            }.portfolixSheetForm()
+            Divider().overlay(PortfolixTheme.border)
+            SheetActionFooter(errorMessage: nil) {
+                Button(text("完成", "Done")) { dismiss() }
+                    .buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.cancelAction)
+            }
+        }
+        .frame(width: 620, height: 440)
+        .background(PortfolixTheme.canvas)
     }
 }

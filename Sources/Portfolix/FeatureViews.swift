@@ -11,6 +11,8 @@ struct PositionsView: View {
     @State private var selectedClosureID: UUID?
     @State private var pendingReversal: PositionTransactionRow?
     @State private var pendingOpeningReview: PositionOpeningBalanceRecord?
+    @State private var pendingReconciliation: Position?
+    @State private var recordDetail: PositionTransactionRow?
     @State private var pendingCashReduction: Position?
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -21,6 +23,12 @@ struct PositionsView: View {
             PageHeader(title: localizedText("持仓明细", "Holdings", language: store.appLanguage)) {
                 HStack(spacing: PortfolixSpacing.sm) {
                     if !showsClosedPositions {
+                        Button { pendingReconciliation = reductionTarget } label: {
+                            Label(localizedText("更新持仓", "Update Holding", language: store.appLanguage), systemImage: "equal.circle")
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .disabled(reductionTarget == nil)
+
                         Button {
                             guard let target = reductionTarget else { return }
                             if target.category == .cash { pendingCashReduction = target }
@@ -49,7 +57,7 @@ struct PositionsView: View {
                         PortfolixGlassSegmentedPicker(
                             title: localizedText("持仓状态", "Holding Status", language: store.appLanguage),
                             selection: $showsClosedPositions, options: [false, true],
-                            optionTitle: { $0 ? localizedText("交易记录", "Transactions", language: store.appLanguage)
+                            optionTitle: { $0 ? localizedText("操作记录", "Activity", language: store.appLanguage)
                                 : localizedText("持有中", "Open", language: store.appLanguage) },
                             width: 184, height: PortfolixLayout.positionsToolbarControlHeight
                         )
@@ -135,6 +143,17 @@ struct PositionsView: View {
         .sheet(item: $pendingOpeningReview) { record in
             PositionOpeningBalanceSheet(record: record).environment(store)
         }
+        .sheet(item: $pendingReconciliation) { position in
+            PositionReconciliationSheet(position: position).environment(store)
+        }
+        .sheet(item: $recordDetail) { row in
+            Group {
+                if let record = row.reconciliation { PositionReconciliationDetailSheet(record: record) }
+                else if let record = row.trade { PositionTradeDetailSheet(record: record) }
+                else if let record = row.closure { PositionClosureDetailSheet(record: record) }
+                else if let record = row.opening { PositionOpeningBalanceDetailSheet(record: record) }
+            }.environment(store)
+        }
         .sheet(item: $pendingCashReduction) { position in
             CashReductionSheet(position: position).environment(store)
         }
@@ -206,10 +225,20 @@ struct PositionsView: View {
             .width(72)
 
             TableColumn(
+                localizedText("成本价", "Unit Cost", language: store.appLanguage),
+                value: \.averageCost
+            ) { position in
+                Text(position.costIsKnown ? formatUnitCost(position.averageCost, currency: position.quoteCurrency) : "—")
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .monospacedDigit()
+            }
+            .width(104)
+
+            TableColumn(
                 localizedText("总成本", "Total Cost", language: store.appLanguage),
                 value: \.totalCost
             ) { position in
-                Text(formatMoney(position.totalCost, currency: position.quoteCurrency))
+                Text(position.costIsKnown ? formatMoney(position.totalCost, currency: position.quoteCurrency) : "—")
                     .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                     .monospacedDigit()
             }
@@ -229,7 +258,7 @@ struct PositionsView: View {
                 localizedText("收益率", "Return Rate", language: store.appLanguage),
                 value: \.profitRate
             ) { position in
-                Text(formatPercent(position.profitRate))
+                Text(position.costIsKnown ? formatPercent(position.profitRate) : "—")
                     .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: position.profitRate, scheme: store.performanceColorScheme)))
                     .monospacedDigit()
             }
@@ -264,6 +293,9 @@ struct PositionsView: View {
                 }
 
                 if let position = store.positions.first(where: { $0.id == positionID }) {
+                    Button { pendingReconciliation = position } label: {
+                        Label(localizedText(position.category == .cash ? "更新余额" : "更新持仓", "Update Balance", language: store.appLanguage), systemImage: "equal.circle")
+                    }
                     if position.category == .cash {
                         Button { pendingCashReduction = position } label: {
                             Label(localizedText("减少现金", "Reduce Cash", language: store.appLanguage), systemImage: "minus.circle")
@@ -292,10 +324,10 @@ struct PositionsView: View {
 
     private var closedPositionsTable: some View {
         let records = PositionTransactionRow.listed(trades: store.positionTrades, closures: store.positionClosures,
-            openings: store.positionOpeningBalances, query: store.searchText)
+            openings: store.positionOpeningBalances, reconciliations: store.positionReconciliations, query: store.searchText)
         return Table(records, selection: $selectedClosureID) {
             TableColumn(localizedText("序号", "No.", language: store.appLanguage)) {
-                Text(String($0.displayNumber))
+                activityText(String($0.displayNumber))
                     .monospacedDigit()
                     // Match the native header label's inset within the column.
                     .padding(.leading, 2)
@@ -304,32 +336,32 @@ struct PositionsView: View {
                 .alignment(.leading)
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { record in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.name).lineLimit(1)
-                    Text(record.symbol).font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondaryText)
+                    activityText(record.name).lineLimit(1)
+                    activityText(record.symbol, color: PortfolixTheme.secondaryText).font(PortfolixTypography.caption)
                 }
             }.width(min: 96, ideal: 140)
             TableColumn(localizedText("记录时间", "Record Time", language: store.appLanguage)) { record in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                    Text(record.recordedDateText)
-                    Text(record.recordedClockText).font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondaryText)
+                    activityText(record.recordedDateText)
+                    activityText(record.recordedClockText, color: PortfolixTheme.secondaryText).font(PortfolixTypography.caption)
                 }.monospacedDigit()
             }.width(88)
             TableColumn(localizedText("类型", "Type", language: store.appLanguage)) {
-                Text($0.needsOpeningReview ? localizedText("期初待核对", "Review Opening", language: store.appLanguage) : $0.kind.title(language: store.appLanguage)).lineLimit(1)
+                activityText($0.needsOpeningReview ? localizedText("期初待核对", "Review Opening", language: store.appLanguage) : ($0.reconciliation?.units == 0 ? localizedText("持仓归零", "Zero Balance", language: store.appLanguage) : $0.kind.title(language: store.appLanguage))).lineLimit(1)
             }.width(76)
-            TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { Text($0.needsOpeningReview ? "—" : $0.quantity).monospacedDigit() }.width(72)
+            TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { activityText($0.needsOpeningReview ? "—" : $0.quantity).monospacedDigit() }.width(72)
             TableColumn(localizedText("成交均价", "Trade Price", language: store.appLanguage)) {
-                Text($0.opening != nil || $0.kind == .withdraw ? "—" : formatMoney($0.price, currency: $0.currency)).monospacedDigit()
+                activityText($0.opening != nil || $0.reconciliation != nil || $0.kind == .withdraw ? "—" : formatMoney($0.price, currency: $0.currency)).monospacedDigit()
             }.width(96)
             TableColumn(localizedText("手续费", "Fees", language: store.appLanguage)) {
-                Text($0.opening != nil || $0.kind == .withdraw ? "—" : formatMoney($0.fee, currency: $0.currency)).monospacedDigit()
+                activityText($0.opening != nil || $0.reconciliation != nil || $0.kind == .withdraw ? "—" : formatMoney($0.fee, currency: $0.currency)).monospacedDigit()
             }.width(72)
             TableColumn(localizedText("记录金额", "Recorded Amount", language: store.appLanguage)) {
-                Text($0.needsOpeningReview ? "—" : formatMoney($0.amount, currency: $0.currency)).monospacedDigit()
+                activityText($0.needsOpeningReview || $0.reconciliation != nil ? "—" : formatMoney($0.amount, currency: $0.currency)).monospacedDigit()
             }.width(104)
             TableColumn(localizedText("已实现盈亏", "Realized P&L", language: store.appLanguage)) { record in
-                Text(record.profit(in: store.displayCurrency).map { formatSignedMoney($0, currency: store.displayCurrency) } ?? "—")
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.performanceColor(for: record.profit ?? 0, scheme: store.performanceColorScheme)))
+                activityText(record.profit(in: store.displayCurrency).map { formatSignedMoney($0, currency: store.displayCurrency) } ?? "—",
+                    color: PortfolixTheme.performanceColor(for: record.profit ?? 0, scheme: store.performanceColorScheme))
                     .monospacedDigit()
             }.width(116)
         }
@@ -337,9 +369,14 @@ struct PositionsView: View {
         .scrollContentBackground(.hidden).background(PortfolixTheme.panel)
         .contextMenu(forSelectionType: UUID.self) { selection in
             if let record = records.first(where: { selection.contains($0.id) }) {
+                Button { recordDetail = record } label: {
+                    Label(record.reconciliation != nil
+                        ? localizedText("查看校准详情", "View Reconciliation", language: store.appLanguage)
+                        : localizedText("查看记录详情", "View Details", language: store.appLanguage), systemImage: "doc.text.magnifyingglass")
+                }
                 if let opening = record.opening, opening.requiresReview {
-                    Button(localizedText("核对期初持仓", "Review Opening Balance", language: store.appLanguage)) {
-                        pendingOpeningReview = opening
+                    Button { pendingOpeningReview = opening } label: {
+                        Label(localizedText("核对期初持仓", "Review Opening Balance", language: store.appLanguage), systemImage: "checkmark.circle")
                     }
                 }
                 Button {
@@ -352,13 +389,19 @@ struct PositionsView: View {
                     PositionRecordLinks.activeAccountIDs(trades: store.positionTrades, closures: store.positionClosures).contains(opening.id)
                 } ?? false))
             }
+        } primaryAction: { selection in
+            if let record = records.first(where: { selection.contains($0.id) }) { recordDetail = record }
         }
         .overlay {
             if records.isEmpty {
-                Text(localizedText("暂无交易记录", "No transactions", language: store.appLanguage))
+                Text(localizedText("暂无操作记录", "No activity", language: store.appLanguage))
                     .font(PortfolixTypography.body).foregroundStyle(PortfolixTheme.secondaryText).allowsHitTesting(false)
             }
         }
+    }
+
+    private func activityText(_ value: String, color: Color = PortfolixTheme.primaryText) -> some View {
+        Text(value).foregroundStyle(PositionTableForeground(color: color))
     }
 
     private var sortedFilteredPositions: [Position] {

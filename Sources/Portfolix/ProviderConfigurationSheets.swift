@@ -3,7 +3,7 @@ import SwiftUI
 
 private enum ProviderConfigurationLayout {
     static let valueFieldWidth: CGFloat = 340
-    static let valueFieldMinHeight: CGFloat = 28
+    static let valueFieldMinHeight = SheetFormLayout.rowContentHeight
     static let apiKeyOpticalYOffset: CGFloat = 2
 }
 
@@ -128,9 +128,7 @@ struct LLMConfigurationSheet: View {
                 }
 
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 36)
+            .portfolixSheetForm()
         } secondary: { EmptyView() }
         .onAppear {
             let configuration = store.aiConfiguration
@@ -493,9 +491,7 @@ struct SearchConfigurationSheet: View {
                     field: .bochaAPIKey
                 )
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 36)
+            .portfolixSheetForm()
         } secondary: { EmptyView() }
         .onAppear {
             store.refreshProviderCredentialState()
@@ -981,30 +977,12 @@ private struct ProviderFormRow<Value: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            HStack(spacing: PortfolixSpacing.xs) {
-                Text(label)
-
-                if isRequired {
-                    Text("·")
-                        .font(.system(size: 18, weight: .heavy))
-                        .baselineOffset(1)
-                        .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
-                        .accessibilityHidden(true)
-                }
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(PortfolixTheme.primaryText)
-            .lineLimit(1)
-
-            Spacer(minLength: PortfolixSpacing.md)
-
+        LabeledContent {
             value
-                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(PortfolixTheme.primaryText)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        } label: {
+            AssetEntryFieldLabel(title: label, isInvalid: isInvalid, showsRequiredIndicator: isRequired)
         }
-        .frame(minHeight: 36, alignment: .center)
     }
 }
 
