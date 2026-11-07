@@ -2458,6 +2458,7 @@ extension PositionRepository {
             var positions = try fetchPositions()
             if let current = positions.first(where: { $0.id == expected.id }) {
                 guard current.quantity == expected.quantity, current.totalCost == expected.totalCost,
+                      current.costIsKnown == expected.costIsKnown,
                       current.symbol == expected.symbol, current.name == expected.name,
                       current.category == expected.category, current.quoteCurrency == expected.quoteCurrency else { throw PositionTradeError.changed }
             } else {
@@ -2465,7 +2466,7 @@ extension PositionRepository {
                       !records.contains(where: { $0.asset.id == expected.id.uuidString }) else { throw PositionTradeError.changed }
             }
             if let quoteUpdate {
-                guard (side == .add || side == .buy), day == Self.dayString(from: now),
+                guard (side == .add || side == .buy),
                       quoteUpdate.id == expected.id else { throw PositionTradeError.invalidInput }
                 try PositionInputValidator.validate(quoteUpdate)
                 guard try updateQuote(quoteUpdate) else { throw PositionTradeError.changed }
@@ -2893,7 +2894,7 @@ extension PositionRepository {
             record.reversalDay = Self.dayString(from: now)
             let baseline = try dailyPriceBaseline(for: before.id, asOf: now).map { $0.unitValueCNY ?? $0.price / before.quoteCurrency.rateFromCNY }
             let reference = before.category == .cash ? quote.latestPrice / before.quoteCurrency.rateFromCNY : baseline
-            record.reversalProfitAdjustmentCNY = reference.flatMap { base in
+            record.reversalProfitAdjustmentCNY = record.units == before.quantity ? "0" : reference.flatMap { base in
                 (before.category == .cash || quote.wasFetchedOnSameDay(as: now))
                     ? Self.decimalString((record.units - before.quantity) * (quote.latestPrice / before.quoteCurrency.rateFromCNY - base)) : nil
             }

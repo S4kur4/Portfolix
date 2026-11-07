@@ -388,7 +388,7 @@ public final class PortfolioMCPServer {
             properties["realized_profit_cny"] = ["type": ["string", "null"]]
             properties["realized_profit_status"] = string
         case "list_transactions", "list_closed_holdings":
-            let nullable: Set<String> = ["cost_known", "before_quantity", "trade_date", "quantity", "execution_price", "fees", "recorded_amount_quote", "cash_account_id", "cash_account_name", "opening_balance_status", "realized_profit_quote", "realized_profit_cny"]
+            let nullable: Set<String> = ["effective_at", "cost_known", "before_quantity", "trade_date", "quantity", "execution_price", "fees", "recorded_amount_quote", "cash_account_id", "cash_account_name", "opening_balance_status", "realized_profit_quote", "realized_profit_cny"]
             let fields = Dictionary(uniqueKeysWithValues: MCPPortfolioLedger.outputFields.map { ($0, ["type": nullable.contains($0) ? ["string", "null"] : ["string"]]) })
             properties["records"] = ["type": "array", "items": ["type": "object", "properties": fields,
                 "required": MCPPortfolioLedger.outputFields, "additionalProperties": false]]

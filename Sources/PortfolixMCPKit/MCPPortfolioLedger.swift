@@ -40,7 +40,7 @@ struct MCPPortfolioLedger {
         }
     }
 
-    static let outputFields = "record_id asset_id name symbol category side trade_date recorded_at currency cost_known before_quantity quantity execution_price fees recorded_amount_quote cash_account_id cash_account_name portfolio_flow opening_balance_status realized_profit_quote realized_profit_cny number".split(separator: " ").map(String.init)
+    static let outputFields = "record_id asset_id name symbol category side trade_date effective_at recorded_at currency cost_known before_quantity quantity execution_price fees recorded_amount_quote cash_account_id cash_account_name portfolio_flow opening_balance_status realized_profit_quote realized_profit_cny number".split(separator: " ").map(String.init)
     let records: [Record]
     let openAssetIDs: Set<String>
     var closedSales: [Record] { records.filter { $0.side == "sell" && !openAssetIDs.contains($0.assetID) } }
@@ -61,7 +61,8 @@ struct MCPPortfolioLedger {
                 SELECT id AS record_id, json_extract(payload_json, '$.asset.id') AS asset_id,
                     json_extract(payload_json, '$.asset.name') AS name, json_extract(payload_json, '$.asset.symbol') AS symbol,
                     json_extract(payload_json, '$.asset.category') AS category, json_extract(payload_json, '$.side') AS side,
-                    trade_date, json_extract(payload_json, '$.asset.costKnown') AS cost_known, json_extract(payload_json, '$.recordedAt') AS recorded_at,
+                    trade_date, json_extract(payload_json, '$.effectiveAt') AS effective_at,
+                    json_extract(payload_json, '$.asset.costKnown') AS cost_known, json_extract(payload_json, '$.recordedAt') AS recorded_at,
                     json_extract(payload_json, '$.asset.quoteCurrency') AS currency,
                     json_extract(payload_json, '$.quantity') AS quantity, json_extract(payload_json, '$.executionPrice') AS execution_price,
                     json_extract(payload_json, '$.fees') AS fees, json_extract(payload_json, '$.cashAmount') AS recorded_amount_quote,
@@ -86,7 +87,8 @@ struct MCPPortfolioLedger {
                     json_extract(payload_json, '$.asset.category') AS category, json_extract(payload_json, '$.asset.quoteCurrency') AS currency,
                     json_extract(payload_json, '$.asset.quantity') AS before_quantity,
                     json_extract(payload_json, '$.quantity') AS quantity, json_extract(payload_json, '$.costKnown') AS cost_known,
-                    json_extract(payload_json, '$.effectiveAt') AS recorded_at, json_extract(payload_json, '$.effectiveDay') AS trade_date,
+                    json_extract(payload_json, '$.effectiveAt') AS recorded_at,
+                    json_extract(payload_json, '$.effectiveAt') AS effective_at, json_extract(payload_json, '$.effectiveDay') AS trade_date,
                     sequence FROM position_reconciliations WHERE json_extract(payload_json, '$.reversedAt') IS NULL
                 """, limit: 10_000)
             for var row in rows { row["portfolio_flow"] = "none"; records.append(try Self.record(row, plain: plain, fractional: fractional)) }

@@ -126,9 +126,11 @@ struct PositionsView: View {
                 pendingReversal = nil
             }
         } message: { record in
-            Text(record.opening != nil
-                ? localizedText("将撤销 \(record.name) 的期初持仓，并移除该资产的余额及相关历史。", "Reverse the opening balance for \(record.name) and remove its balance and related history.", language: store.appLanguage)
-                : localizedText("将撤销 \(record.name) 的这条记录，并重新计算相关份额、现金和后续记录。", "Reverse this record for \(record.name) and recalculate related units, cash, and later records.", language: store.appLanguage))
+            Text(record.reconciliation != nil
+                ? localizedText("将撤销 \(record.name) 的这次持仓校准，恢复校准前的余额和成本。", "Reverse this balance checkpoint for \(record.name) and restore its previous balance and cost.", language: store.appLanguage)
+                : record.opening != nil
+                    ? localizedText("将撤销 \(record.name) 的期初持仓，并移除该资产的余额及相关历史。", "Reverse the opening balance for \(record.name) and remove its balance and related history.", language: store.appLanguage)
+                    : localizedText("将撤销 \(record.name) 的这条记录，并重新计算相关份额、现金和后续记录。", "Reverse this record for \(record.name) and recalculate related units, cash, and later records.", language: store.appLanguage))
         }
         .alert(localizedText("操作未完成", "Operation Not Completed", language: store.appLanguage), isPresented: operationErrorPresented) {
             Button(localizedText("好", "OK", language: store.appLanguage), role: .cancel) {

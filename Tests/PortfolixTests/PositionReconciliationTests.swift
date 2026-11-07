@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import PortfolixCore
 import PortfolixMCPKit
 @testable import Portfolix
 
@@ -217,5 +218,181 @@ struct PositionReconciliationTests {
         let (source, _, _) = try setup(at: .now)
         let destination = try PositionRepository(databaseURL: url)
         _ = try destination.importDataPayload(source.exportDataPayload())
+        _ = try PortfolixDataPackageService.write(payload: source.exportDataPayload(),
+            to: url.deletingPathExtension().appendingPathExtension("zip"))
+    }
+
+    @Test func historicalAdditionCanRefreshTodaysQuoteWithoutBackfillingThatPrice() throws {
+        let (repo, original, _) = try setup()
+        let yesterday = now.addingTimeInterval(-86400)
+        let trade = try repo.recordTrade(side: .add, expected: original, quantity: 2, price: 125, fees: 0,
+            tradeDate: yesterday, cashPositionID: nil, cashName: "", now: now,
+            quoteUpdate: position(original.id, price: 140, at: now))
+        #expect(trade.tradeDate == PositionClosureMath.day(yesterday))
+        #expect(try holding(repo, original.id).quantity == 12)
+        #expect(try holding(repo, original.id).latestPrice == 140)
+        let payload = try repo.exportDataPayload()
+        let oldPrice = payload.assetPriceSnapshots.first { $0.assetID == original.id.uuidString && $0.date == PositionClosureMath.day(yesterday) }
+        #expect(oldPrice?.latestPrice == "120")
+        #expect(try profit(repo, through: now) == 240)
+    }
+
+    @Test func reversingCostOnlyCheckpointDoesNotNeedAFreshQuote() throws {
+        let (repo, original, _) = try setup()
+        let checkpoint = try repo.reconcilePosition(expected: original, quantity: original.quantity,
+            totalCost: 900, reason: "correction", now: now)
+        let tomorrow = now.addingTimeInterval(86400)
+        try repo.reverseReconciliation(id: checkpoint.id, now: tomorrow)
+        let reversed = try #require(repo.fetchReconciliations().last)
+        #expect(reversed.reversalProfitAdjustmentCNY == "0")
+        #expect(try repo.fetchDailyProfitPoints(through: tomorrow).contains { $0.date == Calendar.current.startOfDay(for: tomorrow) })
+    }
+
+    @Test @MainActor func zeroCheckpointRetainsAvailableProfitInAIAndCloud() throws {
+        let (repo, original, _) = try setup()
+        _ = try repo.reconcilePosition(expected: original, quantity: 0, totalCost: 0, reason: "correction", now: now)
+        let store = PortfolioStore(positionRepository: repo, initialLanguage: .chinese)
+        #expect(store.todayProfitCNY(asOf: now) == 100)
+        #expect(store.aiTodayReturnStatus(asOf: now) == "available")
+        #expect(store.investmentCloudDailyProfitItems(asOf: now).map(\.amountCNY) == [100])
+    }
+
+    @Test @MainActor func incompleteZeroCheckpointDoesNotExposePartialProfitInCloud() throws {
+        let (repo, original, cash) = try setup(at: now.addingTimeInterval(-86400))
+        _ = try repo.reconcilePosition(expected: original, quantity: 12, totalCost: 960, reason: "missing", now: now)
+        let fresh = position(original.id, quantity: 12, price: 140, at: now)
+        _ = try repo.applyQuoteRefresh(updatedPositions: [fresh], snapshotPositions: [], snapshotDate: now)
+        _ = try repo.recordTrade(side: .sell, expected: holding(repo, original.id), quantity: 1, price: 140, fees: 1,
+            tradeDate: now.addingTimeInterval(60), cashPositionID: cash.id, cashName: cash.name,
+            now: now.addingTimeInterval(120))
+        _ = try repo.reconcilePosition(expected: holding(repo, original.id), quantity: 0, totalCost: 0,
+            reason: "correction", now: now.addingTimeInterval(180))
+        let store = PortfolioStore(positionRepository: repo)
+        #expect(!store.todayProfitIsAvailable(asOf: now))
+        #expect(store.investmentCloudDailyProfitItems(asOf: now).isEmpty)
+    }
+
+    @Test func staleKnownCostCannotSubmitAfterCostBecomesUnknown() throws {
+        let (repo, original, cash) = try setup()
+        _ = try repo.reconcilePosition(expected: original, quantity: original.quantity, totalCost: nil,
+            reason: "missing", now: now)
+        #expect(throws: (any Error).self) {
+            try repo.recordTrade(side: .sell, expected: original, quantity: 1, price: 130, fees: 0,
+                tradeDate: now.addingTimeInterval(60), cashPositionID: cash.id, cashName: cash.name,
+                now: now.addingTimeInterval(120))
+        }
+        #expect(try repo.fetchPositionTrades().isEmpty)
+        #expect(try holding(repo, original.id).quantity == original.quantity)
+        #expect(try holding(repo, cash.id).quantity == cash.quantity)
+    }
+
+    @Test @MainActor func synchronizationReloadsACostStatusChangeWithoutBalanceChanges() throws {
+        let (repo, original, _) = try setup()
+        let store = PortfolioStore(positionRepository: repo)
+        #expect(store.hasKnownPortfolioCost)
+        _ = try repo.reconcilePosition(expected: original, quantity: original.quantity,
+            totalCost: nil, reason: "missing", now: now)
+        store.synchronizePersistedMarketDataIfNeeded()
+        #expect(!store.hasKnownPortfolioCost)
+        #expect(store.positionReconciliations.count == 1)
+    }
+
+    @Test @MainActor func lifecycleKeepsAppAIAndMCPConsistentAcrossRestore() throws {
+        let (repo, original, cash) = try setup()
+        // External addition, then a balance checkpoint: neither can credit cash.
+        let added = try repo.recordTrade(side: .add, expected: original, quantity: 2, price: 125, fees: 1,
+            tradeDate: now.addingTimeInterval(-120), cashPositionID: nil, cashName: "",
+            now: now.addingTimeInterval(-60))
+        _ = try repo.reconcilePosition(expected: holding(repo, original.id), quantity: 15,
+            totalCost: nil, reason: "missing", now: now)
+        let unknown = try holding(repo, original.id)
+        #expect(!unknown.costIsKnown)
+        let sold = try repo.recordTrade(side: .sell, expected: unknown, quantity: 3, price: 135, fees: 2,
+            tradeDate: now.addingTimeInterval(60), cashPositionID: cash.id, cashName: cash.name,
+            now: now.addingTimeInterval(120))
+        #expect(sold.realizedProfit == nil)
+        #expect(try holding(repo, cash.id).quantity == 1403)
+        // A current quote, a new store and a ZIP round trip must agree on the same segments.
+        _ = try repo.applyQuoteRefresh(updatedPositions: [position(original.id, quantity: 12, price: 140, at: now)],
+            snapshotPositions: [], snapshotDate: now)
+        let before = try repo.exportDataPayload()
+        let zip = FileManager.default.temporaryDirectory.appendingPathComponent("Lifecycle-\(UUID()).zip")
+        _ = try PortfolixDataPackageService.write(payload: before, to: zip)
+        let restored = try PositionRepository(databaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("LifecycleRestore-\(UUID())/test.sqlite"))
+        _ = try restored.importDataPayload(PortfolixDataPackageService.prepareImport(from: zip).payload)
+        let store = PortfolioStore(positionRepository: restored)
+        let expectedProfit: Decimal = 242 // 100 + 2×(130−125)−1 + 3×(135−130)−2 + 12×(140−130)
+        #expect(store.todayProfitCNY(asOf: now) == expectedProfit)
+        #expect(try profit(restored, through: now) == expectedProfit)
+        #expect(!store.hasKnownPortfolioCost)
+        #expect(store.investmentCloudDailyProfitItems(asOf: now).reduce(Decimal.zero) { $0 + $1.amountCNY } == expectedProfit)
+        let daily = try tool(restored, "get_daily_profit", arguments: ["start_date": PositionClosureMath.day(now), "end_date": PositionClosureMath.day(now)])
+        #expect((daily["days"] as? [[String: String]])?.first?["amount_cny"] == "242")
+        let summary = try tool(restored, "get_portfolio_summary")
+        #expect(summary["realized_profit_cny"] is NSNull)
+        #expect((summary["latest_snapshot"] as? [String: String])?["total_cost_cny"] == nil)
+        let aiRequest = try AIPortfolioToolRequest(call: LLMFunctionCall(
+            callID: "review-summary", name: AIPortfolioDataTool.summary.rawValue, arguments: "{}"))
+        let ai = AIPortfolioDataToolExecutor.execute(aiRequest, snapshot: AIPortfolioToolSnapshot(
+            positions: store.positions, history: store.snapshotHistory, dailyProfit: store.dailyProfitHistory,
+            trades: store.positionTrades, openings: store.positionOpeningBalances,
+            reconciliations: store.positionReconciliations, asOf: now))
+        let aiData = try #require((JSONSerialization.jsonObject(with: Data(ai.utf8)) as? [String: Any])?["data"] as? [String: Any])
+        #expect(aiData["total_cost_cny"] is NSNull)
+        #expect(aiData["realized_profit_cny"] is NSNull)
+        let activity = try tool(restored, "list_transactions")
+        let records = try #require(activity["records"] as? [[String: Any]])
+        let sale = try #require(records.first { $0["record_id"] as? String == sold.id.uuidString })
+        #expect(sale["effective_at"] as? String == sold.effectiveAt)
+        #expect(sale["recorded_at"] as? String == sold.recordedAt)
+        let request = try AIPortfolioToolRequest(call: LLMFunctionCall(
+            callID: "review-transactions", name: AIPortfolioDataTool.transactions.rawValue, arguments: "{}"))
+        let transactionJSON = AIPortfolioDataToolExecutor.execute(request, snapshot: AIPortfolioToolSnapshot(
+            positions: store.positions, trades: store.positionTrades, openings: store.positionOpeningBalances,
+            reconciliations: store.positionReconciliations, asOf: now))
+        let aiRecords = try #require((JSONSerialization.jsonObject(with: Data(transactionJSON.utf8)) as? [String: Any])?["data"] as? [[String: Any]])
+        #expect(aiRecords.first { $0["record_id"] as? String == sold.id.uuidString }?["effective_at"] as? String == sold.effectiveAt)
+        // Undo after restore, verify checkpoint boundaries, then explicitly confirm the cost.
+        try restored.reverseTrade(id: sold.id, now: now.addingTimeInterval(180))
+        #expect(try holding(restored, cash.id).quantity == 1000)
+        #expect(throws: (any Error).self) { try restored.reverseTrade(id: added.id, now: now.addingTimeInterval(240)) }
+        _ = try restored.reconcilePosition(expected: holding(restored, original.id), quantity: 15,
+            totalCost: 1200, reason: "correction", now: now.addingTimeInterval(300))
+        #expect(try holding(restored, original.id).costIsKnown)
+        #expect(try restored.exportDataPayload().holdings.first { $0.id == original.id.uuidString }?.costKnown != false)
+    }
+
+    @Test func backgroundHelperKeepsCashCheckpointAndDoesNotCreateIncome() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let helper = root.appendingPathComponent(".build/debug/PortfolixPriceUpdater")
+        #expect(FileManager.default.isExecutableFile(atPath: helper.path))
+        let repo = try PositionRepository(databaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("BackgroundCheckpoint-\(UUID())/test.sqlite"))
+        let cash = PositionClosureMath.cashPosition(currency: .usdt, quantity: 1000, name: "Test Cash")
+        try repo.insert(cash)
+        try repo.replaceDailySnapshots(positions: [cash], snapshotDate: now.addingTimeInterval(-86400))
+        let record = try repo.reconcilePosition(expected: cash, quantity: 1010, totalCost: 1010,
+            reason: "reconcile", now: now)
+        try repo.setAppSetting(key: AutomaticPriceUpdateSchedule.enabledSettingKey, value: "true")
+        let process = Process()
+        process.executableURL = helper
+        process.arguments = ["--once"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PORTFOLIX_DATABASE_PATH"] = repo.storageURL.path
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        #expect(try repo.appSetting(for: AutomaticPriceUpdateSchedule.lastResultSettingKey) == "no_eligible_assets")
+        #expect(try holding(repo, cash.id).quantity == 1010)
+        #expect(try repo.fetchReconciliations() == [record])
+        #expect(try repo.fetchPositionTrades().isEmpty)
+        #expect(try abs(profit(repo, through: now).doubleValue) < 0.000001)
+        let daily = try tool(repo, "get_daily_profit", arguments: ["start_date": PositionClosureMath.day(now), "end_date": PositionClosureMath.day(now)])
+        let amount = try #require((daily["days"] as? [[String: String]])?.first?["amount_cny"].flatMap(PositionClosureMath.decimal))
+        #expect(abs(amount.doubleValue) < 0.000001)
     }
 }

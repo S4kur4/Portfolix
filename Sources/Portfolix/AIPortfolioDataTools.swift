@@ -27,7 +27,7 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       ]
       required = []
       description = self == .transactions
-        ? "Read-only: opening balances, additions, sales and external cash withdrawals. Opening balances are migrated starting balances, not purchases or cash flows. External additions do not debit cash; cash-funded additions do. Cash withdrawals reduce portfolio cash, are not sales or investment losses, and have no realized P&L. Cash cannot be sold. Optional name/code query and pagination, default 20 rows. Cannot execute or modify records."
+        ? "Read-only: balance checkpoints, opening balances, additions, sales and external cash withdrawals. Reconciliations set balances without cash flow or realized profit; missing trades are not reconstructed and unknown cost is unavailable. Opening balances are migrated starting balances, not purchases or cash flows. External additions do not debit cash; cash-funded additions do. Cash withdrawals reduce portfolio cash, are not sales or investment losses, and have no realized P&L. Cash cannot be sold. Optional name/code query and pagination, default 20 rows. Cannot execute or modify records."
         : self == .closedHoldings
         ? "Read-only: sale records for assets no longer held, including current partial/full sales and legacy closures. Multiple sales can belong to one asset. Includes quantities, prices, fees, net proceeds, destination cash and realized P&L. Optional name/code query and pagination, default 20 rows. No trading or writes."
         : "Read-only: current holdings with asset refs, quantities, costs, market values, weights, unrealized P&L and quote dates. Optional name/code query; paginated, default 20 rows. Use next_offset until omitted_count is zero when the complete list is needed."
@@ -255,6 +255,7 @@ enum AIPortfolioDataToolExecutor {
           "trade_date": row.tradeDate, "quantity": row.quantity, "currency": row.currency.rawValue,
           "recorded_at": row.recordedAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull()]
         data["execution_price"] = decimal(row.price)
+        data["effective_at"] = (row.trade?.effectiveAt ?? row.reconciliation?.effectiveAt) as Any? ?? NSNull()
         data["fees"] = decimal(row.fee)
         data["recorded_amount_quote"] = decimal(row.amount)
         data["cash_amount"] = decimal(row.kind.hasCashFlow ? row.amount : 0)

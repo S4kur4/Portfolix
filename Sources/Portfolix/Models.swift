@@ -1526,13 +1526,13 @@ final class PortfolioStore {
             guard !record.isReversed, record.tradeDate == PositionClosureMath.day(date),
                   !activeIDs.contains(record.asset.id), seen.insert(record.asset.id).inserted,
                   let profit = adjustments[record.asset.id], profit != 0,
-                  let position = try? record.asset.position() else { return nil }
+                  let position = try? record.asset.position(), todayProfitIsAvailable(for: position, asOf: date) else { return nil }
             return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
         }
         let calibrated = positionReconciliations.compactMap { record -> InvestmentCloudItem? in
             guard record.effectiveDay == PositionClosureMath.day(date), !activeIDs.contains(record.asset.id),
                   seen.insert(record.asset.id).inserted, let profit = adjustments[record.asset.id], profit != 0,
-                  let position = try? record.asset.position() else { return nil }
+                  let position = try? record.asset.position(), todayProfitIsAvailable(for: position, asOf: date) else { return nil }
             return InvestmentCloudItem(position: position, dailyProfitCNY: profit)
         }
         return (open + closed + sold + calibrated).sorted { $0.areaWeight > $1.areaWeight }
@@ -2956,7 +2956,7 @@ final class PortfolioStore {
             positionTrades = try positionRepository.fetchPositionTrades()
             positionOpeningBalances = try positionRepository.fetchOpeningBalances()
             tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
-        positionReconciliations = try positionRepository.fetchReconciliations()
+            positionReconciliations = try positionRepository.fetchReconciliations()
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
             refreshInvestmentDistributionIfNeeded()
@@ -2983,6 +2983,7 @@ final class PortfolioStore {
                     NSDecimalNumber(decimal: position.totalCost).stringValue,
                     NSDecimalNumber(decimal: position.averageCost).stringValue,
                     NSDecimalNumber(decimal: position.latestPrice).stringValue,
+                    position.costIsKnown ? "known" : "unknown",
                     position.source,
                     position.quoteTime,
                     position.fetchedAt,
@@ -3169,7 +3170,7 @@ final class PortfolioStore {
                 snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
                 dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
                 tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
-        positionReconciliations = try positionRepository.fetchReconciliations()
+                positionReconciliations = try positionRepository.fetchReconciliations()
             } else if !replacements.isEmpty {
                 positions = mergedPositions
             }
@@ -3197,7 +3198,7 @@ final class PortfolioStore {
                     snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
                     dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
                     tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
-        positionReconciliations = try positionRepository.fetchReconciliations()
+                    positionReconciliations = try positionRepository.fetchReconciliations()
                 } else {
                     positions = updatedPositions
                 }
@@ -3338,6 +3339,10 @@ final class PortfolioStore {
         let closedTrades = positionTrades.filter { !$0.isReversed && $0.side == .sell
             && $0.tradeDate == snapshotDate && !activeIDs.contains($0.asset.id) }
         let legacyClosures = activePositionClosures.filter { $0.tradeDate == snapshotDate }
+        let hasCalibratedProfit = positionReconciliations.contains {
+            $0.effectiveDay == snapshotDate && $0.asset.category != AssetCategory.cash.rawValue
+                && !activeIDs.contains($0.asset.id)
+        }
         // A completed sale still contributes today's P/L even if only cash remains.
         if !legacyClosures.isEmpty || !closedTrades.isEmpty {
             let completeClosures = legacyClosures.allSatisfy { $0.dailyProfitCNY != nil }
@@ -3346,6 +3351,8 @@ final class PortfolioStore {
             }.map(\.assetID))
             let completeTrades = Set(closedTrades.map { $0.asset.id }).isSubset(of: anchoredIDs)
             return completeClosures && completeTrades && availableTodayCount == nonCashPositions.count ? "available" : "partial"
+        } else if hasCalibratedProfit {
+            return availableTodayCount == nonCashPositions.count ? "available" : "partial"
         } else if nonCashPositions.isEmpty {
             return "not_applicable_cash"
         } else if availableTodayCount == nonCashPositions.count {
@@ -3429,7 +3436,7 @@ final class PortfolioStore {
             snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
             dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
             tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
-        positionReconciliations = try positionRepository.fetchReconciliations()
+            positionReconciliations = try positionRepository.fetchReconciliations()
         } catch {
             persistenceErrorMessage = error.localizedDescription
         }
