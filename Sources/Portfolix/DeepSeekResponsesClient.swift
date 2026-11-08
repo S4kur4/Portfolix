@@ -415,6 +415,12 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         if let error = object["error"] as? [String: Any] {
             throw LLMClientError.requestFailed(error["message"] as? String ?? "DeepSeek Responses API returned an error")
         }
+        if let status = object["status"] as? String, status != "completed" {
+            if status == "incomplete" {
+                throw LLMClientError.truncatedFinalContent(finishReason: incompleteReason(in: object))
+            }
+            throw LLMClientError.invalidResponse
+        }
         let output = object["output"] as? [[String: Any]] ?? []
         var callIDs = Set<String>()
         let functionCalls = try output.filter { $0["type"] as? String == "function_call" }.map { item in
@@ -437,6 +443,9 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         let message = output.last {
             $0["type"] as? String == "message"
                 && ($0["role"] == nil || $0["role"] as? String == "assistant")
+        }
+        if let status = message?["status"] as? String, status != "completed" {
+            throw LLMClientError.truncatedFinalContent(finishReason: status)
         }
         let texts = (message?["content"] as? [[String: Any]] ?? []).compactMap { dictionary -> String? in
             guard dictionary["type"] as? String == "output_text" else { return nil }

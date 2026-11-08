@@ -5,6 +5,9 @@ enum AIFollowUpResponseParser {
     private static let maximumObjects = 32
     private static let maximumEnvelopeDepth = 3
     private static let leadingMarkdownLink = try! NSRegularExpression(pattern: #"^\[[^\[\]\r\n]+\]\([^\s()]+\)"#)
+    private static let answerMarker = try! NSRegularExpression(pattern: #"(?im)^[\t ]*<answer(?=[\s>]|$)"#)
+    private static let limitationsMarker = try! NSRegularExpression(pattern: #"(?im)(?:^[\t ]*|(?<=[。.!?！？])[\t ]*)<limitations(?=[\s>]|$)"#)
+    private static let orphanClosingMarker = try! NSRegularExpression(pattern: #"(?im)^[\t ]*</(?:answer|limitations)(?=[\s>]|$)"#)
 
     private enum Result {
         case value(LLMFollowUpPayload)
@@ -35,6 +38,15 @@ enum AIFollowUpResponseParser {
             : "这条回复暂时无法显示，请重新提问。")
     }
 
+    static func containsResponseEnvelope(_ text: String) -> Bool {
+        guard text.utf8.count <= maximumInputBytes else { return true }
+        let range = NSRange(text.startIndex..., in: text)
+        if answerMarker.firstMatch(in: text, range: range) != nil
+            || limitationsMarker.firstMatch(in: text, range: range) != nil
+            || orphanClosingMarker.firstMatch(in: text, range: range) != nil { return true }
+        return objectSpans(in: text)?.contains { startsWithEnvelopeKey(text[$0.range]) } ?? true
+    }
+
     private static func inspect(_ raw: String, depth: Int) -> Result {
         guard depth <= maximumEnvelopeDepth, raw.utf8.count <= maximumInputBytes else {
             return .invalid(readablePrefix: nil)
@@ -42,6 +54,12 @@ enum AIFollowUpResponseParser {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let payload = try? JSONDecoder().decode(LLMFollowUpPayload.self, from: Data(text.utf8)) {
             return normalized(payload, depth: depth)
+        }
+        if let result = inspectTaggedAnswer(in: text, depth: depth) { return result }
+        if let result = inspectTaggedLimitations(in: text, depth: depth) { return result }
+        if let marker = orphanClosingMarker.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(marker.range, in: text) {
+            return .invalid(readablePrefix: readablePrefix(String(text[..<range.lowerBound]), depth: depth + 1))
         }
 
         guard let spans = objectSpans(in: text) else { return .invalid(readablePrefix: nil) }
@@ -75,6 +93,58 @@ enum AIFollowUpResponseParser {
             return .invalid(readablePrefix: nil)
         }
         return .value(LLMFollowUpPayload(answer: text, limitations: []))
+    }
+
+    private static func inspectTaggedAnswer(in text: String, depth: Int) -> Result? {
+        guard let marker = answerMarker.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(marker.range, in: text) else { return nil }
+        let block = String(text[range.lowerBound...])
+        let prefix = String(text[..<range.lowerBound])
+        guard let opening = block.range(of: #"(?i)^[\t ]*<answer\s*>"#, options: .regularExpression),
+              let closing = block.range(of: #"(?i)</answer\s*>"#, options: .regularExpression),
+              closing.lowerBound >= opening.upperBound
+        else { return .invalid(readablePrefix: readablePrefix(prefix, depth: depth + 1)) }
+        let body = String(block[opening.upperBound..<closing.lowerBound])
+        let suffix = block[closing.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        if suffix.isEmpty { return inspect(body, depth: depth + 1) }
+        guard suffix.range(of: #"(?i)^<limitations(?=[\s>]|$)"#, options: .regularExpression) != nil else {
+            return .invalid(readablePrefix: readablePrefix(body, depth: depth + 1))
+        }
+        return inspect(body + "\n" + suffix, depth: depth + 1)
+    }
+
+    private static func readablePrefix(_ text: String, depth: Int) -> String? {
+        switch inspect(text, depth: depth) {
+        case let .value(payload): return payload.answer.isEmpty ? nil : payload.answer
+        case let .invalid(prefix): return prefix
+        }
+    }
+
+    // Some responses append an XML-style metadata block instead of the JSON envelope.
+    // Parse that block separately so live replies, history and conversation memory agree.
+    private static func inspectTaggedLimitations(in text: String, depth: Int) -> Result? {
+        let markers = limitationsMarker.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard let first = markers.first, let range = Range(first.range, in: text) else { return nil }
+        let prefix = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixResult = inspect(prefix, depth: depth + 1)
+        let readablePrefix: String?
+        switch prefixResult {
+        case let .value(payload): readablePrefix = payload.answer.isEmpty ? nil : payload.answer
+        case let .invalid(prefix): readablePrefix = prefix
+        }
+        let block = String(text[range.lowerBound...])
+        guard markers.count == 1,
+              let opening = block.range(of: #"(?i)^[\t ]*<limitations\s*>"#, options: .regularExpression),
+              let closing = block.range(of: #"(?i)</limitations\s*>\s*$"#, options: .regularExpression),
+              closing.lowerBound >= opening.upperBound,
+              let limitations = try? JSONDecoder().decode([String].self,
+                from: Data(block[opening.upperBound..<closing.lowerBound].utf8)),
+              let readablePrefix
+        else { return .invalid(readablePrefix: readablePrefix) }
+        guard case let .value(payload) = prefixResult else { return prefixResult }
+        var seen = Set<String>()
+        return .value(LLMFollowUpPayload(answer: readablePrefix,
+            limitations: (payload.limitations + limitations).filter { seen.insert($0).inserted }))
     }
 
     private static func normalized(_ payload: LLMFollowUpPayload, depth: Int) -> Result {
@@ -132,10 +202,12 @@ enum AIFollowUpResponseParser {
             else if character == "\\" { escaped = true }
             else if character == "\"" {
                 guard let key = try? JSONDecoder().decode(String.self, from: Data(keyText[...index].utf8)),
-                      ["answer", "limitations"].contains(key) else { return false }
-                return keyText[keyText.index(after: index)...].drop(while: \.isWhitespace).first == ":"
+                      ["answer", "limitations"].contains(key.lowercased()) else { return false }
+                return true
             }
         }
-        return false
+        // A cut-off field name is still an internal envelope, not a prose fallback.
+        guard let partial = try? JSONDecoder().decode(String.self, from: Data((String(keyText) + "\"").utf8)) else { return false }
+        return ["answer", "limitations"].contains { $0.hasPrefix(partial.lowercased()) }
     }
 }

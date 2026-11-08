@@ -170,6 +170,9 @@ enum AIReportPayloadValidationError: LocalizedError, Equatable, Sendable {
         case let .invalidJSON(detail):
             return "只返回一个合法 JSON 对象；修复 JSON 语法，不要输出 Markdown 或解释。解析问题：\(detail)。"
         case let .invalidField(field):
+            if field.hasSuffix(".response_envelope") {
+                return "修复 \(field)：该字段只能包含用户可读正文，移除 answer/limitations 字段标签或嵌套 JSON 封装。必要的数据局限放入报告的 limitations 数组；保留已有事实，不增加新结论。"
+            }
             if field.hasSuffix(".asset_association") {
                 return "修复 \(field) 的证据归属：scope=portfolio 的证据可提供组合背景；scope=positions 的证据，其 position_refs 必须至少包含本条对应资产之一。核对 related_refs 或 asset_name/symbol，替换错配的 evidence_refs；无法支持本条时省略或据真实依据改写，不要伪造证据或把无关资产的事实套用到本资产。"
             }
@@ -606,6 +609,7 @@ struct AIAnalysisAgent: Sendable {
             raw,
             question: normalizedQuestion,
             responseLanguage: responseLanguage,
+            citationCatalog: citationCatalog,
             configuration: followUpConfiguration,
             apiKey: llmKey,
             runtimeRunID: runID,
@@ -721,6 +725,7 @@ struct AIAnalysisAgent: Sendable {
         _ raw: String,
         question: String,
         responseLanguage: AIResponseLanguage,
+        citationCatalog: [AICitationCatalogEntry],
         configuration: AIProviderConfiguration,
         apiKey: String,
         runtimeRunID: UUID,
@@ -728,7 +733,7 @@ struct AIAnalysisAgent: Sendable {
     ) async throws -> (payload: LLMFollowUpPayload, answer: String, usedRepair: Bool, repairReason: String?) {
         let repairReason: String
         do {
-            let validated = try Self.validatedFollowUpPayload(raw, responseLanguage: responseLanguage)
+            let validated = try Self.validatedFollowUpPayload(raw, responseLanguage: responseLanguage, citationCatalog: citationCatalog)
             return (validated.payload, validated.answer, false, nil)
         } catch {
             try AIInformationSecurityGuardrail.validateGeneratedText(raw)
@@ -761,7 +766,7 @@ struct AIAnalysisAgent: Sendable {
             }
         )
         let repaired = repairedCompletion.content
-        guard let validated = try? Self.validatedFollowUpPayload(repaired, responseLanguage: responseLanguage) else {
+        guard let validated = try? Self.validatedFollowUpPayload(repaired, responseLanguage: responseLanguage, citationCatalog: citationCatalog) else {
             throw AIAnalysisAgentError.invalidReport
         }
         return (validated.payload, validated.answer, true, repairReason)
@@ -1938,6 +1943,10 @@ struct AIAnalysisAgent: Sendable {
         let normalizedPayload = AIReportPayloadNormalizer.normalize(payload)
 
         try AIAnalysisSchemaValidator.validate(payload: normalizedPayload)
+        for (field, value) in userFacingReportFields(normalizedPayload)
+            where AIFollowUpResponseParser.containsResponseEnvelope(value) {
+            throw AIReportPayloadValidationError.invalidField("\(field).response_envelope")
+        }
 
         let text = Self.userFacingReportText(normalizedPayload)
         do {
@@ -1952,16 +1961,26 @@ struct AIAnalysisAgent: Sendable {
     }
 
     private static func userFacingReportText(_ payload: LLMReportPayload) -> String {
-        [
-            payload.summary,
-            payload.healthScoreExplanation,
-            payload.riskItems.map { "\($0.title) \($0.evidence) \($0.impact)" }.joined(separator: " "),
-            payload.assetAlerts.map { "\($0.title) \($0.reason)" }.joined(separator: " "),
-            payload.rebalanceActions.map { "\($0.title) \($0.rationale) \($0.riskNote ?? "")" }.joined(separator: " "),
-            payload.questionsToConsider.joined(separator: " "),
-            payload.dataQualityNotes.joined(separator: " "),
-            payload.limitations.joined(separator: " "),
-        ].joined(separator: " ")
+        userFacingReportFields(payload).map(\.1).joined(separator: " ")
+    }
+
+    private static func userFacingReportFields(_ payload: LLMReportPayload) -> [(String, String)] {
+        var fields = [("summary", payload.summary), ("health_score_explanation", payload.healthScoreExplanation)]
+        for (index, item) in payload.riskItems.enumerated() {
+            fields += [("risk_items[\(index)].title", item.title), ("risk_items[\(index)].evidence", item.evidence),
+                       ("risk_items[\(index)].impact", item.impact)]
+        }
+        for (index, item) in payload.assetAlerts.enumerated() {
+            fields += [("asset_alerts[\(index)].title", item.title), ("asset_alerts[\(index)].reason", item.reason)]
+        }
+        for (index, item) in payload.rebalanceActions.enumerated() {
+            fields += [("rebalance_actions[\(index)].title", item.title), ("rebalance_actions[\(index)].rationale", item.rationale),
+                       ("rebalance_actions[\(index)].risk_note", item.riskNote ?? "")]
+        }
+        for (name, values) in [("questions_to_consider", payload.questionsToConsider), ("data_quality_notes", payload.dataQualityNotes), ("limitations", payload.limitations)] {
+            fields += values.enumerated().map { ("\(name)[\($0.offset)]", $0.element) }
+        }
+        return fields
     }
 
     private static func reportPayloadValidationError(from error: Error) -> AIReportPayloadValidationError {
@@ -2177,14 +2196,15 @@ struct AIAnalysisAgent: Sendable {
 
     static func validatedFollowUpPayload(
         _ raw: String,
-        responseLanguage: AIResponseLanguage = .simplifiedChinese
+        responseLanguage: AIResponseLanguage = .simplifiedChinese,
+        citationCatalog: [AICitationCatalogEntry] = []
     ) throws -> (payload: LLMFollowUpPayload, answer: String) {
         try AIInformationSecurityGuardrail.validateGeneratedText(raw)
         guard let payload = decodeFollowUpPayload(raw) else {
             throw AIFollowUpResponseError.invalidStructure
         }
-        let answer = try AIFollowUpGuardrail.validatedAnswer(payload.answer)
-        _ = responseLanguage
+        let answer = try AIFollowUpGuardrail.validatedAnswer(AIUserFacingTextSanitizer.sanitize(payload.answer, language: responseLanguage))
+        try AIFollowUpGuardrail.validateVisibleAnswer(AIMessageCitationResolver.resolve(answer, catalog: citationCatalog).text)
         return (payload, answer)
     }
 
@@ -3096,28 +3116,49 @@ enum AIUserFacingTextSanitizer {
     ]
 
     static func sanitize(_ text: String, language: AIResponseLanguage? = nil) -> String {
+        sanitize(text, citations: [], language: language).text
+    }
+
+    static func sanitize(_ text: String, citations: [AIMessageCitation], language: AIResponseLanguage? = nil)
+        -> (text: String, citations: [AIMessageCitation]) {
         let resolvedLanguage = language ?? AIResponseLanguage.detecting(from: text)
-        let sanitized = replacements.reduce(text) { result, replacement in
-            result.replacingOccurrences(
-                of: replacement.0,
-                with: resolvedLanguage == .english ? replacement.2 : replacement.1,
-                options: [.caseInsensitive]
-            )
+        let source = NSMutableString(string: text)
+        var mapped = citations.map { citation in
+            AIMessageCitation(id: citation.id, utf16Offset: min(max(0, citation.utf16Offset), source.length), title: citation.title, url: citation.url)
+        }
+        func replace(_ range: NSRange, with replacement: String) {
+            let length = replacement.utf16.count
+            mapped = mapped.compactMap { citation in
+                let offset = citation.utf16Offset
+                // An anchor inside removed/replaced text has no reliable visible claim.
+                if offset > range.location && (offset < NSMaxRange(range) || (length == 0 && offset == NSMaxRange(range))) { return nil }
+                let adjusted = offset >= NSMaxRange(range) ? offset + length - range.length : offset
+                return AIMessageCitation(id: citation.id, utf16Offset: adjusted, title: citation.title, url: citation.url)
+            }
+            source.replaceCharacters(in: range, with: replacement)
+        }
+        func replaceMatches(_ pattern: String, with replacement: String) {
+            guard let expression = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return }
+            for match in expression.matches(in: source as String, range: NSRange(location: 0, length: source.length)).reversed() {
+                replace(match.range, with: replacement)
+            }
+        }
+        for replacement in replacements {
+            replaceMatches(NSRegularExpression.escapedPattern(for: replacement.0),
+                with: resolvedLanguage == .english ? replacement.2 : replacement.1)
         }
         let chineseDisclosurePattern = #"以上内容由\s*AI\s*基于现有数据理解生成[，,]\s*仅供参考[，,]\s*不构成投资建议[。.]?"#
         let englishDisclosurePattern = #"Generated by\s*AI\s*from available data for reference only[.;,\s]*(?:This is )?not investment advice[.]?"#
-        return sanitized
-            .replacingOccurrences(
-                of: chineseDisclosurePattern,
-                with: "",
-                options: [.regularExpression, .caseInsensitive]
-            )
-            .replacingOccurrences(
-                of: englishDisclosurePattern,
-                with: "",
-                options: [.regularExpression, .caseInsensitive]
-            )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        replaceMatches(chineseDisclosurePattern, with: "")
+        replaceMatches(englishDisclosurePattern, with: "")
+        let trimmed = (source as String).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ("", []) }
+        let range = source.range(of: trimmed)
+        if NSMaxRange(range) < source.length {
+            replace(NSRange(location: NSMaxRange(range), length: source.length - NSMaxRange(range)), with: "")
+        }
+        if range.location > 0 { replace(NSRange(location: 0, length: range.location), with: "") }
+        return (source as String, mapped)
     }
 }
 
@@ -3366,7 +3407,7 @@ enum AIAnalysisSchemaValidator {
     }
 
     private static func bounded(_ value: String, min: Int, max: Int) -> Bool {
-        let count = value.trimmingCharacters(in: .whitespacesAndNewlines).count
+        let count = AIUserFacingTextSanitizer.sanitize(value).count
         return count >= min && count <= max
     }
 }
@@ -3399,6 +3440,23 @@ enum AIFollowUpGuardrail {
         try validateAnswerCompleteness(trimmed)
         try AIInformationSecurityGuardrail.validateGeneratedText(trimmed)
         return trimmed
+    }
+
+    static func validateVisibleAnswer(_ answer: String) throws {
+        guard let parsed = try? AttributedString(markdown: answer, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else {
+            _ = try validatedAnswer(answer)
+            return
+        }
+        let visible = parsed.runs.map { run -> String in
+            guard run.imageURL == nil else { return "" }
+            let text = String(parsed[run.range].characters)
+            let intent = run.inlinePresentationIntent ?? []
+            if intent.contains(.inlineHTML), !intent.contains(.code) {
+                return text.replacingOccurrences(of: #"</?u>"#, with: "", options: [.regularExpression, .caseInsensitive])
+            }
+            return text
+        }.joined()
+        _ = try validatedAnswer(visible)
     }
 
     private static func validateAnswerCompleteness(_ answer: String) throws {

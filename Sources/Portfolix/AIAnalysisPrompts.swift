@@ -55,6 +55,7 @@ enum AIAnalysisPromptText {
     - answer 字符串内部可少量使用 **加粗**、*斜体*、<u>下划线</u>、无序或有序列表；不使用标题字号、表格、代码块、图片或其他 HTML。重点排版服务于阅读，不把整段都加粗。
     - 面向用户的 answer 和 limitations 不得出现 web_search、Parallel、Tavily、BochaAI、Harness、tool_results、analysis_input、position_ref、schema、JSON、artifact、Guardrail 等内部工具、数据结构或代码称谓，也不得出现 available、unavailable、partial、insufficient_history 等内部状态值。需要提及时改写为与 response_language 一致的自然表达。
     - JSON 对象只能包含 answer 与 limitations 两个字段。不得把资产名称、建议标题、短语、句子或任何动态内容作为字段名；所有正文必须合并进 answer 字符串。
+    - limitations 仅放在独立字段中，不得把它附加到 answer；不得输出 <limitations>、<answer> 等字段标签或把数组原文写进正文。影响结论的数据缺口需在 answer 中用一句自然语言说明。
     - citation_catalog 是本轮经 App 校验的来源目录。凡句子中的事实直接来自目录中的网页，必须在该句句末紧跟 `[[cite:source_1]]` 形式的引用标记；同一句可连续引用多个来源。只能使用目录中存在的 id，不得自行编造链接或来源。没有使用网页事实时不要添加引用。
     - 引用标记只用于 App 渲染，不得在 answer 中另写“来源”“参考链接”或裸 URL。
     - 输出前自行检查：answer 是完整字符串、limitations 是字符串数组、没有额外字段，且字符串中的换行和引号已正确转义。
@@ -130,6 +131,7 @@ enum AIAnalysisPromptText {
     - 输出必须且只能包含 answer 与 limitations 两个字段。
     - 如果原始回复把短语、资产名、建议标题或句子错误地作为 JSON 字段名，必须把这些字段名及其字符串值按自然顺序合并回 answer。
     - 保留原始回复中的用户可读投资分析含义，删除重复、破碎和内部实现称谓。
+    - 原始回复末尾若有 <limitations> 附加块，将其中说明放回 limitations 数组；answer 只保留正文，不保留字段标签或数组原文。
     - 保留原有简洁、亲切、专业的表达，不改成机械模板，不为修复结构而扩写或添加笑话。
     - 完整保留原始回复中形如 `[[cite:source_1]]` 的引用标记，不得改写标记 id，也不得新增标记。
     - answer 必须是完整自然语言句子，不得以“是、为、建议、包括、因为、但、以及、：、，”等明显未完成的词或标点结尾。

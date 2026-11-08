@@ -250,6 +250,7 @@ enum InvestmentDistributionEngine {
             && title == title.trimmingCharacters(in: .whitespacesAndNewlines)
             && !title.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
             && !title.contains("://")
+            && !AIFollowUpResponseParser.containsResponseEnvelope(title)
     }
 
     private static func isAssetType(_ domain: InvestmentDomain) -> Bool {

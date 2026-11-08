@@ -108,6 +108,25 @@ struct AIOptimizationTests {
   }
 
   @Test
+  func taggedLimitationsKeepCitationsAndDiagnosticsWithoutAnExtraModelCall() async throws {
+    let plan = #"{"status":"continue","tool_calls":[{"id":"search_1","provider":"Parallel","query":"gold spot price official latest quotation","position_refs":[]}],"limitations":[]}"#
+    let response = "报价需要注明计价单位和时间。[[cite:source_1]]\n\n<limitations>[\"报价不是实时行情。\"]</limitations>"
+    let (client, key) = transport([plan, response])
+    let result = try await AIAnalysisAgent(
+      llm: client, search: OptimizationSearch(), credentialStore: OptimizationCredentials(key: key)
+    ).answerFollowUp(
+      question: "今天黄金价格是多少？", report: nil, artifacts: nil, positions: [],
+      llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.answer == "报价需要注明计价单位和时间。")
+    #expect(result.citations.count == 1)
+    #expect(result.citations.first?.utf16Offset == result.answer.utf16.count)
+    #expect(result.guardrailResultJSON.contains("报价不是实时行情。"))
+    #expect(result.modelUsage?.calls.map(\.stage) == ["follow_up_planning", "follow_up_answer"])
+    #expect(!result.guardrailResultJSON.contains("follow_up_response_repaired"))
+  }
+
+  @Test
   func malformedEnvelopeUsesTheBoundedRepairRatherThanPublishingInternalText() async throws {
     let (client, key) = transport(["先核对资产记录。\n{\"answer\":7}", answer])
     let result = try await AIAnalysisAgent(
@@ -118,6 +137,17 @@ struct AIOptimizationTests {
     #expect(result.modelUsage?.calls.map(\.stage) == ["follow_up_answer", "follow_up_repair"])
     #expect(!result.answer.contains("\"answer\""))
     #expect(result.guardrailResultJSON.contains("invalid_structure"))
+  }
+
+  @Test
+  func aReplyRemovedByCleanupIsRepairedInsteadOfSavingAnEmptyBubble() async throws {
+    let empty = String(decoding: try JSONSerialization.data(withJSONObject: ["answer": AIAdviceDisclosure.text, "limitations": []]), as: UTF8.self)
+    let (client, key) = transport([empty, answer])
+    let result = try await AIAnalysisAgent(llm: client, credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: "解释分散投资", report: nil, artifacts: nil, positions: [], llmConfiguration: .default, searchConfiguration: .default)
+    #expect(!result.answer.isEmpty)
+    #expect(result.modelUsage?.calls.map(\.stage) == ["follow_up_answer", "follow_up_repair"])
+    #expect(result.guardrailResultJSON.contains("empty_answer"))
   }
 
   @Test
@@ -305,11 +335,11 @@ struct AIOptimizationTests {
     #expect(!json.contains("解释复利"))
   }
 
-  @Test @MainActor
-  func reportRepairUsageSurvivesDatabaseRoundTrip() async throws {
+  @Test(arguments: ["{}", #"{"summary":"<answer>先核对持仓。</answer>","health_score_explanation":"请先核对记录。"}"#]) @MainActor
+  func reportRepairUsageSurvivesDatabaseRoundTrip(initialResponse: String) async throws {
     let payload =
       #"{"summary":"组合集中度需要持续复核。","health_score_explanation":"仅解释约束匹配，不代表收益保证。","risk_items":[],"asset_alerts":[],"rebalance_actions":[],"questions_to_consider":[],"data_quality_notes":[],"limitations":["基于本地记录"]}"#
-    let (client, key) = transport(["{}", payload])
+    let (client, key) = transport([initialResponse, payload])
     let credentials = OptimizationCredentials(key: key)
     let repository = try PositionRepository(
       databaseURL: FileManager.default.temporaryDirectory

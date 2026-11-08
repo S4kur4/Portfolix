@@ -9,11 +9,12 @@ enum AIMessageMarkdownRenderer {
     private static let underlineTags = try! NSRegularExpression(pattern: #"</?u>"#, options: .caseInsensitive)
 
     static func render(_ text: String, citations: [AIMessageCitation] = [], citationColor: NSColor) -> NSAttributedString {
-        let source = NSMutableString(string: AIUserFacingTextSanitizer.sanitize(text))
+        let sanitized = AIUserFacingTextSanitizer.sanitize(text, citations: citations)
+        let source = NSMutableString(string: sanitized.text)
         let sourceLength = source.length
         let nonce = UUID().uuidString
         var markers: [(String, AIMessageCitation, URL)] = []
-        let ordered = citations.enumerated().sorted {
+        let ordered = sanitized.citations.enumerated().sorted {
             $0.element.utf16Offset == $1.element.utf16Offset
                 ? $0.offset > $1.offset : $0.element.utf16Offset > $1.element.utf16Offset
         }
@@ -61,6 +62,7 @@ enum AIMessageMarkdownRenderer {
         }
         var pieces: [(text: String, intent: InlinePresentationIntent)] = []
         for run in parsed.runs {
+            guard run.imageURL == nil else { continue }
             let text = String(parsed[run.range].characters)
             let intent = run.inlinePresentationIntent ?? []
             let matches = underlineTags.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))

@@ -438,6 +438,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
     static func content(fromResponseLines lines: [String]) throws -> String {
         var streamedContent = ""
         var sawStreamingData = false
+        var sawDone = false
         var reasoningCharacterCount = 0
         var finishReason: String?
         var regularResponseLines: [String] = []
@@ -455,6 +456,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             sawStreamingData = true
             let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
             if payload == "[DONE]" {
+                sawDone = true
                 break
             }
             guard
@@ -463,7 +465,8 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             else {
                 continue
             }
-            for choice in chunk.choices {
+            let selected = chunk.choices.first { $0.index == 0 } ?? chunk.choices.first { $0.index == nil }
+            if let choice = selected {
                 if let content = choice.delta.content {
                     streamedContent += content
                 }
@@ -477,9 +480,8 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
         }
 
         if sawStreamingData {
-            if Self.isTruncatedFinishReason(finishReason) {
-                throw LLMClientError.truncatedFinalContent(finishReason: finishReason)
-            }
+            guard sawDone || finishReason != nil else { throw LLMClientError.invalidResponse }
+            try Self.validateFinishReason(finishReason)
             guard !streamedContent.isEmpty else {
                 throw LLMClientError.emptyFinalContent(
                     reasoningCharacters: reasoningCharacterCount,
@@ -493,24 +495,26 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
         guard let data, let decoded = try? JSONDecoder().decode(OpenAIChatResponse.self, from: data) else {
             throw LLMClientError.invalidResponse
         }
-        if Self.isTruncatedFinishReason(decoded.choices.first?.finishReason) {
-            throw LLMClientError.truncatedFinalContent(finishReason: decoded.choices.first?.finishReason)
-        }
-        guard let message = decoded.choices.first?.message,
+        let selected = decoded.choices.first { $0.index == 0 } ?? decoded.choices.first { $0.index == nil }
+        try Self.validateFinishReason(selected?.finishReason)
+        guard let message = selected?.message,
               let content = message.content,
               !content.isEmpty else {
             throw LLMClientError.emptyFinalContent(
-                reasoningCharacters: decoded.choices.first?.message.reasoningContent?.count ?? 0,
-                finishReason: decoded.choices.first?.finishReason
+                reasoningCharacters: selected?.message.reasoningContent?.count ?? 0,
+                finishReason: selected?.finishReason
             )
         }
         return content
     }
 
-    private static func isTruncatedFinishReason(_ finishReason: String?) -> Bool {
-        guard let finishReason else { return false }
+    private static func validateFinishReason(_ finishReason: String?) throws {
+        guard let finishReason else { return }
         let normalized = finishReason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "length" || normalized == "max_tokens"
+        if normalized == "length" || normalized == "max_tokens" {
+            throw LLMClientError.truncatedFinalContent(finishReason: finishReason)
+        }
+        guard normalized == "stop" else { throw LLMClientError.invalidResponse }
     }
 }
 
@@ -621,10 +625,12 @@ private struct OpenAIChatResponse: Decodable {
 }
 
 private struct OpenAIChoice: Decodable {
+    let index: Int?
     let message: OpenAIResponseMessage
     let finishReason: String?
 
     enum CodingKeys: String, CodingKey {
+        case index
         case message
         case finishReason = "finish_reason"
     }
@@ -645,10 +651,12 @@ private struct OpenAIStreamResponse: Decodable {
 }
 
 private struct OpenAIStreamChoice: Decodable {
+    let index: Int?
     let delta: OpenAIStreamDelta
     let finishReason: String?
 
     enum CodingKeys: String, CodingKey {
+        case index
         case delta
         case finishReason = "finish_reason"
     }

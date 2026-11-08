@@ -9,6 +9,15 @@ struct InvestmentDistributionTests {
     private let memory = InvestmentDomain(id: "us_memory", titleChinese: "美股存储", titleEnglish: "US Memory")
     private let gold = InvestmentDomain(id: "gold", titleChinese: "黄金", titleEnglish: "Gold")
 
+    @Test(arguments: ["<answer>半导体</answer>", #"{"answer":"科技"}"#])
+    func classificationsCannotExposeInternalResponseFields(title: String) {
+        let holding = position(value: 100)
+        let domain = InvestmentDomain(id: "technology", titleChinese: title, titleEnglish: "Technology")
+        #expect(throws: AIAnalysisAgentError.self) {
+            try InvestmentDistributionEngine.validatedAssets([asset(holding, allocations: [weight(domain, 1)])], positions: [holding])
+        }
+    }
+
     @Test
     func holdingMixUsesCumulativeMarketValueInsteadOfTenPositions() {
         let positions = (0..<20).map { position(name: "Asset \($0)", value: 5) }
