@@ -102,6 +102,9 @@ struct RootView: View {
         } message: {
             Text(store.persistenceErrorMessage ?? "")
         }
+        .task {
+            await store.refreshPricesOnLaunchIfNeeded()
+        }
         .onAppear {
             synchronizeApplicationAppearance(store.appearanceMode)
             store.synchronizePersistedMarketDataIfNeeded()

@@ -321,6 +321,50 @@ extension View {
     }
 }
 
+struct PortfolixSelectionBoundsKey<Value: Hashable>: PreferenceKey {
+    static var defaultValue: [Value: Anchor<CGRect>] { [:] }
+
+    static func reduce(value: inout [Value: Anchor<CGRect>], nextValue: () -> [Value: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
+    let selection: Value
+    let cornerRadius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.backgroundPreferenceValue(PortfolixSelectionBoundsKey<Value>.self) { bounds in
+            GeometryReader { geometry in
+                if let selectedBounds = bounds[selection] {
+                    let frame = geometry[selectedBounds]
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(PortfolixTheme.controlSelectionFill)
+                        .frame(width: frame.width, height: frame.height)
+                        .offset(x: frame.minX, y: frame.minY)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selection)
+                        .transaction { transaction in
+                            // Page switches remain immediate; only this persistent background animates.
+                            transaction.disablesAnimations = reduceMotion
+                            if reduceMotion { transaction.animation = nil }
+                        }
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+extension View {
+    func portfolixSelectionBackground<Value: Hashable>(
+        selection: Value,
+        cornerRadius: CGFloat = PortfolixRadius.compact
+    ) -> some View {
+        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius))
+    }
+}
+
 struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
@@ -330,7 +374,6 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
     var optionAttributedTitle: ((Value) -> AttributedString)? = nil
     var width: CGFloat? = nil
     var height: CGFloat = PortfolixLayout.glassControlHeight
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focusedOption: Value?
 
@@ -357,15 +400,6 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                     .padding(.horizontal, optionSymbol == nil ? PortfolixSpacing.md : PortfolixSpacing.sm)
                     .frame(maxWidth: width == nil ? nil : .infinity)
                     .frame(height: height - PortfolixLayout.controlSelectionInset * 2)
-                    .background {
-                        if selection == option {
-                            RoundedRectangle(
-                                cornerRadius: PortfolixRadius.compact - PortfolixLayout.controlSelectionInset,
-                                style: .continuous
-                            )
-                            .fill(PortfolixTheme.controlSelectionFill)
-                        }
-                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -381,14 +415,17 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                 .accessibilityLabel(optionTitle(option))
                 .accessibilityAddTraits(selection == option ? .isSelected : [])
                 .onMoveCommand { moveSelection($0) }
+                .anchorPreference(key: PortfolixSelectionBoundsKey<Value>.self, value: .bounds) { [option: $0] }
             }
         }
+        // Keep one background alive so its bounds move continuously between buttons.
+        .portfolixSelectionBackground(selection: selection,
+            cornerRadius: PortfolixRadius.compact - PortfolixLayout.controlSelectionInset)
         .padding(PortfolixLayout.controlSelectionInset)
         .frame(width: width)
         .portfolixGlassControl(height: height)
         .fixedSize(horizontal: width == nil, vertical: true)
         .opacity(isEnabled ? 1 : 0.58)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
     }

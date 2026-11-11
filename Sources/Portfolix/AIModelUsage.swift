@@ -18,6 +18,7 @@ struct AIModelUsageSummary: Codable, Equatable, Sendable {
   var recordedAt: Date = .now
   let kind: String
   let calls: [AIModelCallUsage]
+  var searchUsage: AISearchUsageSummary? = nil
 
   var knownInputTokens: Int { calls.compactMap(\.inputTokens).reduce(0, +) }
   var knownOutputTokens: Int { calls.compactMap(\.outputTokens).reduce(0, +) }
@@ -68,6 +69,8 @@ actor AIModelUsageLedger {
   private var requestedTokens = 0
   private var callCount = 0
   private var calls: [AIModelCallUsage] = []
+  private var searchRequestCount = 0
+  private var sourceURLs = Set<String>()
 
   init(
     kind: String, maximumCalls: Int, maximumRequestedTokens: Int = 120_000, seconds: Double = 420
@@ -95,7 +98,21 @@ actor AIModelUsageLedger {
   }
 
   func record(_ call: AIModelCallUsage) { calls.append(call) }
-  func snapshot() -> AIModelUsageSummary { AIModelUsageSummary(kind: kind, calls: calls) }
+  func reserveSearchRequest() throws {
+    try Task.checkCancellation()
+    guard searchRequestCount < 6 else { throw AIModelBudgetError.exhausted }
+    searchRequestCount += 1
+  }
+  func recordSearchSources(_ sources: [AssetResearchSource]) {
+    sourceURLs.formUnion(sources.compactMap {
+      guard (try? LLMBaseURLValidator.validatedComponents(from: $0.url)) != nil else { return nil }
+      return AISearchSourceIdentity.key($0.url)
+    })
+  }
+  func snapshot() -> AIModelUsageSummary {
+    AIModelUsageSummary(kind: kind, calls: calls,
+        searchUsage: AISearchUsageSummary(requestCount: searchRequestCount, resultCount: sourceURLs.count))
+  }
 }
 
 enum AIModelRun {

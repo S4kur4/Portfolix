@@ -34,43 +34,16 @@ struct InvestmentProfileHarness: Sendable {
             let plan = try await makePlan(
                 candidates: candidates,
                 previousQueries: [],
-                enabledProviders: searchConfiguration.orderedEnabledProviders,
+                enabledProviders: searchConfiguration.orderedEnabledProviders.filter { searchKeys[$0] != nil },
                 configuration: llmConfiguration,
                 apiKey: llmKey
             )
             var sourcesByRef: [String: [AssetResearchSource]] = [:]
-            var limitations: [String] = []
-            for call in plan.toolCalls {
-                if Task.isCancelled { break }
-                let referencedPositions = candidates.filter {
-                    call.positionRefs.contains(InvestmentProfileEngine.positionRef(for: $0))
-                }
-                let providers = SearchProviderRouter.orderedProviders(
-                    requested: call.provider,
-                    query: call.query,
-                    positions: referencedPositions,
-                    configuration: searchConfiguration
-                ).filter { searchKeys[$0] != nil }
-                var acceptedSources: [AssetResearchSource] = []
-                for provider in providers {
-                    if Task.isCancelled { break }
-                    guard let key = searchKeys[provider] else { continue }
-                    do {
-                        acceptedSources = try await search.search(
-                            query: call.query,
-                            positions: referencedPositions,
-                            configuration: searchConfiguration.selecting(provider),
-                            apiKey: key
-                        )
-                        if !acceptedSources.isEmpty { break }
-                    } catch {
-                        if error is CancellationError || Task.isCancelled { break }
-                        limitations.append(String(error.localizedDescription.prefix(160)))
-                    }
-                }
-                for ref in call.positionRefs where !acceptedSources.isEmpty {
-                    sourcesByRef[ref, default: []].append(contentsOf: acceptedSources)
-                }
+            let toolResults = await AISearchExecution.executePlan(plan, client: search, positions: candidates,
+                configuration: searchConfiguration, apiKeys: searchKeys, progress: nil)
+            let limitations = toolResults.flatMap(\.limitations)
+            for result in toolResults where !result.sources.isEmpty {
+                for ref in result.positionRefs { sourcesByRef[ref, default: []].append(contentsOf: result.sources) }
             }
             guard !sourcesByRef.isEmpty else {
                 return InvestmentProfileResearchResult(
@@ -86,7 +59,9 @@ struct InvestmentProfileHarness: Sendable {
                 sourcesByRef: sourcesByRef,
                 configuration: llmConfiguration,
                 apiKey: llmKey,
-                now: now
+                now: now,
+                searchContext: plan.functionContext,
+                toolResults: toolResults
             )
             let enrichedByRef = Dictionary(uniqueKeysWithValues: enriched.map { ($0.positionRef, $0) })
             exposures = exposures.map { enrichedByRef[$0.positionRef] ?? $0 }
@@ -127,7 +102,8 @@ struct InvestmentProfileHarness: Sendable {
             data: try AIAnalysisAgent.encoder.encode(enabledProviders),
             encoding: .utf8
         ) ?? "[]"
-        let raw = try await llm.completeJSON(
+        let decoded = try await AISearchFunctionCalling.plan(
+            llm: llm,
             systemPrompt: AIAnalysisPromptText.investmentProfilePlanningSystem,
             userPrompt: AIAnalysisPromptText.investmentProfilePlanningUser(
                 candidatesJSON: candidatesJSON,
@@ -137,11 +113,8 @@ struct InvestmentProfileHarness: Sendable {
             configuration: configuration
                 .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
                 .withMaxOutputTokens(2_000).forStage("distribution_planning"),
-            apiKey: apiKey
+            apiKey: apiKey, providers: enabledProviders
         )
-        guard let decoded = AIAnalysisAgent.decodeToolPlan(raw) else {
-            throw AIAnalysisAgentError.invalidReport
-        }
         let allowedRefs = Set(candidatePayload.map(\.positionRef))
         let terms = Dictionary(uniqueKeysWithValues: candidatePayload.map { candidate in
             (candidate.positionRef, Set([candidate.name, candidate.symbol].filter { $0.count >= 2 }))
@@ -172,11 +145,9 @@ struct InvestmentProfileHarness: Sendable {
                 provider: call.provider
             )
         }
-        return AIWebSearchToolPlan(
-            toolCalls: publicCalls,
-            status: validated.status,
-            limitations: validated.limitations
-        )
+        var publicPlan = AIWebSearchToolPlan(toolCalls: publicCalls, status: validated.status, limitations: validated.limitations)
+        publicPlan.functionContext = validated.functionContext
+        return publicPlan
     }
 
     private func extractExposures(
@@ -184,7 +155,9 @@ struct InvestmentProfileHarness: Sendable {
         sourcesByRef: [String: [AssetResearchSource]],
         configuration: AIProviderConfiguration,
         apiKey: String,
-        now: Date
+        now: Date,
+        searchContext: AISearchFunctionContext? = nil,
+        toolResults: [AIWebSearchToolResult] = []
     ) async throws -> [AssetExposureProfile] {
         let identities = positions.map {
             InvestmentProfileCandidatePayload(
@@ -205,15 +178,14 @@ struct InvestmentProfileHarness: Sendable {
             data: try AIAnalysisAgent.inputEncoder.encode(evidence),
             encoding: .utf8
         ) ?? "{}"
+        let prompt = AIAnalysisPromptText.investmentProfileExposureUser(identitiesJSON: identitiesJSON, evidenceJSON: evidenceJSON)
         let raw = try await llm.completeJSON(
             systemPrompt: AIAnalysisPromptText.investmentProfileExposureSystem,
-            userPrompt: AIAnalysisPromptText.investmentProfileExposureUser(
-                identitiesJSON: identitiesJSON,
-                evidenceJSON: evidenceJSON
-            ),
+            userPrompt: prompt,
             configuration: configuration
                 .withRequestTimeout(LLMRequestTimeoutPolicy.followUp)
-                .withMaxOutputTokens(LLMOutputTokenPolicy.standard).forStage("distribution_extraction"),
+                .withMaxOutputTokens(LLMOutputTokenPolicy.standard).forStage("distribution_extraction")
+                .withFunctions([], inputItems: searchContext?.inputItems(results: toolResults, finalPrompt: prompt)),
             apiKey: apiKey
         )
         guard let payload = Self.decodeExposurePayload(raw) else {

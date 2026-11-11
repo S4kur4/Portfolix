@@ -65,7 +65,7 @@ struct DeepSeekSearchTests {
         #expect(try SearchProviderOption.deepseek.usableAPIKey(from: credentials) == "shared-model-key")
         try credentials.saveValidationState(.invalid, kind: .llm)
         #expect(try SearchProviderOption.deepseek.usableAPIKey(from: credentials) == nil)
-        #expect(SearchProviderOption.independentlyConfiguredProviders == [.tavily, .bocha])
+        #expect(SearchProviderOption.independentlyConfiguredProviders == [.tavily, .bocha, .exa, .anysearch])
         #expect(!SearchProviderOption.independentlyConfiguredProviders.contains(.deepseek))
     }
 
@@ -104,7 +104,10 @@ struct DeepSeekSearchTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [SearchMockProtocol.self]
         let client = SearchProviderClient(deepseek: DeepSeekSearchClient(session: URLSession(configuration: configuration)))
-        let sources = try await client.search(query: "gold market latest news", positions: [], configuration: SearchConfiguration(isEnabled: true, provider: .deepseek, quality: .basic), apiKey: key)
+        let (sources, usage) = try await AIModelRun.tracked(kind: "search_test", maximumCalls: 1) {
+            try await AISearchExecution.search(client, query: "gold market latest news", positions: [], configuration: SearchConfiguration(isEnabled: true, provider: .deepseek, quality: .basic), apiKey: key)
+        }
+        #expect(usage.searchUsage == AISearchUsageSummary(requestCount: 2, resultCount: 1))
         #expect(sources.count == 1)
         #expect(SearchMockProtocol.responses.count(key) == 2)
         for (status, expected): (Int, DeepSeekSearchError) in [(401, .unauthorized), (402, .insufficientBalance)] {

@@ -807,6 +807,8 @@ final class PortfolioStore {
     var hasLLMAPIKey = false
     var hasTavilyAPIKey = false
     var hasBochaAPIKey = false
+    var hasExaAPIKey = false
+    var hasAnySearchAPIKey = false
     private(set) var mcpReadAccessEnabled = false
 
     func setMCPReadAccessEnabled(_ enabled: Bool) {
@@ -822,6 +824,8 @@ final class PortfolioStore {
     var llmAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var tavilyAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var bochaAPIKeyValidationState: ProviderCredentialValidationState = .unknown
+    var exaAPIKeyValidationState: ProviderCredentialValidationState = .unknown
+    var anySearchAPIKeyValidationState: ProviderCredentialValidationState = .unknown
     var hasValidLLMAPIKey: Bool {
         hasLLMAPIKey && llmAPIKeyValidationState == .valid
     }
@@ -837,6 +841,10 @@ final class PortfolioStore {
                 hasTavilyAPIKey && tavilyAPIKeyValidationState != .invalid
             case .bocha:
                 hasBochaAPIKey && bochaAPIKeyValidationState != .invalid
+            case .exa:
+                hasExaAPIKey && exaAPIKeyValidationState != .invalid
+            case .anysearch:
+                hasAnySearchAPIKey && anySearchAPIKeyValidationState != .invalid
             }
         }
     }
@@ -877,6 +885,7 @@ final class PortfolioStore {
     private(set) var positionClosures: [PositionClosureRecord] = []
     private(set) var positionTrades: [PositionTradeRecord] = []
     private(set) var positionOpeningBalances: [PositionOpeningBalanceRecord] = []
+    private(set) var starterPositionIDs: Set<UUID> = []
     var positionReconciliations: [PositionReconciliationRecord] = []
     private var tradeProfitByDate: [String: [String: Decimal]] = [:]
     @ObservationIgnored private var positionClosureRevision = 0
@@ -886,6 +895,8 @@ final class PortfolioStore {
     private let analyticsWorker: PortfolioAnalyticsWorker?
     private let credentialStore: ProviderCredentialStoring
     private let aiAgent: AIAnalysisAgent
+    private let marketDataProvider: any AssetMarketDataProviding
+    @ObservationIgnored private var hasRequestedLaunchPriceRefresh = false
     private let usesLegacyAIReportCache: Bool
     @ObservationIgnored private var deepSeekModelCatalogRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var loginItemConfigurationTask: Task<Void, Never>?
@@ -1000,8 +1011,10 @@ final class PortfolioStore {
         positionRepository: PositionRepository? = nil,
         credentialStore: ProviderCredentialStoring? = nil,
         aiAgent: AIAnalysisAgent? = nil,
-        initialLanguage: AppLanguage? = nil
+        initialLanguage: AppLanguage? = nil,
+        marketDataProvider: any AssetMarketDataProviding = MarketDataAdapter.shared
     ) {
+        self.marketDataProvider = marketDataProvider
         usesLegacyAIReportCache = positionRepository == nil
         let managesSystemBackgroundUpdates = positionRepository == nil && !Self.shouldSkipLaunchRefresh
         backgroundUpdatesEnabled = managesSystemBackgroundUpdates
@@ -1009,7 +1022,8 @@ final class PortfolioStore {
             : false
         automaticPriceUpdateFrequency = Self.savedAutomaticPriceUpdateFrequency()
         automaticPriceUpdateDailyTimeMinutes = Self.savedDailyUpdateTimeMinutes()
-        appLanguage = initialLanguage ?? Self.savedAppLanguage()
+        let resolvedLanguage = initialLanguage ?? Self.savedAppLanguage()
+        appLanguage = resolvedLanguage
         riskProfileUpdatedAt = Self.savedRiskProfileUpdatedAt()
         let savedChatRetentionPeriod = Self.savedAIChatRetentionPeriod()
         aiChatRetentionPeriod = savedChatRetentionPeriod
@@ -1019,6 +1033,9 @@ final class PortfolioStore {
         var loadedChatItems: [AIReportChatItem] = []
         do {
             let repository = try positionRepository ?? PositionRepository()
+            if positionRepository == nil {
+                try repository.initializeStarterPortfolioIfNeeded(language: resolvedLanguage)
+            }
             try repository.migrateOpeningBalances()
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
@@ -1026,6 +1043,7 @@ final class PortfolioStore {
             positionClosures = try repository.fetchPositionClosures()
             positionTrades = try repository.fetchPositionTrades()
             positionOpeningBalances = try repository.fetchOpeningBalances()
+            starterPositionIDs = try repository.starterPositionIDs()
             tradeProfitByDate = try repository.tradeDailyProfitAdjustments()
             positionReconciliations = try repository.fetchReconciliations()
             let cutoff = savedChatRetentionPeriod.cutoffDate()
@@ -1256,6 +1274,7 @@ final class PortfolioStore {
         positionClosures = try positionRepository.fetchPositionClosures()
         positionTrades = try positionRepository.fetchPositionTrades()
         positionOpeningBalances = try positionRepository.fetchOpeningBalances()
+        starterPositionIDs = try positionRepository.starterPositionIDs()
         tradeProfitByDate = try positionRepository.tradeDailyProfitAdjustments()
         positionReconciliations = try positionRepository.fetchReconciliations()
         positionClosureRevision += 1
@@ -1497,7 +1516,8 @@ final class PortfolioStore {
     }
 
     var directlyDeletablePositionIDs: Set<Position.ID> {
-        let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: positionTrades, closures: positionClosures, openings: positionOpeningBalances).union(positionReconciliations.compactMap { UUID(uuidString: $0.asset.id) })
+        let openings = positionOpeningBalances.filter { !starterPositionIDs.contains($0.id) }
+        let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: positionTrades, closures: positionClosures, openings: openings).union(positionReconciliations.compactMap { UUID(uuidString: $0.asset.id) })
         return Set(positions.lazy.filter { !linkedIDs.contains($0.id) }.map(\.id))
     }
 
@@ -1624,6 +1644,10 @@ final class PortfolioStore {
         if let positionRepository {
             try positionRepository.delete(positionIDs: Array(positionIDs))
             positions = try positionRepository.fetchPositions()
+            positionOpeningBalances = try positionRepository.fetchOpeningBalances()
+            starterPositionIDs = try positionRepository.starterPositionIDs()
+            snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
+            dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         } else {
             positions.removeAll { positionIDs.contains($0.id) }
         }
@@ -1649,17 +1673,32 @@ final class PortfolioStore {
         Task { await refreshLatestPrices() }
     }
 
+    func refreshPricesOnLaunchIfNeeded() async {
+        guard !Self.shouldSkipLaunchRefresh, positionRepository != nil,
+              !hasRequestedLaunchPriceRefresh else { return }
+        // Shared by all windows for this process, never persisted across launches.
+        // Use the normal refresh path without changing any background schedule settings.
+        hasRequestedLaunchPriceRefresh = true
+        await refreshLatestPrices()
+    }
+
     func refreshProviderCredentialState() {
         let hasLLMKey = ((try? credentialStore.read(kind: .llm)) ?? nil)?.isEmpty == false
         let hasTavilyKey = ((try? credentialStore.read(kind: .tavily)) ?? nil)?.isEmpty == false
         let hasBochaKey = ((try? credentialStore.read(kind: .bocha)) ?? nil)?.isEmpty == false
+        let hasExaKey = ((try? credentialStore.read(kind: .exa)) ?? nil)?.isEmpty == false
+        let hasAnySearchKey = ((try? credentialStore.read(kind: .anysearch)) ?? nil)?.isEmpty == false
 
         hasLLMAPIKey = hasLLMKey
         hasTavilyAPIKey = hasTavilyKey
         hasBochaAPIKey = hasBochaKey
+        hasExaAPIKey = hasExaKey
+        hasAnySearchAPIKey = hasAnySearchKey
         llmAPIKeyValidationState = hasLLMKey ? ((try? credentialStore.readValidationState(kind: .llm)) ?? .unknown) : .unknown
         tavilyAPIKeyValidationState = hasTavilyKey ? ((try? credentialStore.readValidationState(kind: .tavily)) ?? .unknown) : .unknown
         bochaAPIKeyValidationState = hasBochaKey ? ((try? credentialStore.readValidationState(kind: .bocha)) ?? .unknown) : .unknown
+        exaAPIKeyValidationState = hasExaKey ? ((try? credentialStore.readValidationState(kind: .exa)) ?? .unknown) : .unknown
+        anySearchAPIKeyValidationState = hasAnySearchKey ? ((try? credentialStore.readValidationState(kind: .anysearch)) ?? .unknown) : .unknown
         if !canAnalyzeInvestmentDistribution { cancelInvestmentDistributionUpdate() }
     }
 
@@ -3100,6 +3139,7 @@ final class PortfolioStore {
             guard let candidate = quoteCandidate(for: position) else { return nil }
             return (index, position.id, candidate)
         }
+        let provider = marketDataProvider
         let resolutions = await withTaskGroup(
             of: (Int, Position.ID, AssetLookupCandidate?).self,
             returning: [(Int, Position.ID, AssetLookupCandidate?)].self
@@ -3112,7 +3152,7 @@ final class PortfolioStore {
                 let request = quoteRequests[nextRequestIndex]
                 nextRequestIndex += 1
                 group.addTask {
-                    let resolved = try? await MarketDataAdapter.shared.resolveAsset(request.2)
+                    let resolved = try? await provider.resolveAsset(request.2)
                     return (request.0, request.1, resolved)
                 }
             }
@@ -3123,7 +3163,7 @@ final class PortfolioStore {
                     let request = quoteRequests[nextRequestIndex]
                     nextRequestIndex += 1
                     group.addTask {
-                        let resolved = try? await MarketDataAdapter.shared.resolveAsset(request.2)
+                        let resolved = try? await provider.resolveAsset(request.2)
                         return (request.0, request.1, resolved)
                     }
                 }
@@ -3414,7 +3454,7 @@ final class PortfolioStore {
 
     private func latestQuote(for position: Position) async throws -> AssetLookupCandidate? {
         guard let candidate = quoteCandidate(for: position) else { return nil }
-        return try await MarketDataAdapter.shared.resolveAsset(candidate)
+        return try await marketDataProvider.resolveAsset(candidate)
     }
 
     private func quoteCandidate(for position: Position) -> AssetLookupCandidate? {

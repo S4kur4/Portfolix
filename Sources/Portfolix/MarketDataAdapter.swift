@@ -45,7 +45,7 @@ enum MarketDataAdapterError: LocalizedError {
     }
 }
 
-actor MarketDataAdapter {
+actor MarketDataAdapter: AssetMarketDataProviding {
     static let shared = MarketDataAdapter()
 
     private let native: NativeMarketDataAdapter

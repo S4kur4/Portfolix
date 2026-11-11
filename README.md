@@ -32,11 +32,15 @@ Portfolix 不连接券商账户，也不执行真实交易，无需提供券商�
 
 支持自动行情的股票、基金和数字货币可查询公开价格，无需额外配置行情 API Key。持仓份额与资金变化由你记录，不会自动同步券商或理财平台的账户。
 
+每次完全退出后重新打开 App（包括首次打开），都会额外刷新一次支持自动行情的资产价格。这次刷新独立于后台定时刷新开关，不改变后台刷新计划。
+
+首次创建账本时，会提供 Apple、NVIDIA 和 BTC 三项示例持仓，可自行编辑或删除；已有账本不会添加示例，删除后也不会自动补回。
+
 ## 可选功能
 
 基础记账与收益跟踪无需配置 AI。
 
-- **AI 辅助分析**：使用自己的 DeepSeek API Key 生成报告、提问或分析资产的实际投资领域。联网增强可按需启用 Parallel Search、DeepSeek Search、Tavily 或博查。
+- **AI 辅助分析**：使用自己的 DeepSeek API Key 生成报告、提问或分析资产的实际投资领域。联网增强可按需启用 Parallel Search、DeepSeek Search、Tavily、博查、Exa 或 AnySearch。
 - **只读 MCP**：授权本机 Agent 查询持仓、收益和操作记录，支持 ChatGPT / Codex、Claude、DeepSeek Harness、WorkBuddy；客户端配置可在 App 中查看。
 
 使用 AI 分析或授权其他 Agent 时，相关数据可能发送至所用模型服务。
@@ -74,11 +78,15 @@ Portfolix does not connect to brokerage accounts or execute real trades. It requ
 
 Automatic quotes are available for supported stocks, funds, and digital currencies without a separate market-data API key. You record position quantities and cash changes yourself; brokerage and investment-platform accounts are not automatically synchronized.
 
+Each fresh app launch, including the first launch, refreshes supported asset prices once. This extra refresh runs independently of background updates and leaves their schedule unchanged.
+
+A new ledger starts with editable Apple, NVIDIA, and BTC sample holdings. Existing ledgers are unchanged, and deleted samples do not return.
+
 ## Optional Features
 
 Asset records and performance tracking work without configuring AI.
 
-- **AI-assisted analysis**: Use your own DeepSeek API key to generate reports, ask questions, or identify underlying investment sectors. Optionally enable Parallel Search, DeepSeek Search, Tavily, or Bocha for web research.
+- **AI-assisted analysis**: Use your own DeepSeek API key to generate reports, ask questions, or identify underlying investment sectors. Optionally enable Parallel Search, DeepSeek Search, Tavily, Bocha, Exa, or AnySearch for web research.
 - **Read-only MCP**: Authorize local agents to query holdings, returns, and transaction records. Supports ChatGPT / Codex, Claude, DeepSeek Harness, and WorkBuddy, with client configuration references available in the App.
 
 When you use AI analysis or authorize other agents, relevant data may be sent to their model providers.

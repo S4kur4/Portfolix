@@ -100,8 +100,10 @@ struct SidebarView: View {
                         ) {
                             select(item)
                         }
+                        .anchorPreference(key: PortfolixSelectionBoundsKey<SidebarSection>.self, value: .bounds) { [item: $0] }
                     }
                 }
+                .portfolixSelectionBackground(selection: store.selection)
                 .padding(.horizontal, SidebarIconLayout.edgeInset)
 
                 Spacer()
@@ -365,14 +367,12 @@ struct SidebarBrandMark: View {
 }
 
 struct SidebarItem: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: SidebarSection
     let title: String
     let isSelected: Bool
     let iconCenterX: CGFloat
     let isCollapsed: Bool
     let action: () -> Void
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
@@ -394,18 +394,6 @@ struct SidebarItem: View {
                     .padding(.leading, SidebarIconLayout.navigationIconLeading(centerX: iconCenterX))
                 }
             .foregroundStyle(isSelected ? PortfolixTheme.glassControlText : PortfolixTheme.primaryText)
-            .background {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(PortfolixTheme.controlSelectionFill)
-                        .opacity(isSelected ? 1 : 0)
-
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                        .fill(PortfolixTheme.panelSoft)
-                        .opacity(!isSelected && isHovering ? 1 : 0)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
-                }
-            }
             .clipped()
             .contentShape(Rectangle())
         }
@@ -413,7 +401,6 @@ struct SidebarItem: View {
         .portfolixHelp(title, placement: .trailing, isEnabled: isCollapsed)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { isHovering = $0 }
     }
 }
 

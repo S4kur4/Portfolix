@@ -62,6 +62,7 @@ final class DeepSeekSearchClient: WebSearching, @unchecked Sendable {
         do {
             for attempt in 0...1 {
                 try Task.checkCancellation()
+                if attempt > 0 { try await AIModelRun.ledger?.reserveSearchRequest() }
                 let (bytes, response) = try await session.bytes(for: request)
                 defer { bytes.task.cancel() }
                 guard let http = response as? HTTPURLResponse else { throw DeepSeekSearchError.invalidResponse }

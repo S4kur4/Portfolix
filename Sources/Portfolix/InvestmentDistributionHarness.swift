@@ -86,7 +86,7 @@ extension AIAnalysisAgent {
                 searchCount += 1
                 researchedRefs.insert(ref)
                 do {
-                    let returned = try await search.search(query: query, positions: [position],
+                    let returned = try await AISearchExecution.search(search,query: query, positions: [position],
                         configuration: searchConfiguration.selecting(provider), apiKey: searchKey)
                     let sources = Self.distributionSources(returned, position: position)
                     if !sources.isEmpty { sourcesByRef[ref] = sources; break }

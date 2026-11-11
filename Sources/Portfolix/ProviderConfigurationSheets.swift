@@ -23,6 +23,8 @@ private enum ProviderConfigurationField: Hashable {
     case llmAPIKey
     case tavilyAPIKey
     case bochaAPIKey
+    case exaAPIKey
+    case anysearchAPIKey
 }
 
 enum LLMAPIKeyValidationProbe {
@@ -444,13 +446,21 @@ struct SearchConfigurationSheet: View {
     @State private var deepseekEnabled = false
     @State private var tavilyEnabled = false
     @State private var bochaEnabled = false
+    @State private var exaEnabled = false
+    @State private var anysearchEnabled = false
     @State private var tavilyAPIKey = ""
     @State private var bochaAPIKey = ""
+    @State private var exaAPIKey = ""
+    @State private var anysearchAPIKey = ""
     @State private var initialTavilyAPIKey = ""
     @State private var initialBochaAPIKey = ""
+    @State private var initialExaAPIKey = ""
+    @State private var initialAnySearchAPIKey = ""
     @State private var providerNotices = SearchProviderNoticeState()
     @State private var isTavilyAPIKeyVisible = false
     @State private var isBochaAPIKeyVisible = false
+    @State private var isExaAPIKeyVisible = false
+    @State private var isAnySearchAPIKeyVisible = false
     @State private var validatingProviders: Set<SearchProviderOption> = []
     @State private var validationRequestIDs: [SearchProviderOption: UUID] = [:]
     @State private var activationPromptProviders: Set<SearchProviderOption> = []
@@ -490,6 +500,22 @@ struct SearchConfigurationSheet: View {
                     isVisible: $isBochaAPIKeyVisible,
                     field: .bochaAPIKey
                 )
+
+                providerSection(
+                    provider: .exa,
+                    isEnabled: $exaEnabled,
+                    apiKey: $exaAPIKey,
+                    isVisible: $isExaAPIKeyVisible,
+                    field: .exaAPIKey
+                )
+
+                providerSection(
+                    provider: .anysearch,
+                    isEnabled: $anysearchEnabled,
+                    apiKey: $anysearchAPIKey,
+                    isVisible: $isAnySearchAPIKeyVisible,
+                    field: .anysearchAPIKey
+                )
             }
             .portfolixSheetForm()
         } secondary: { EmptyView() }
@@ -500,16 +526,28 @@ struct SearchConfigurationSheet: View {
             deepseekEnabled = configuration.isProviderEnabled(.deepseek)
             tavilyEnabled = configuration.isProviderEnabled(.tavily)
             bochaEnabled = configuration.isProviderEnabled(.bocha)
+            exaEnabled = configuration.isProviderEnabled(.exa)
+            anysearchEnabled = configuration.isProviderEnabled(.anysearch)
             let storedTavilyAPIKey = (try? store.readProviderAPIKey(kind: .tavily)) ?? ""
             let storedBochaAPIKey = (try? store.readProviderAPIKey(kind: .bocha)) ?? ""
+            let storedExaAPIKey = (try? store.readProviderAPIKey(kind: .exa)) ?? ""
+            let storedAnySearchAPIKey = (try? store.readProviderAPIKey(kind: .anysearch)) ?? ""
             tavilyAPIKey = storedTavilyAPIKey
             bochaAPIKey = storedBochaAPIKey
+            exaAPIKey = storedExaAPIKey
+            anysearchAPIKey = storedAnySearchAPIKey
             initialTavilyAPIKey = storedTavilyAPIKey
             initialBochaAPIKey = storedBochaAPIKey
+            initialExaAPIKey = storedExaAPIKey
+            initialAnySearchAPIKey = storedAnySearchAPIKey
             isTavilyAPIKeyVisible = false
             isBochaAPIKeyVisible = false
+            isExaAPIKeyVisible = false
+            isAnySearchAPIKeyVisible = false
             providerNotices.update(persistedStatus(for: .tavily), for: .tavily)
             providerNotices.update(persistedStatus(for: .bocha), for: .bocha)
+            providerNotices.update(persistedStatus(for: .exa), for: .exa)
+            providerNotices.update(persistedStatus(for: .anysearch), for: .anysearch)
             Task { @MainActor in
                 await Task.yield()
                 didLoadConfiguration = true
@@ -705,6 +743,10 @@ struct SearchConfigurationSheet: View {
             isTavilyAPIKeyVisible = true
         case .bocha:
             isBochaAPIKeyVisible = true
+        case .exa:
+            isExaAPIKeyVisible = true
+        case .anysearch:
+            isAnySearchAPIKeyVisible = true
         }
         Task { @MainActor in
             await Task.yield()
@@ -751,6 +793,8 @@ struct SearchConfigurationSheet: View {
         if deepseekEnabled { providers.insert(.deepseek) }
         if tavilyEnabled { providers.insert(.tavily) }
         if bochaEnabled { providers.insert(.bocha) }
+        if exaEnabled { providers.insert(.exa) }
+        if anysearchEnabled { providers.insert(.anysearch) }
         return providers
     }
 
@@ -769,6 +813,8 @@ struct SearchConfigurationSheet: View {
         case .parallel, .deepseek: ""
         case .tavily: initialTavilyAPIKey
         case .bocha: initialBochaAPIKey
+        case .exa: initialExaAPIKey
+        case .anysearch: initialAnySearchAPIKey
         }
     }
 
@@ -784,6 +830,8 @@ struct SearchConfigurationSheet: View {
         case .deepseek: (try? store.readProviderAPIKey(kind: .llm)) ?? ""
         case .tavily: tavilyAPIKey
         case .bocha: bochaAPIKey
+        case .exa: exaAPIKey
+        case .anysearch: anysearchAPIKey
         }
     }
 

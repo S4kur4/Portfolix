@@ -308,7 +308,10 @@ struct PositionRepositoryTests {
         )
 
         let credentialStore = DatabaseProviderCredentialStore(repository: sourceRepository)
-        try credentialStore.save("export-must-not-contain-this-secret", kind: .llm)
+        for kind in ProviderCredentialKind.allCases {
+            try credentialStore.save("export-must-not-contain-this-secret", kind: kind)
+            try credentialStore.saveValidationState(.valid, kind: kind)
+        }
         try sourceRepository.upsertAIAnalysisChatItem(.user("export-must-not-contain-this-chat"))
         try sourceRepository.setAppSetting(key: RiskProfilePersistence.configuredKey, value: "true")
         try sourceRepository.setAppSetting(key: RiskProfilePersistence.levelKey, value: "稳健平衡")
@@ -3266,7 +3269,7 @@ struct PositionRepositoryTests {
             "Do not provide",
         ]
 
-        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v22-read-only-data-tools")
+        #expect(AIAnalysisPromptVersion.report == "portfolio-agent-report.v23-parallel-search")
         #expect(prompts.allSatisfy { $0.contains("请") || $0.contains("你是") })
         for phrase in legacyEnglishInstructions {
             #expect(prompts.allSatisfy { !$0.localizedCaseInsensitiveContains(phrase) })
@@ -4776,7 +4779,7 @@ struct PositionRepositoryTests {
     }
 
     @MainActor
-    @Test(arguments: [SearchProviderOption.bocha, .deepseek])
+    @Test(arguments: [SearchProviderOption.bocha, .deepseek, .exa, .anysearch])
     func aiFollowUpUsesModelSelectedProviderThenFallsBackToAnotherEnabledProvider(firstProvider: SearchProviderOption) async throws {
         let store = try makeStore()
         try store.addPosition(
@@ -4838,6 +4841,8 @@ struct PositionRepositoryTests {
                 .llm: "llm-key",
                 .tavily: "tvly-key",
                 .bocha: "bocha-key",
+                .exa: "exa-key",
+                .anysearch: "anysearch-key",
             ])
         )
         let unsupportedConfiguration = AIProviderConfiguration(

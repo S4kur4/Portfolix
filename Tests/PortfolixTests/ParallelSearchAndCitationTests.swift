@@ -139,6 +139,19 @@ struct ParallelSearchAndCitationTests {
         #expect(links == resolved.citations.map(\.url))
     }
 
+    @Test @MainActor
+    func shorthandFromRealResponsesResolvesOnlyTrustedSourcesAtVisibleOffsets() {
+        let catalog = [AICitationCatalogEntry(id: "source_1", title: "公开资料", url: "https://example.com/public")]
+        let resolved = AIMessageCitationResolver.resolve("**黄金🪙**上涨。[[source_1]]需核对。[[source_99, source_1]][[ordinary text]]", catalog: catalog)
+        #expect(resolved.text == "**黄金🪙**上涨。需核对。[[ordinary text]]")
+        #expect(resolved.citations.map(\.utf16Offset) == ["**黄金🪙**上涨。".utf16.count, "**黄金🪙**上涨。需核对。".utf16.count])
+        let rendered = AIMessageMarkdownRenderer.render(resolved.text, citations: resolved.citations, citationColor: .labelColor)
+        #expect(rendered.string.contains("\u{FFFC}"))
+        #expect(!rendered.string.contains("source_"))
+        #expect(AIMessageCitationResolver.resolve("核对。[[source_1]]", catalog: []).citations.isEmpty)
+        #expect(AIMessageCitationResolver.resolve("核对。[[source_1]]", catalog: []).text == "核对。")
+    }
+
     @Test
     func resolvedCitationsSurviveEnvelopeParsingAndHistoryRoundTrip() throws {
         let raw = #"{"answer":"**黄金🪙**。[来源](source_1)再观察。[[cite:source_1, source_99, source_1]]","limitations":[]}"#

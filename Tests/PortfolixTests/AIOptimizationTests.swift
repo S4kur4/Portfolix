@@ -10,6 +10,108 @@ struct AIOptimizationTests {
   private let answer = #"{"answer":"可以先核对报价时间，再判断数据是否适合当前问题。","limitations":[]}"#
 
   @Test
+  func electionResultsAreValidPublicSearchesWithoutPortfolioReferences() async throws {
+    let plan = #"{"status":"continue","tool_calls":[{"id":"search_1","provider":"Parallel","query":"2026 US midterm election results House Senate control AP official count","position_refs":[]}],"limitations":[]}"#
+    let (client, key) = transport([plan, answer])
+    let search = IntentSearchRecorder()
+    let result = try await AIAnalysisAgent(llm: client, search: search, credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: "美国中期选举现在出结果了吗，对后续股市会有什么影响？", report: report(summary: "PRIVATE_PORTFOLIO_CONTENT"),
+      artifacts: nil, positions: [intentPosition], llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.toolCallCount == 1)
+    #expect(await search.queries().first?.contains("midterm election") == true)
+    #expect(await search.positionCounts() == [0])
+  }
+
+  @Test(arguments: [#"{"status":"finish","tool_calls":[],"limitations":[]}"#, "invalid plan"])
+  func currentElectionFactsCannotSilentlySkipSearchWhenPlanningFails(_ plan: String) async throws {
+    let (client, key) = transport([plan, answer])
+    let search = IntentSearchRecorder()
+    let result = try await AIAnalysisAgent(llm: client, search: search, credentialStore: IntentCredentials(key: key)).answerFollowUp(
+      question: "美国中期选举现在出结果了吗，对后续股市会有什么影响？", report: nil,
+      artifacts: nil, positions: [intentPosition], llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.exa, .tavily], quality: .basic))
+    #expect(result.toolCallCount == 2)
+    #expect(Set(await search.providers()) == [.exa, .tavily])
+    #expect(await search.queries().allSatisfy { $0.contains("election") })
+    #expect(await search.positionCounts() == [0, 0])
+    #expect(result.modelUsage?.searchUsage?.requestCount == 2)
+  }
+
+  @Test(arguments: ["你帮我查一下？", "好的，帮我查一下", "Please look it up", "Can you check that?"])
+  func briefSearchFollowUpKeepsTheLatestUserTopicInsteadOfAssistantHoldings(_ question: String) async throws {
+    let (client, key) = transport(["invalid plan", answer])
+    let search = IntentSearchRecorder()
+    let history: [AIReportChatItem] = [
+      .user("BTC 今天价格是多少？", createdAt: Date(timeIntervalSince1970: 1)),
+      .user("美国中期选举现在出结果了吗？", createdAt: Date(timeIntervalSince1970: 2)),
+      .assistant("暂无可核实的计票信息。你的 BTC 仓位需要关注。", createdAt: Date(timeIntervalSince1970: 3)),
+      .user(question, createdAt: Date(timeIntervalSince1970: 4)),
+    ]
+    let result = try await AIAnalysisAgent(llm: client, search: search, credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: question, report: report(summary: "PRIVATE_PORTFOLIO_CONTENT"), artifacts: nil,
+      chatHistory: history, positions: [intentPosition], llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.toolCallCount == 1)
+    #expect(await search.queries().first?.contains("election") == true)
+    #expect(await search.positionCounts() == [0])
+    let planningRequest = String(decoding: try #require(OptimizationProtocol.state.requests(for: key).first), as: UTF8.self)
+    #expect(planningRequest.contains("美国中期选举"))
+    #expect(!planningRequest.contains("PRIVATE_PORTFOLIO_CONTENT"))
+  }
+
+  @Test
+  func anUnresolvedSearchRequestDoesNotSpendRequestsOnTopHoldings() async throws {
+    let (client, key) = transport(["invalid plan", answer])
+    let search = IntentSearchRecorder()
+    let result = try await AIAnalysisAgent(llm: client, search: search, credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: "你帮我查一下？", report: nil, artifacts: nil, positions: [intentPosition],
+      llmConfiguration: .default, searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.toolCallCount == 0)
+    #expect(await search.queries().isEmpty)
+    #expect(result.searchMode == "connected_search_unavailable")
+  }
+
+  @Test
+  func generalKnowledgeStillAllowsAnEmptyPlan() async throws {
+    let (client, key) = transport([#"{"status":"finish","tool_calls":[],"limitations":[]}"#, answer])
+    let search = IntentSearchRecorder()
+    let result = try await AIAnalysisAgent(llm: client, search: search, credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: "解释一下复利", report: nil, artifacts: nil, positions: [], llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.toolCallCount == 0)
+    #expect(await search.queries().isEmpty)
+  }
+
+  @Test
+  func queryOptimizationDoesNotTurnAValidRequestIntoAnOverlongRejectedPlan() throws {
+    let query = "US stock market decline reasons this week AI valuation Federal Reserve rate policy official latest economic releases"
+    #expect(query.count <= 128)
+    let plan = AIWebSearchToolPlan(toolCalls: [.init(id: "s", query: query, positionRefs: [], provider: .parallel)])
+    let validated = try AIAnalysisAgent.validatedToolPlan(plan, allowedRefs: [], allowsGeneralQueries: true)
+    #expect(try #require(validated.toolCalls.first).query.count <= 128)
+  }
+
+  @Test
+  func realModelCitationShorthandSurvivesTheFullFollowUpPipelineWithoutRepair() async throws {
+    let plan = #"{"status":"continue","tool_calls":[{"id":"s","provider":"Parallel","query":"gold latest public news","position_refs":[]}],"limitations":[]}"#
+    let (client, key) = transport([plan, #"{"answer":"资料日期需要核对。[[source_1]]","limitations":[]}"#])
+    let result = try await AIAnalysisAgent(llm: client, search: OptimizationSearch(), credentialStore: OptimizationCredentials(key: key)).answerFollowUp(
+      question: "请查黄金近期消息", report: nil, artifacts: nil, positions: [], llmConfiguration: .default,
+      searchConfiguration: SearchConfiguration(isEnabled: true, enabledProviders: [.parallel], quality: .basic))
+    #expect(result.answer == "资料日期需要核对。")
+    #expect(result.citations.count == 1)
+    #expect(result.citations.first?.utf16Offset == result.answer.utf16.count)
+    #expect(result.modelUsage?.calls.count == 2)
+  }
+
+  private var intentPosition: Position {
+    Position(name: "BTC", symbol: "BTC/USDT", category: .crypto, quoteCurrency: .usdt,
+      quantity: 1, averageCost: 100, latestPrice: 120, marketValueCNY: 840, profitRate: 20,
+      weeklyTrend: [], source: "manual", quoteTime: "2026-11-08", freshness: .manual)
+  }
+
+  @Test
   func standaloneQuestionUsesOneStreamedRequestAndCountsUsageWithoutDoubleCounting() async throws {
     let (client, key) = transport([answer])
     let agent = AIAnalysisAgent(
@@ -692,6 +794,27 @@ private struct OptimizationSearch: WebSearching {
       )
     ]
   }
+}
+
+private struct IntentCredentials: ProviderCredentialStoring {
+  let key: String
+  func read(kind: ProviderCredentialKind) throws -> String? { kind == .llm ? key : "fictional-search-key" }
+  func save(_: String, kind _: ProviderCredentialKind) throws {}
+  func delete(kind _: ProviderCredentialKind) throws {}
+  func readValidationState(kind _: ProviderCredentialKind) throws -> ProviderCredentialValidationState { .valid }
+  func saveValidationState(_: ProviderCredentialValidationState, kind _: ProviderCredentialKind) throws {}
+}
+
+private actor IntentSearchRecorder: WebSearching {
+  private var captured: [(String, Int, SearchProviderOption)] = []
+  func search(query: String, positions: [Position], configuration: SearchConfiguration, apiKey: String) async throws -> [AssetResearchSource] {
+    captured.append((query, positions.count, configuration.provider))
+    return [AssetResearchSource(title: "Public fact", url: "https://example.com/public-fact", domain: "example.com",
+      publishedDate: "2026-11-08", snippet: "Public information for a synthetic test.", credibility: .general)]
+  }
+  func queries() -> [String] { captured.map { $0.0 } }
+  func positionCounts() -> [Int] { captured.map { $0.1 } }
+  func providers() -> [SearchProviderOption] { captured.map { $0.2 } }
 }
 
 private actor OptimizationSlowLLM: LLMCompleting {

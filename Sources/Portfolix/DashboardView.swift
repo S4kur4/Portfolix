@@ -247,69 +247,92 @@ private struct PortfolioValueYearCurveBackground: View {
 
     var body: some View {
         if !snapshots.isEmpty {
-            Canvas { context, size in
-                let points = curvePoints(in: size)
-                guard points.count >= 2 else { return }
-
-                let curve = curvePath(points: points)
-                var area = curve
-                area.addLine(to: CGPoint(x: points.last?.x ?? size.width, y: size.height))
-                area.addLine(to: CGPoint(x: points.first?.x ?? 0, y: size.height))
-                area.closeSubpath()
-
-                context.fill(
-                    area,
-                    with: .linearGradient(
-                        Gradient(colors: [
-                            PortfolixTheme.lilac.opacity(reduceTransparency ? 0.035 : 0.075),
-                            PortfolixTheme.violet.opacity(0.004),
-                        ]),
-                        startPoint: CGPoint(x: 0, y: size.height * 0.22),
-                        endPoint: CGPoint(x: 0, y: size.height)
-                    )
-                )
-
-                if !reduceTransparency {
-                    var glowContext = context
-                    glowContext.addFilter(.blur(radius: 7))
-                    glowContext.stroke(
-                        curve,
-                        with: .color(PortfolixTheme.lilac.opacity(0.10)),
-                        style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round)
-                    )
-                }
-
-                context.stroke(
-                    curve,
-                    with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.12 : 0.20)),
-                    style: StrokeStyle(
-                        lineWidth: DashboardChartStyle.dataLineWidth,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
-
-                if let endpoint = points.last {
-                    if !reduceTransparency {
-                        var endpointGlowContext = context
-                        endpointGlowContext.addFilter(.blur(radius: 5))
-                        endpointGlowContext.fill(
-                            Path(ellipseIn: CGRect(x: endpoint.x - 7, y: endpoint.y - 7, width: 14, height: 14)),
-                            with: .color(PortfolixTheme.lilac.opacity(0.18))
-                        )
-                    }
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: endpoint.x - 2.5, y: endpoint.y - 2.5, width: 5, height: 5)),
-                        with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.24 : 0.42))
-                    )
-                }
+            TimelineView(PortfolioCurveDaySchedule()) { timeline in
+                curveBackground(at: timeline.date)
             }
         }
     }
 
-    private func curvePoints(in size: CGSize) -> [CGPoint] {
+    private func curveBackground(at date: Date) -> some View {
+        Canvas { context, size in
+            let points = curvePoints(in: size, at: date)
+            guard points.count >= 2 else { return }
+
+            let curve = curvePath(points: points)
+            var area = curve
+            area.addLine(to: CGPoint(x: points.last?.x ?? size.width, y: size.height))
+            area.addLine(to: CGPoint(x: points.first?.x ?? 0, y: size.height))
+            area.closeSubpath()
+
+            context.fill(
+                area,
+                with: .linearGradient(
+                    Gradient(colors: [
+                        PortfolixTheme.lilac.opacity(reduceTransparency ? 0.035 : 0.075),
+                        PortfolixTheme.violet.opacity(0.004),
+                    ]),
+                    startPoint: CGPoint(x: 0, y: size.height * 0.22),
+                    endPoint: CGPoint(x: 0, y: size.height)
+                )
+            )
+
+            if !reduceTransparency {
+                var glowContext = context
+                glowContext.addFilter(.blur(radius: 7))
+                glowContext.stroke(
+                    curve,
+                    with: .color(PortfolixTheme.lilac.opacity(0.10)),
+                    style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round)
+                )
+            }
+
+            context.stroke(
+                curve,
+                with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.12 : 0.20)),
+                style: StrokeStyle(
+                    lineWidth: DashboardChartStyle.dataLineWidth,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+
+            if let endpoint = points.last {
+                if !reduceTransparency {
+                    var endpointGlowContext = context
+                    endpointGlowContext.addFilter(.blur(radius: 5))
+                    endpointGlowContext.fill(
+                        Path(ellipseIn: CGRect(x: endpoint.x - 7, y: endpoint.y - 7, width: 14, height: 14)),
+                        with: .color(PortfolixTheme.lilac.opacity(0.18))
+                    )
+                }
+                context.fill(
+                    Path(ellipseIn: CGRect(x: endpoint.x - 2.5, y: endpoint.y - 2.5, width: 5, height: 5)),
+                    with: .color(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.24 : 0.42))
+                )
+            }
+            drawCurrentDate(date, context: context, size: size)
+        }
+    }
+
+    private func drawCurrentDate(_ date: Date, context: GraphicsContext, size: CGSize) {
+        guard let year = Calendar.current.dateInterval(of: .year, for: date) else { return }
+        let label = context.resolve(
+            Text(date.formatted(.dateTime.month(.twoDigits).day(.twoDigits).locale(Locale(identifier: "en_US_POSIX"))))
+                .font(.system(size: 10))
+                .monospacedDigit()
+                .foregroundStyle(PortfolixTheme.lilac.opacity(reduceTransparency ? 0.55 : 0.40))
+        )
+        let halfWidth = label.measure(in: size).width / 2
+        let inset = PortfolixLayout.cardPadding
+        let progress = date.timeIntervalSince(year.start) / year.duration
+        let x = min(max(progress * size.width, halfWidth + inset), size.width - halfWidth - inset)
+        let y = size.height - inset - PortfolixLayout.glassControlHeight - PortfolixSpacing.lg
+        context.draw(label, at: CGPoint(x: x, y: y))
+    }
+
+    private func curvePoints(in size: CGSize, at date: Date) -> [CGPoint] {
         let calendar = Calendar.current
-        guard let yearInterval = calendar.dateInterval(of: .year, for: .now) else { return [] }
+        guard let yearInterval = calendar.dateInterval(of: .year, for: date) else { return [] }
 
         let orderedSnapshots = snapshots
             .filter { yearInterval.contains($0.date) }
@@ -396,6 +419,14 @@ private struct PortfolioValueYearCurveBackground: View {
     }
 }
 
+private struct PortfolioCurveDaySchedule: TimelineSchedule {
+    func entries(from startDate: Date, mode: Mode) -> AnySequence<Date> {
+        AnySequence(sequence(first: startDate) { date in
+            Calendar.autoupdatingCurrent.dateInterval(of: .day, for: date)?.end
+        })
+    }
+}
+
 private enum DashboardChartStyle {
     static let dataLineWidth = PortfolixLayout.accentLineWidth
     static let initialValueTransitionDays = 6
@@ -445,25 +476,9 @@ private struct PerformanceTrendCard: View {
         snapshots.map(chartValue)
     }
 
-    private var lowerBound: Double {
-        guard let minimum = values.min() else { return 0 }
-        return minimum - scalePadding
-    }
-
-    private var upperBound: Double {
-        guard let maximum = values.max() else { return 1 }
-        return maximum + scalePadding
-    }
-
-    private var scalePadding: Double {
-        guard let minimum = values.min(), let maximum = values.max() else { return 1 }
-        let span = max(maximum - minimum, 1)
-        switch store.trendMetric {
-        case .profitValue:
-            return max(span * 0.18, 2_000)
-        case .profitRate:
-            return max(span * 0.18, 0.3)
-        }
+    private var chartData: PerformanceTrendChartData {
+        PerformanceTrendChartData(snapshots: store.visibleSnapshots, metric: store.trendMetric,
+            currency: store.displayCurrency, domain: chartDomain)
     }
 
     private var highlightedSnapshot: PortfolioSnapshot? {
@@ -519,6 +534,7 @@ private struct PerformanceTrendCard: View {
 
     var body: some View {
         @Bindable var store = store
+        let trendData = chartData
 
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
@@ -561,17 +577,18 @@ private struct PerformanceTrendCard: View {
                         .lineLimit(1)
                 }
 
-                if snapshots.isEmpty {
-                    DashboardEmptyState(title: localizedText("暂无历史快照", "No snapshots yet", language: store.appLanguage))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    Chart(snapshots) { snapshot in
+                Chart {
+                    RuleMark(y: .value("Zero", 0))
+                        .foregroundStyle(PortfolixTheme.lilac.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+
+                    ForEach(trendData.points) { point in
                         AreaMark(
-                            x: .value("日期", snapshot.date),
-                            yStart: .value("基线", lowerBound),
-                            yEnd: .value("数值", chartValue(snapshot))
+                            x: .value("日期", point.date),
+                            yStart: .value("基线", 0),
+                            yEnd: .value("数值", point.value)
                         )
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [PortfolixTheme.lilac.opacity(0.3), PortfolixTheme.violet.opacity(0.03)],
@@ -581,10 +598,10 @@ private struct PerformanceTrendCard: View {
                         )
 
                         LineMark(
-                            x: .value("日期", snapshot.date),
-                            y: .value("数值", chartValue(snapshot))
+                            x: .value("日期", point.date),
+                            y: .value("数值", point.value)
                         )
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.monotone)
                         .lineStyle(StrokeStyle(
                             lineWidth: DashboardChartStyle.dataLineWidth,
                             lineCap: .round,
@@ -592,16 +609,17 @@ private struct PerformanceTrendCard: View {
                         ))
                         .foregroundStyle(PortfolixTheme.lilac)
 
-                        if snapshot.id == highlightedSnapshot?.id {
-                            RuleMark(x: .value("日期", snapshot.date))
+                        if let snapshot = point.snapshot, snapshot.id == highlightedSnapshot?.id {
+                            RuleMark(x: .value("日期", point.date))
                                 .foregroundStyle(PortfolixTheme.lilac.opacity(0.5))
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                         }
 
-                        if snapshot.id == (highlightedSnapshot?.id ?? snapshots.last?.id) {
+                        if let snapshot = point.snapshot,
+                           snapshot.id == (highlightedSnapshot?.id ?? snapshots.last?.id) {
                             PointMark(
-                                x: .value("日期", snapshot.date),
-                                y: .value("数值", chartValue(snapshot))
+                                x: .value("日期", point.date),
+                                y: .value("数值", point.value)
                             )
                             .symbolSize(42)
                             .foregroundStyle(PortfolixTheme.primaryText)
@@ -619,46 +637,46 @@ private struct PerformanceTrendCard: View {
                             }
                         }
                     }
-                    .chartOverlay { proxy in
-                        GeometryReader { geometry in
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .onContinuousHover { phase in
-                                    updateHighlightedSnapshot(for: phase, proxy: proxy, geometry: geometry)
-                                }
-                        }
-                    }
-                    .chartXScale(domain: chartScaleDomain)
-                    .chartYScale(domain: lowerBound ... upperBound)
-                    .chartXAxis {
-                        AxisMarks(values: xAxisDates) { value in
-                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
-                                .foregroundStyle(PortfolixTheme.border)
-                            AxisValueLabel(anchor: value.as(Date.self) == xAxisDates.last ? .topTrailing : .top) {
-                                if let date = value.as(Date.self) {
-                                    Text(axisDateLabel(date))
-                                        .foregroundStyle(PortfolixTheme.tertiaryText)
-                                        .lineLimit(1)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                }
-                            }
-                        }
-                    }
-                    .chartYAxis {
-                        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
-                                .foregroundStyle(PortfolixTheme.border)
-                            AxisValueLabel {
-                                if let numeric = value.as(Double.self) {
-                                    Text(axisLabel(numeric))
-                                        .foregroundStyle(PortfolixTheme.tertiaryText)
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
                 }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                updateHighlightedSnapshot(for: phase, proxy: proxy, geometry: geometry)
+                            }
+                    }
+                }
+                .chartXScale(domain: chartScaleDomain)
+                .chartYScale(domain: trendData.yDomain)
+                .chartXAxis {
+                    AxisMarks(values: xAxisDates) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
+                            .foregroundStyle(PortfolixTheme.border)
+                        AxisValueLabel(anchor: value.as(Date.self) == xAxisDates.last ? .topTrailing : .top) {
+                            if let date = value.as(Date.self) {
+                                Text(axisDateLabel(date))
+                                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
+                            .foregroundStyle(PortfolixTheme.border)
+                        AxisValueLabel {
+                            if let numeric = value.as(Double.self) {
+                                Text(axisLabel(numeric))
+                                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
             .frame(height: PortfolixLayout.dashboardTrendContentHeight, alignment: .topLeading)
         }
@@ -705,6 +723,11 @@ private struct PerformanceTrendCard: View {
                 highlightedSnapshotID = nil
                 return
             }
+            guard let first = snapshots.first,
+                  Calendar.current.startOfDay(for: date) >= Calendar.current.startOfDay(for: first.date) else {
+                highlightedSnapshotID = nil
+                return
+            }
             highlightedSnapshotID = snapshots.min {
                 abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
             }?.id
@@ -728,8 +751,15 @@ private struct PerformanceTrendCard: View {
     private func axisLabel(_ value: Double) -> String {
         switch store.trendMetric {
         case .profitValue:
+            if value == 0 { return "\(store.displayCurrency.symbol)0" }
             let sign = value >= 0 ? "+" : "-"
-            return String(format: "%@%@%.0fK", sign, store.displayCurrency.symbol, abs(value) / 1_000)
+            let magnitude = abs(value)
+            if magnitude < 1_000 {
+                return String(format: "%@%@%.0f", sign, store.displayCurrency.symbol, magnitude)
+            }
+            let thousands = magnitude / 1_000
+            let format = thousands < 10 && thousands.rounded() != thousands ? "%@%@%.1fK" : "%@%@%.0fK"
+            return String(format: format, sign, store.displayCurrency.symbol, thousands)
         case .profitRate:
             return String(format: "%+.1f%%", value)
         }
@@ -812,7 +842,7 @@ private struct AssetMixBarCard: View {
                         .font(.system(size: 13, weight: .medium))
                         .monospacedDigit()
                         .portfolixNumericTransition(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.primaryText)
                         .lineLimit(1)
                 }
                 .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
@@ -1513,9 +1543,7 @@ private struct DailyProfitCard: View {
                 summary
 
                 Group {
-                    if points.isEmpty {
-                        DashboardEmptyState(title: localizedText("本月暂无盈亏记录", "No daily P&L for this month", language: store.appLanguage))
-                    } else if displayMode == .calendar {
+                    if displayMode == .calendar {
                         calendarView
                     } else {
                         chartView

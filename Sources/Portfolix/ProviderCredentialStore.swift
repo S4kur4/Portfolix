@@ -4,12 +4,16 @@ enum ProviderCredentialKind: String, CaseIterable {
     case llm = "llm"
     case tavily = "tavily"
     case bocha = "bocha"
+    case exa = "exa"
+    case anysearch = "anysearch"
 
     var databaseKey: String {
         switch self {
         case .llm: "provider_credential_llm_api_key"
         case .tavily: "provider_credential_tavily_api_key"
         case .bocha: "provider_credential_bocha_api_key"
+        case .exa: "provider_credential_exa_api_key"
+        case .anysearch: "provider_credential_anysearch_api_key"
         }
     }
 
@@ -18,6 +22,8 @@ enum ProviderCredentialKind: String, CaseIterable {
         case .llm: "provider_credential_llm_validation_state"
         case .tavily: "provider_credential_tavily_validation_state"
         case .bocha: "provider_credential_bocha_validation_state"
+        case .exa: "provider_credential_exa_validation_state"
+        case .anysearch: "provider_credential_anysearch_validation_state"
         }
     }
 }
@@ -337,6 +343,8 @@ enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
     case deepseek = "DeepSeek"
     case tavily = "Tavily"
     case bocha = "BochaAI"
+    case exa = "Exa"
+    case anysearch = "AnySearch"
 
     var id: String { rawValue }
 
@@ -346,11 +354,13 @@ enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
         case .deepseek: .llm
         case .tavily: .tavily
         case .bocha: .bocha
+        case .exa: .exa
+        case .anysearch: .anysearch
         }
     }
 
     var requiresAPIKey: Bool { credentialKind != nil }
-    static let independentlyConfiguredProviders: [SearchProviderOption] = [.tavily, .bocha]
+    static let independentlyConfiguredProviders: [SearchProviderOption] = [.tavily, .bocha, .exa, .anysearch]
 
     func usableAPIKey(from store: ProviderCredentialStoring) throws -> String? {
         guard let credentialKind else { return "" }
@@ -366,6 +376,8 @@ enum SearchProviderOption: String, CaseIterable, Identifiable, Codable {
         case (.tavily, _): "Tavily"
         case (.bocha, .chinese): "博查"
         case (.bocha, .english): "Bocha"
+        case (.exa, _): "Exa"
+        case (.anysearch, _): "AnySearch"
         }
     }
 }
@@ -512,6 +524,8 @@ enum AIProviderConfigurationStore {
     private static let llmCachedModelsPrefix = "portfolix.ai.llm.cachedModels"
     private static let llmEnabledKey = "portfolix.ai.enabled"
     private static let tavilyEnabledKey = "portfolix.ai.tavily.enabled"
+    private static let exaEnabledKey = "portfolix.ai.exa.enabled"
+    private static let anysearchEnabledKey = "portfolix.ai.anysearch.enabled"
     private static let tavilyDepthKey = "portfolix.ai.tavily.searchDepth"
     private static let searchEnabledKey = "portfolix.ai.search.enabled"
     private static let searchProviderKey = "portfolix.ai.search.provider"
@@ -606,6 +620,8 @@ enum AIProviderConfigurationStore {
             || defaults.object(forKey: deepseekSearchEnabledKey) != nil
             || defaults.object(forKey: tavilyEnabledKey) != nil
             || defaults.object(forKey: bochaEnabledKey) != nil
+            || defaults.object(forKey: exaEnabledKey) != nil
+            || defaults.object(forKey: anysearchEnabledKey) != nil
         if defaults.object(forKey: parallelEnabledKey) != nil,
            defaults.bool(forKey: parallelEnabledKey) {
             enabledProviders.insert(.parallel)
@@ -621,6 +637,8 @@ enum AIProviderConfigurationStore {
            defaults.bool(forKey: bochaEnabledKey) {
             enabledProviders.insert(.bocha)
         }
+        if defaults.bool(forKey: exaEnabledKey) { enabledProviders.insert(.exa) }
+        if defaults.bool(forKey: anysearchEnabledKey) { enabledProviders.insert(.anysearch) }
         if enabledProviders.isEmpty, legacySearchEnabled == true {
             enabledProviders.insert(provider)
         }
@@ -649,6 +667,8 @@ enum AIProviderConfigurationStore {
         defaults.set(configuration.isProviderEnabled(.deepseek), forKey: deepseekSearchEnabledKey)
         defaults.set(configuration.isProviderEnabled(.tavily), forKey: tavilyEnabledKey)
         defaults.set(configuration.isProviderEnabled(.bocha), forKey: bochaEnabledKey)
+        defaults.set(configuration.isProviderEnabled(.exa), forKey: exaEnabledKey)
+        defaults.set(configuration.isProviderEnabled(.anysearch), forKey: anysearchEnabledKey)
     }
 
     static func loadTavily() -> TavilyConfiguration { loadSearch() }

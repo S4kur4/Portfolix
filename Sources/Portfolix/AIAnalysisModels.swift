@@ -464,6 +464,9 @@ struct AICitationCatalogEntry: Codable, Equatable, Sendable {
 }
 
 enum AIMessageCitationResolver {
+    private static let shorthandExpression = try! NSRegularExpression(
+        pattern: #"\[\[(source_[0-9]+(?:\s*[,;，；]\s*source_[0-9]+)*)\]\]"#
+    )
     private static let markerExpression = try! NSRegularExpression(
         // Accept grouped IDs and Markdown links, but resolve only against the trusted catalog.
         pattern: #"\[\[cite:([^\]\r\n]{1,512})\]\]|(?<!!)\[([^\[\]\r\n]{1,512})\]\(\s*([^\s()]{1,4096})\s*\)"#,
@@ -474,7 +477,7 @@ enum AIMessageCitationResolver {
         var seenURLs = Set<String>()
         let sources = toolResults.flatMap(\.sources).filter { source in
             guard (try? LLMBaseURLValidator.validatedComponents(from: source.url)) != nil else { return false }
-            return seenURLs.insert(source.url).inserted
+            return seenURLs.insert(AISearchSourceIdentity.key(source.url)).inserted
         }
         return sources.enumerated().map { index, source in
             AICitationCatalogEntry(
@@ -492,9 +495,12 @@ enum AIMessageCitationResolver {
         let trusted = catalog.filter { (try? LLMBaseURLValidator.validatedComponents(from: $0.url)) != nil }
         let sourceByID = Dictionary(trusted.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sourceByURL = Dictionary(trusted.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
-        let source = answer as NSString
+        // Real responses also use [[source_1]]. Normalize only source IDs, then apply the same catalog checks.
+        let normalizedAnswer = shorthandExpression.stringByReplacingMatches(in: answer,
+            range: NSRange(location: 0, length: answer.utf16.count), withTemplate: "[[cite:$1]]")
+        let source = normalizedAnswer as NSString
         let matches = markerExpression.matches(
-            in: answer,
+            in: normalizedAnswer,
             range: NSRange(location: 0, length: source.length)
         )
         guard !matches.isEmpty else { return (answer, []) }
@@ -1454,6 +1460,7 @@ struct AIWebSearchToolCall: Codable, Equatable, Sendable {
 }
 
 struct AIWebSearchToolPlan: Codable, Equatable, Sendable {
+    var functionContext: AISearchFunctionContext? = nil
     let toolCalls: [AIWebSearchToolCall]
     let status: String?
     let limitations: [String]?

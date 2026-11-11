@@ -103,10 +103,8 @@ struct InvestmentProfileEngineTests {
         let positionRef = InvestmentProfileEngine.positionRef(for: position)
         let sourceURL = "https://fund.example.com/reports/123456"
         let llm = InvestmentProfileMockLLM(
-            responses: [
-                toolPlanJSON(positionRef: positionRef, query: "123456 基金季报 投资范围 地区配置"),
-                exposureJSON(positionRef: positionRef, sourceURL: sourceURL),
-            ]
+            responses: [exposureJSON(positionRef: positionRef, sourceURL: sourceURL)],
+            completionResults: [LLMCompletionResult(content: toolPlanJSON(positionRef: positionRef, query: "123456 基金季报 投资范围 地区配置"))]
         )
         let search = InvestmentProfileMockSearch(sourceURL: sourceURL)
         let result = await InvestmentProfileHarness(llm: llm, search: search).enrich(
@@ -125,7 +123,7 @@ struct InvestmentProfileEngineTests {
         let queries = await search.queries()
         #expect(queries.count == 1)
         #expect(queries.first?.contains("123456") == true)
-        #expect(await llm.webSearchEnabledValues().isEmpty)
+        #expect(await llm.webSearchEnabledValues() == [false])
         #expect(await llm.userPrompts().count == 2)
     }
 

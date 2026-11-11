@@ -44,6 +44,7 @@ final class PositionRepository {
 
     init(databaseURL: URL = PositionRepository.defaultDatabaseURL()) throws {
         self.databaseURL = databaseURL
+        let isNewDatabase = !FileManager.default.fileExists(atPath: databaseURL.path)
         let directoryURL = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: directoryURL,
@@ -63,7 +64,20 @@ final class PositionRepository {
 
         database = handle
         try configure()
-        try migrate()
+        try transaction {
+            let schemaStatement = try prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
+            let schemaStatus = sqlite3_step(schemaStatement)
+            sqlite3_finalize(schemaStatement)
+            guard schemaStatus == SQLITE_ROW || schemaStatus == SQLITE_DONE else {
+                throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+            }
+            let hasExistingSchema = schemaStatus == SQLITE_ROW
+            try migrate()
+            // Persist eligibility before the UI starts, including when a helper opens the file first.
+            if isNewDatabase && !hasExistingSchema {
+                try setAppSetting(key: StarterPortfolio.stateKey, value: "pending")
+            }
+        }
         try migrateOpeningBalances()
         try applyDatabaseFilePermissions()
     }
@@ -282,6 +296,7 @@ final class PositionRepository {
         let existingClosedIDs = Set(try fetchPositionClosures().filter { !$0.isReversed }.map { $0.holding.id })
 
         try transaction {
+            try removeUntouchedStarterPositions()
             let incomingReconciliations = payload.reconciliations ?? []
             guard Set(try fetchReconciliations().map(\.id)).isSubset(of: Set(incomingReconciliations.map(\.id))) else {
                 throw PortfolixDataPackageError.invalidPackage("当前校准记录与备份不一致，不能合并覆盖余额")
@@ -446,6 +461,10 @@ final class PositionRepository {
                 )
                 try setAppSetting(key: RiskProfilePersistence.updatedAtKey, value: riskProfile.updatedAt)
             }
+            // Imported balances are user data, even when their symbols match the examples.
+            let importedIDs = Set(importedIDMap.values.compactMap(UUID.init(uuidString:)))
+            try saveStarterPositionIDs(starterPositionIDs().subtracting(importedIDs))
+            try setAppSetting(key: StarterPortfolio.stateKey, value: "completed")
         }
 
         return PortfolixDataTransferSummary(
@@ -751,12 +770,18 @@ final class PositionRepository {
         try transaction {
             let reconciledIDs = Set(try fetchReconciliations().compactMap { UUID(uuidString: $0.asset.id) })
             guard Set(positionIDs).isDisjoint(with: reconciledIDs) else { throw PositionTradeError.recordedTradesExist }
+            let starterIDs = try starterPositionIDs()
             let linkedIDs = PositionRecordLinks.activeAccountIDs(trades: try fetchPositionTrades(), closures: try fetchPositionClosures(),
-                openings: try fetchOpeningBalances())
+                openings: try fetchOpeningBalances().filter { !starterIDs.contains($0.id) })
             guard Set(positionIDs).isDisjoint(with: linkedIDs) else { throw PositionTradeError.recordedTradesExist }
             for positionID in Set(positionIDs) {
-                try deletePosition(id: positionID)
+                if starterIDs.contains(positionID) {
+                    try removeStarterPosition(id: positionID)
+                } else {
+                    try deletePosition(id: positionID)
+                }
             }
+            try saveStarterPositionIDs(starterIDs.subtracting(positionIDs))
         }
     }
 
@@ -1471,6 +1496,100 @@ final class PositionRepository {
         defer { sqlite3_finalize(assetStatement) }
         try bind(positionID.uuidString, to: 1, in: assetStatement)
         try stepDone(assetStatement)
+    }
+
+    /// Called by the main app only. An empty existing ledger is never treated as a new installation.
+    func initializeStarterPortfolioIfNeeded(language: AppLanguage, now: Date = .now) throws {
+        try transaction {
+            guard try appSetting(for: StarterPortfolio.stateKey) == "pending" else { return }
+            let statement = try prepare("""
+                SELECT 1 FROM assets UNION ALL SELECT 1 FROM position_revisions
+                UNION ALL SELECT 1 FROM portfolio_snapshots UNION ALL SELECT 1 FROM asset_price_snapshots
+                UNION ALL SELECT 1 FROM position_trades UNION ALL SELECT 1 FROM position_closures
+                UNION ALL SELECT 1 FROM position_opening_balances UNION ALL SELECT 1 FROM position_reconciliations
+                LIMIT 1
+                """)
+            defer { sqlite3_finalize(statement) }
+            let status = sqlite3_step(statement)
+            guard status == SQLITE_ROW || status == SQLITE_DONE else {
+                throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+            }
+            if status == SQLITE_DONE {
+                let examples = StarterPortfolio.positions(language: language, now: now)
+                for position in examples {
+                    try PositionInputValidator.validate(position)
+                    try save(position, operation: "create")
+                }
+                try saveStarterPositionIDs(Set(examples.map(\.id)))
+                try ensureOpeningBalances(now: now)
+                // One real initialization date; no invented performance history.
+                try writeDailySnapshots(positions: examples, snapshotDate: now)
+            }
+            try setAppSetting(key: StarterPortfolio.stateKey, value: "completed")
+        }
+    }
+
+    func starterPositionIDs() throws -> Set<UUID> {
+        guard let value = try appSetting(for: StarterPortfolio.positionIDsKey) else { return [] }
+        return Set(try decoder.decode([UUID].self, from: Data(value.utf8)))
+    }
+
+    private func saveStarterPositionIDs(_ ids: Set<UUID>) throws {
+        let value = try encoder.encode(ids.sorted { $0.uuidString < $1.uuidString })
+        try setAppSetting(key: StarterPortfolio.positionIDsKey, value: String(decoding: value, as: UTF8.self))
+    }
+
+    private func removeUntouchedStarterPositions() throws {
+        let ids = try starterPositionIDs()
+        guard !ids.isEmpty else { return }
+        // Keep examples the user has operated on, including reversed operations.
+        var operatedIDs = Set(try fetchPositionTrades().flatMap(\.accountIDs).compactMap(UUID.init(uuidString:)))
+        operatedIDs.formUnion(try fetchPositionClosures().flatMap { [$0.holding.id, $0.cashPositionID].compactMap { $0 }.compactMap(UUID.init(uuidString:)) })
+        operatedIDs.formUnion(try fetchReconciliations().compactMap { UUID(uuidString: $0.asset.id) })
+        var remaining = ids
+        for id in ids.subtracting(operatedIDs) {
+            let statement = try prepare("SELECT 1 FROM position_revisions WHERE position_id = ? AND operation NOT IN ('create', 'quote_update') LIMIT 1")
+            defer { sqlite3_finalize(statement) }
+            try bind(id.uuidString, to: 1, in: statement)
+            let status = sqlite3_step(statement)
+            guard status == SQLITE_ROW || status == SQLITE_DONE else {
+                throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+            }
+            guard status == SQLITE_DONE else { continue }
+            try removeStarterPosition(id: id)
+            remaining.remove(id)
+        }
+        try saveStarterPositionIDs(remaining)
+    }
+
+    private func removeStarterPosition(id: UUID) throws {
+        let snapshots = try closureAssetSnapshots(positionID: id.uuidString, from: "1970-01-01")
+        for snapshot in snapshots {
+            guard let value = Decimal(string: snapshot.marketValueCNY),
+                  let quantity = Decimal(string: snapshot.quantity),
+                  let average = Decimal(string: snapshot.averageCost),
+                  let currency = DisplayCurrency(rawValue: snapshot.quoteCurrency) else {
+                throw PositionRepositoryError.invalidStoredData("无法解析示例持仓快照")
+            }
+            try adjustClosurePortfolioSnapshot(day: snapshot.date, valueDelta: -value,
+                costDelta: -quantity * average / currency.rateFromCNY)
+        }
+        let openingStatement = try prepare("DELETE FROM position_opening_balances WHERE position_id = ?")
+        defer { sqlite3_finalize(openingStatement) }
+        try bind(id.uuidString, to: 1, in: openingStatement)
+        try stepDone(openingStatement)
+        try deletePosition(id: id)
+        for day in snapshots.map(\.date) {
+            let statement = try prepare("""
+                DELETE FROM portfolio_snapshots WHERE snapshot_date = ?
+                AND ABS(CAST(total_value_cny AS REAL)) < 0.000001 AND ABS(CAST(total_cost_cny AS REAL)) < 0.000001
+                AND NOT EXISTS (SELECT 1 FROM asset_price_snapshots WHERE snapshot_date = ?)
+                """)
+            defer { sqlite3_finalize(statement) }
+            try bind(day, to: 1, in: statement)
+            try bind(day, to: 2, in: statement)
+            try stepDone(statement)
+        }
     }
 
     private func configure() throws {

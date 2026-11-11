@@ -83,17 +83,23 @@ final class SearchProviderClient: WebSearching, @unchecked Sendable {
     private let bocha: BochaAIClient
     private let parallel: ParallelSearchMCPClient
     private let deepseek: DeepSeekSearchClient
+    private let exa: AdditionalSearchAPIClient
+    private let anysearch: AdditionalSearchAPIClient
 
     init(
         tavily: TavilyClient = .shared,
         bocha: BochaAIClient = .shared,
         parallel: ParallelSearchMCPClient = .shared,
-        deepseek: DeepSeekSearchClient = .shared
+        deepseek: DeepSeekSearchClient = .shared,
+        exa: AdditionalSearchAPIClient = AdditionalSearchAPIClient(provider: .exa),
+        anysearch: AdditionalSearchAPIClient = AdditionalSearchAPIClient(provider: .anysearch)
     ) {
         self.tavily = tavily
         self.bocha = bocha
         self.parallel = parallel
         self.deepseek = deepseek
+        self.exa = exa
+        self.anysearch = anysearch
     }
 
     func search(
@@ -105,6 +111,10 @@ final class SearchProviderClient: WebSearching, @unchecked Sendable {
         switch configuration.provider {
         case .deepseek:
             try await deepseek.search(query: query, positions: positions, configuration: configuration, apiKey: apiKey)
+        case .exa:
+            try await exa.search(query: query, positions: positions, configuration: configuration, apiKey: apiKey)
+        case .anysearch:
+            try await anysearch.search(query: query, positions: positions, configuration: configuration, apiKey: apiKey)
         case .parallel:
             try await parallel.search(
                 query: query,
