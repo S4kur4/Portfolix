@@ -1,7 +1,40 @@
-<?xml version="1.0" standalone="yes"?>
+<?xml version="1.0" encoding="utf-8"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Portfolix</title>
+        <item>
+            <title>0.1.13</title>
+            <pubDate>Wed, 11 Nov 2026 21:07:56 +0800</pubDate>
+            <link>https://github.com/S4kur4/Portfolix/releases</link>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>0.1.13</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.13
+
+## 更新内容
+
+- 新账本默认提供 Apple、NVIDIA、BTC 三项示例持仓，可自行编辑或删除；已有账本保持原样。
+- 每次完全退出后重新打开 App（包括首次打开），自动刷新一次价格，独立于后台定时刷新策略。
+- 新增 Exa、AnySearch 搜索支持，支持多个搜索来源并发调用，改善追问时的搜索主题、引用与次数统计。
+- 优化 AI 回答格式解析和引用展示，减少异常内容对阅读的干扰。
+- 选择器和侧边栏加入流畅的紫色滑动选中效果，移除侧边栏的灰色悬停背景。
+- 无盈亏记录时仍显示完整日历、柱状图坐标和收益趋势零线，并优化首页日期文字与金额显示。
+
+## What's New
+
+- New ledgers start with editable Apple, NVIDIA, and BTC sample holdings. Existing ledgers remain unchanged.
+- Supported asset prices refresh once on every fresh app launch, including the first launch, independently of background updates.
+- Added Exa and AnySearch, concurrent search providers, and improved follow-up search relevance, citations, and search statistics.
+- Improved AI response parsing and citation display for more readable answers.
+- Added smooth purple selection animations to selectors and the sidebar, and removed the sidebar's gray hover background.
+- Kept the calendar, bar-chart axes, and return-trend zero line visible without P&L history, and refined dashboard date and amount typography.
+
+Build 26 · Apple Silicon · macOS 15+
+]]></description>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.13/Portfolix-0.1.13.dmg" length="8559976" type="application/octet-stream" sparkle:edSignature="Vnl6Ymyz3JXkeyH0raSJDisIXGc47lFi84YyEawOgVTBjVCnx1MDw/Dm4CLmU7ewrTvnVpALQxMOB65QLXQBBw=="/>
+        </item>
+
         <item>
             <title>0.1.12</title>
             <pubDate>Sat, 07 Nov 2026 23:49:04 +0800</pubDate>
@@ -25,6 +58,5 @@
 Apple Silicon · macOS 15+
 ]]></description>
             <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12-build25.dmg" length="8452100" type="application/octet-stream" sparkle:edSignature="p0CtyGw0oSw4OZ9EGe4oiuVF8oixdY5Nck5GwdKmzf/a9fxeJsLacxfoQdyI0MWdgWMG92bxahK4sZTqs1MZBA=="/>
-        </item>
-    </channel>
+        </item></channel>
 </rss>
