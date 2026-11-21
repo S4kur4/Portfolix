@@ -163,6 +163,30 @@ struct HoldingsIntegrationTests {
     }
 
     @Test @MainActor
+    func realizedProfitReflectsProceedsFromPartialSale() throws {
+        let repo = try repository()
+        let cash = PositionClosureMath.cashPosition(currency: .cny, quantity: 1000, name: "Synthetic Cash")
+        let security = Position(name: "Synthetic Asset", symbol: "SYN", category: .cnStock, quoteCurrency: .cny,
+            quantity: 10, averageCost: 80, latestPrice: 130, marketValueCNY: 1300, profitRate: 62.5,
+            weeklyTrend: [], source: "手工价格", quoteTime: ISO8601DateFormatter().string(from: .now), freshness: .manual)
+        try repo.insert(cash)
+        try repo.insert(security)
+        let store = PortfolioStore(positionRepository: repo, credentialStore: NoIntegrationCredentials())
+
+        // 卖出 4 份：净收入 4*110-5=435，分摊成本 4*80=320，已实现收益 115。
+        try store.recordTrade(id: UUID(), side: .sell, position: security, quantity: 4, price: 110, fees: 5,
+            tradeDate: .now, cashPositionID: cash.id)
+
+        let remaining = try #require(store.positions.first { $0.id == security.id })
+        #expect(remaining.quantity == 6 && remaining.totalCost == 480)
+        #expect(store.realizedProfitCNY == 115)
+        #expect(store.realizedCostCNY == 320)
+        #expect(store.realizedProfitIsAvailable)
+        #expect(store.realizedProfitRate == Decimal(115) / Decimal(320) * 100)
+        #expect(store.totalProfitCNY == 300) // 浮动部分不计入已实现收益：6*130-480
+    }
+
+    @Test @MainActor
     func legacyOpeningBalancesAndClosuresAreVisibleWithoutBeingCountedAsNewPurchases() throws {
         let repo = try repository()
         let cash = PositionClosureMath.cashPosition(currency: .cny, quantity: 1000, name: "Synthetic Cash")

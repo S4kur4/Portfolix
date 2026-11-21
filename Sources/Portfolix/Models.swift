@@ -385,6 +385,27 @@ struct Position: Identifiable, Sendable {
         return language == .english ? "\(days)d ago" : "\(days) 天前更新"
     }
 
+    /// 精简的相对时间（省略“更新”后缀），用于空间紧张的位置，如仪表盘组合价值卡。
+    func shortRelativeUpdateText(now: Date, language: AppLanguage = .chinese) -> String {
+        guard let date = Self.isoDate(from: fetchedAt) else {
+            return quoteTime
+        }
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 {
+            return language == .english ? "Just now" : "刚刚"
+        }
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return language == .english ? "\(minutes)m ago" : "\(minutes) 分钟前"
+        }
+        let hours = minutes / 60
+        if hours < 24 {
+            return language == .english ? "\(hours)h ago" : "\(hours) 小时前"
+        }
+        let days = hours / 24
+        return language == .english ? "\(days)d ago" : "\(days) 天前"
+    }
+
     var priceDateText: String {
         priceDateText(language: .chinese)
     }
@@ -1529,6 +1550,28 @@ final class PortfolioStore {
     var realizedProfitCNY: Decimal {
         activePositionClosures.reduce(0) { $0 + $1.realizedProfitCNY }
             + positionTrades.filter { !$0.isReversed }.reduce(0) { $0 + ($1.realizedProfit ?? 0) / $1.rate }
+    }
+
+    /// 已实现收益对应的累计投入成本（清仓记录按记录时成本、卖出按分摊成本，均折算为 CNY）。
+    var realizedCostCNY: Decimal {
+        activePositionClosures.reduce(0) { total, record in
+            let cost = PositionClosureMath.decimal(record.holding.totalCost) ?? 0
+            return total + cost / record.conversionRate
+        } + positionTrades.filter { !$0.isReversed && $0.side == .sell }.reduce(0) { total, record in
+            total + record.cost / record.rate
+        }
+    }
+
+    /// 已实现收益 = 未撤销清仓 + 未撤销卖出的已实现收益；任一相关成本未知时不展示该指标。
+    var realizedProfitIsAvailable: Bool {
+        activePositionClosures.allSatisfy { $0.holding.costKnown != false }
+            && positionTrades.filter { !$0.isReversed && $0.side == .sell }.allSatisfy { $0.asset.costKnown != false }
+    }
+
+    /// 已实现收益率 = 已实现收益 / 已实现部分对应的成本。
+    var realizedProfitRate: Decimal {
+        guard realizedCostCNY != 0 else { return 0 }
+        return realizedProfitCNY / realizedCostCNY * 100
     }
 
     func investmentCloudDailyProfitItems(asOf date: Date) -> [InvestmentCloudItem] {
