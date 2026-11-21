@@ -66,7 +66,7 @@ struct PositionsView: View {
                                 .foregroundStyle(PortfolixTheme.tertiaryText)
                             TextField(localizedText("搜索资产代码或名称", "Search code or name", language: store.appLanguage), text: $store.searchText)
                                 .textFieldStyle(.plain)
-                                .font(.system(size: 12))
+                                .font(PortfolixTypography.label)
                                 .focused($isSearchFieldFocused)
                         }
                         .padding(.horizontal, PortfolixSpacing.md)
@@ -200,7 +200,7 @@ struct PositionsView: View {
                         .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
                         .lineLimit(1)
                     Text(position.symbol)
-                        .font(.system(size: 10))
+                        .font(PortfolixTypography.caption)
                         .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
                         .lineLimit(1)
                 }
@@ -457,7 +457,7 @@ struct PositionSourceCell: View {
                 RelativeTimeText { now in
                     "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: now, language: store.appLanguage))"
                 }
-                .font(.system(size: 10))
+                .font(PortfolixTypography.caption)
                 .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
                 .lineLimit(1)
             }
@@ -925,7 +925,7 @@ private struct AIReportChatHeader: View {
                 .frame(width: 28, height: 28)
 
             Text(localizedText("Portfolix Agent", "Portfolix Agent", language: language))
-                .font(.system(size: 13, weight: .semibold))
+                .font(PortfolixTypography.subheading)
                 .foregroundStyle(PortfolixTheme.primaryText)
 
             AIReportChatActionsMenu(
@@ -1483,7 +1483,7 @@ private struct AIReportWelcomeMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             Text(localizedText("我可以基于你的持仓、风险偏好和行情数据生成组合分析", "I can analyze your portfolio using holdings, risk profile, and market data", language: language))
-                .font(.system(size: 14, weight: .semibold))
+                .font(PortfolixTypography.body)
                 .foregroundStyle(PortfolixTheme.primaryText)
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
@@ -1571,7 +1571,7 @@ struct AIReportProgressCard: View {
             AIReportAgentThinkingIcon(size: 36)
 
             Text(displayLine.text)
-                .font(.system(size: 12, weight: .semibold))
+                .font(PortfolixTypography.labelEmphasis)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1599,7 +1599,7 @@ private struct AIReportStaticStatusMessage: View {
             StatusSymbolIcon(symbol: symbol, color: color)
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PortfolixTypography.subheading)
                     .foregroundStyle(PortfolixTheme.primaryText)
                 Text(detail)
                     .font(PortfolixTypography.caption)
@@ -1726,7 +1726,7 @@ private struct AIReportChatReport: View {
             AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
                 AIReportChatSection(title: localizedText("核心结论", "Core Takeaway", language: language), symbol: "target") {
                     Text(AIUserFacingTextSanitizer.sanitize(report.summary))
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(PortfolixTypography.body)
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
@@ -1822,7 +1822,7 @@ private struct AIAnalysisDiagnosticCard: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(PortfolixTheme.amber)
                 Text(localizedText("诊断信息", "Diagnostics", language: language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PortfolixTypography.subheading)
                     .foregroundStyle(PortfolixTheme.primaryText)
                 Spacer()
                 Button(action: copyDiagnostic) {
@@ -1922,7 +1922,7 @@ private struct AIReportRebalanceMessageRow: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(AIUserFacingTextSanitizer.sanitize(action.title))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PortfolixTypography.subheading)
                     .foregroundStyle(PortfolixTheme.primaryText)
                 if let assetName = action.assetName, !assetName.isEmpty {
                     Text([assetName, action.symbol].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
@@ -1981,7 +1981,7 @@ private struct AIReportAssetAlertMessageRow: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
                     Text(AIUserFacingTextSanitizer.sanitize(alert.title))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(PortfolixTypography.subheading)
                         .foregroundStyle(PortfolixTheme.primaryText)
                 }
                 if !assetLabel.isEmpty {
@@ -1995,7 +1995,7 @@ private struct AIReportAssetAlertMessageRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if !alert.sourceDomains.isEmpty {
                     Text(alert.sourceDomains.prefix(3).joined(separator: " · "))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.tertiaryText)
                 }
             }
@@ -2374,7 +2374,7 @@ private struct AIReportStatusCard: View {
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PortfolixTypography.subheading)
                     .foregroundStyle(PortfolixTheme.primaryText)
                     .lineLimit(1)
                 Text(detail)
@@ -2548,7 +2548,7 @@ private struct AIReportSummaryCard: View {
                     AIReportLoadingBlock(lineCount: 4)
                 } else if let report {
                     Text(AIUserFacingTextSanitizer.sanitize(report.summary))
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(PortfolixTypography.body)
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .lineLimit(8)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2646,7 +2646,7 @@ private struct AIReportRebalanceCard: View {
                                         .foregroundStyle(color(for: action.action))
                                         .frame(width: 18)
                                     Text(AIUserFacingTextSanitizer.sanitize(action.title))
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(PortfolixTypography.subheading)
                                         .foregroundStyle(PortfolixTheme.primaryText)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
@@ -2774,7 +2774,7 @@ private struct AIReportAssetAlerts: View {
                             HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(alert.assetName)
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(PortfolixTypography.subheading)
                                         .foregroundStyle(PortfolixTheme.primaryText)
                                         .lineLimit(1)
                                     Text(alert.symbol)
@@ -2898,7 +2898,7 @@ private struct AIReportSourceLinks: View {
                                 Text(source.domain)
                                     .lineLimit(1)
                             }
-                            .font(.system(size: 10, weight: .medium))
+                            .font(PortfolixTypography.caption)
                             .foregroundStyle(PortfolixTheme.lilac)
                             .padding(.horizontal, PortfolixSpacing.sm)
                             .padding(.vertical, 4)
@@ -2954,7 +2954,7 @@ private struct AIReportSourcesCard: View {
                                     .foregroundStyle(PortfolixTheme.secondaryText)
                                     .lineLimit(2)
                                 Text(source.assetName)
-                                    .font(.system(size: 10))
+                                    .font(PortfolixTypography.caption)
                                     .foregroundStyle(PortfolixTheme.tertiaryText)
                                     .lineLimit(1)
                             }
@@ -3012,7 +3012,7 @@ private struct AIReportBullet: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(PortfolixTypography.bodyEmphasis)
                     .foregroundStyle(PortfolixTheme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 if let bodyText {
@@ -3373,7 +3373,7 @@ private struct RiskProfileSummaryCard: View {
                 HStack(alignment: .center, spacing: PortfolixSpacing.xl) {
                     VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                         Text(level)
-                            .font(.system(size: 24, weight: .medium, design: .rounded))
+                            .font(PortfolixTypography.secondaryValue)
                             .foregroundStyle(PortfolixTheme.lilac)
                             .lineLimit(1)
 
@@ -3388,7 +3388,7 @@ private struct RiskProfileSummaryCard: View {
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {
                         Text(tolerance)
-                            .font(.system(size: 24, weight: .medium, design: .rounded))
+                            .font(PortfolixTypography.secondaryValue)
                             .foregroundStyle(PortfolixTheme.primaryText)
                             .monospacedDigit()
                             .portfolixNumericTransition(tolerance)
@@ -3433,7 +3433,7 @@ private struct RiskPortfolioMatchCard: View {
                 HStack(alignment: .center, spacing: PortfolixSpacing.xl) {
                     VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                         Text(scoreText)
-                            .font(.system(size: 32, weight: .light, design: .rounded))
+                            .font(PortfolixTypography.heroValueCompact)
                             .monospacedDigit()
                             .foregroundStyle(scoreColor)
                             .portfolixNumericTransition(scoreText)
@@ -3510,7 +3510,7 @@ private struct RiskConstraintSliderRow: View {
             HStack(spacing: spacing) {
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(PortfolixTypography.bodyEmphasis)
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .lineLimit(1)
 
@@ -3532,7 +3532,7 @@ private struct RiskConstraintSliderRow: View {
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {
                         Text("\(limitLabel) \(percentText(value))")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(PortfolixTypography.labelEmphasis)
                             .foregroundStyle(PortfolixTheme.secondaryText)
                             .monospacedDigit()
                             .portfolixNumericTransition(percentText(value))
@@ -3639,7 +3639,7 @@ private struct RiskStatusValue: View {
             Image(systemName: status.symbol)
             Text(status.title(language: language))
         }
-        .font(.system(size: 12, weight: .semibold))
+        .font(PortfolixTypography.labelEmphasis)
         .foregroundStyle(status.color)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
@@ -3655,7 +3655,7 @@ private struct RiskSettingValue: View {
 
     var body: some View {
         Text(value)
-            .font(.system(size: 12, weight: .semibold))
+            .font(PortfolixTypography.labelEmphasis)
             .foregroundStyle(PortfolixTheme.primaryText)
             .monospacedDigit()
             .lineLimit(1)
@@ -3677,7 +3677,7 @@ private struct RiskCountPill: View {
                 .monospacedDigit()
                 .portfolixNumericTransition(value)
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(PortfolixTypography.captionEmphasis)
     }
 }
 
@@ -3688,7 +3688,7 @@ private struct RiskLimitBadge: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(PortfolixTypography.captionEmphasis)
             .foregroundStyle(textColor)
             .lineLimit(1)
             .padding(.horizontal, PortfolixSpacing.sm)
@@ -4362,7 +4362,7 @@ struct HelpTooltipBubble: View {
 
     private var tooltipText: some View {
         Text(text)
-            .font(.system(size: textSize))
+            .font(PortfolixTypography.caption)
             .foregroundStyle(PortfolixTheme.primaryText)
             .multilineTextAlignment(.leading)
     }
@@ -4375,7 +4375,7 @@ private struct SettingsText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(PortfolixTypography.bodyEmphasis)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .lineLimit(1)
             if let detail {
@@ -4405,7 +4405,7 @@ private struct ProviderConfigurationActions: View {
     var body: some View {
         HStack(spacing: PortfolixSpacing.sm) {
             Label(state, systemImage: symbol)
-                .font(.system(size: 11, weight: .medium))
+                .font(PortfolixTypography.captionEmphasis)
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -4475,7 +4475,7 @@ struct PageHeader<Trailing: View>: View {
                     .lineLimit(1)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(PortfolixTypography.label)
                         .foregroundStyle(PortfolixTheme.secondaryText)
                         .lineLimit(1)
                 }

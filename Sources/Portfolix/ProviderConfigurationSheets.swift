@@ -1045,7 +1045,7 @@ private struct ProviderInputField: View {
         ZStack(alignment: .trailing) {
             if shouldShowPlaceholder {
                 Text(placeholder)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(PortfolixTypography.body)
                     .foregroundStyle(placeholderColor)
                     .lineLimit(1)
                     .allowsHitTesting(false)
@@ -1053,7 +1053,7 @@ private struct ProviderInputField: View {
 
             TextField("", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .regular))
+                .font(PortfolixTypography.body)
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(inputColor)
                 .lineLimit(1)
@@ -1092,7 +1092,7 @@ private struct ProviderAPIKeyInputField: View {
             ZStack(alignment: .trailing) {
                 if shouldShowPlaceholder {
                     Text(placeholder)
-                        .font(.system(size: 13, weight: .regular))
+                        .font(PortfolixTypography.body)
                         .foregroundStyle(placeholderColor)
                         .lineLimit(1)
                         .allowsHitTesting(false)
@@ -1354,7 +1354,7 @@ struct SheetHeader: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 19, weight: .semibold))
+                .font(PortfolixTypography.sheetTitle)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .lineLimit(1)
             Spacer()
@@ -1437,13 +1437,13 @@ struct ProviderNoticeRow: View {
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(PortfolixTypography.labelEmphasis)
                     .foregroundStyle(titleColor)
                     .lineLimit(2)
 
                 if let message, !message.isEmpty {
                     Text(message)
-                        .font(.system(size: 11))
+                        .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.secondaryText)
                         .lineLimit(2)
                 }

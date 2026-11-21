@@ -204,7 +204,7 @@ struct PositionEditorSheet: View {
                     if !locksAssetIdentity, !isManualAssetEntry {
                         HStack(spacing: PortfolixSpacing.sm) {
                             Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
-                                .font(.system(size: 11))
+                                .font(PortfolixTypography.caption)
                                 .foregroundStyle(PortfolixTheme.secondaryText)
 
                             Spacer()
@@ -245,7 +245,7 @@ struct PositionEditorSheet: View {
                     if !locksAssetIdentity, !assetCandidates.isEmpty {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                             Text(sheetText("数据候选", "Data Candidates"))
-                                .font(.system(size: 10, weight: .medium))
+                                .font(PortfolixTypography.labelEmphasis)
                                 .foregroundStyle(PortfolixTheme.tertiaryText)
 
                             ForEach(assetCandidates) { candidate in
@@ -1014,7 +1014,7 @@ private struct AssetCandidateButton: View {
                         .foregroundStyle(PortfolixTheme.primaryText)
                         .lineLimit(1)
                     Text(candidate.symbol)
-                        .font(.system(size: 10))
+                        .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.tertiaryText)
                         .lineLimit(1)
                 }
@@ -1022,12 +1022,12 @@ private struct AssetCandidateButton: View {
                 Spacer()
 
                 Text(candidate.category.title(language: language))
-                    .font(.system(size: 10, weight: .medium))
+                    .font(PortfolixTypography.caption)
                     .foregroundStyle(candidate.category.color)
                     .lineLimit(1)
 
                 Text(sourceLabel)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(PortfolixTypography.chartAxis)
                     .foregroundStyle(PortfolixTheme.tertiaryText)
                     .lineLimit(1)
             }
