@@ -11,18 +11,14 @@ struct InvestmentCloudCard: View {
 
         TimelineView(.periodic(from: .now, by: 60)) { context in
             Panel {
-                VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
+                VStack(alignment: .leading, spacing: 0) {
                     InvestmentCloudHeader(
                         mode: $store.investmentCloudMode, language: store.appLanguage,
                         helpText: store.investmentDistributionHelpText,
                         isUpdating: mode == .distribution && store.isUpdatingInvestmentDistribution
                     )
-
-                    if mode == .dailyProfit {
-                        cloud(items: store.investmentCloudDailyProfitItems(asOf: context.date))
-                    } else {
-                        cloud(items: store.investmentDistributionItems.map(InvestmentCloudItem.init(distribution:)))
-                    }
+                    content(asOf: context.date)
+                        .padding(.top, PortfolixSpacing.sm)
                 }
                 .frame(height: contentHeight, alignment: .topLeading)
             }
@@ -32,8 +28,20 @@ struct InvestmentCloudCard: View {
         }
     }
 
-    @ViewBuilder private func cloud(items: [InvestmentCloudItem]) -> some View {
-        if items.isEmpty {
+    @ViewBuilder private func content(asOf date: Date) -> some View {
+        let rawItems: [InvestmentCloudItem] = mode == .dailyProfit
+            ? store.investmentCloudDailyProfitItems(asOf: date)
+            : store.investmentDistributionItems.map(InvestmentCloudItem.init(distribution:))
+        let weight: (InvestmentCloudItem) -> Double = mode == .dailyProfit
+            ? { $0.marketValueCNY?.doubleValue ?? 0 }
+            : { $0.distributionPercentage ?? $0.areaWeight }
+        let prepared = InvestmentCloudEngine.displayItems(
+            rawItems,
+            minimumShare: 0.02,
+            maximumItems: mode == .dailyProfit ? 12 : 8,
+            weight: weight
+        )
+        if prepared.isEmpty {
             Text(mode == .dailyProfit
                  ? localizedText("暂无今日盈亏", "No P&L for today", language: store.appLanguage)
                  : localizedText("暂无投资分布", "No investment distribution yet", language: store.appLanguage))
@@ -41,9 +49,16 @@ struct InvestmentCloudCard: View {
                 .foregroundStyle(PortfolixTheme.secondaryText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            InvestmentCloudTreemap(items: items, currency: store.displayCurrency, language: store.appLanguage,
-                                   performanceColorScheme: store.performanceColorScheme)
-                .id(mode)
+            InvestmentCloudMapView(
+                items: prepared,
+                rawItems: rawItems,
+                weights: prepared.map(weight),
+                mode: mode,
+                currency: store.displayCurrency,
+                language: store.appLanguage,
+                performanceColorScheme: store.performanceColorScheme
+            )
+            .id(mode)
         }
     }
 }
@@ -95,18 +110,250 @@ struct InvestmentCloudHeader: View {
     }
 }
 
+enum InvestmentCloudCategoryPalette {
+    static let colors: [Color] = [
+        PortfolixTheme.lilac, PortfolixTheme.violet, PortfolixTheme.blue,
+        PortfolixTheme.amber, PortfolixTheme.mint, PortfolixTheme.rose,
+    ]
+
+    static func color(for id: String, among ids: [String]) -> Color {
+        let ordered = Set(ids).sorted()
+        guard let index = ordered.firstIndex(of: id) else { return colors[0] }
+        return colors[index % colors.count]
+    }
+}
+
+/// Summary row + treemap + legend. The summary row doubles as the hover/selection
+/// readout so tiles never have to carry floating tooltips that cover neighbours.
+struct InvestmentCloudMapView: View {
+    let items: [InvestmentCloudItem]
+    let rawItems: [InvestmentCloudItem]
+    let weights: [Double]
+    let mode: InvestmentCloudMode
+    let currency: DisplayCurrency
+    let language: AppLanguage
+    let performanceColorScheme: PerformanceColorScheme
+
+    @State private var highlightedID: InvestmentCloudItem.ID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var activeItem: InvestmentCloudItem? {
+        guard let activeID = highlightedID else { return nil }
+        return items.first { $0.id == activeID }
+    }
+
+    private var convertedTotal: Decimal {
+        rawItems.reduce(Decimal(0)) { $0 + $1.amountCNY } * currency.rateFromCNY
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            summaryRow
+                .frame(height: 18, alignment: .leading)
+            InvestmentCloudTreemap(
+                items: items, currency: currency, language: language,
+                performanceColorScheme: performanceColorScheme,
+                weights: weights,
+                highlightedID: $highlightedID,
+                showsHoverTooltip: false
+            )
+            .padding(.top, PortfolixSpacing.sm)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if mode == .distribution {
+                legend
+                    .padding(.top, PortfolixSpacing.sm)
+                    .frame(height: 16, alignment: .leading)
+            }
+        }
+    }
+
+    // MARK: - Summary row
+
+    @ViewBuilder private var summaryRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
+            ZStack(alignment: .leading) {
+                if let item = activeItem {
+                    detailContent(item)
+                        .transition(.opacity)
+                } else {
+                    defaultSummary
+                        .transition(.opacity)
+                }
+            }
+            Spacer(minLength: 0)
+            Group {
+                if activeItem == nil {
+                    countText
+                }
+            }
+            .transition(.opacity)
+        }
+        .lineLimit(1)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: summaryAnimationTrigger)
+    }
+
+    /// 摘要行切换动画触发值：悬停对象变化时触发，
+    /// 与盈亏日历保持一致（分支切换淡入淡出，数字用 numericText 滚动）。
+    private var summaryAnimationTrigger: String {
+        activeItem?.id ?? "default"
+    }
+
+    @ViewBuilder private var defaultSummary: some View {
+        HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
+            Text(mode == .dailyProfit
+                 ? localizedText("今日盈亏", "Today's P&L", language: language)
+                 : localizedText("总市值", "Total value", language: language))
+                .font(PortfolixTypography.caption)
+                .foregroundStyle(PortfolixTheme.secondaryText)
+            Text(mode == .dailyProfit
+                 ? formatSignedMoney(convertedTotal, currency: currency)
+                 : formatMoney(convertedTotal, currency: currency))
+                .font(PortfolixTypography.headlineValue)
+                .monospacedDigit()
+                .foregroundStyle(mode == .dailyProfit
+                                 ? PortfolixTheme.performanceStatusText(for: convertedTotal, scheme: performanceColorScheme)
+                                 : PortfolixTheme.primaryText)
+                .portfolixNumericTransition(convertedTotal)
+        }
+    }
+
+    @ViewBuilder private var countText: some View {
+        if mode == .dailyProfit {
+            let up = items.filter { $0.amountCNY > 0 }.count
+            let down = items.filter { $0.amountCNY < 0 }.count
+            Text(localizedText("涨 \(up) · 跌 \(down)", "\(up) up · \(down) down", language: language))
+                .font(PortfolixTypography.caption)
+                .foregroundStyle(PortfolixTheme.tertiaryText)
+        } else {
+            let categories = items.filter { !$0.isAggregated }.count
+            Text(localizedText("\(categories) 类", "\(categories) groups", language: language))
+                .font(PortfolixTypography.caption)
+                .foregroundStyle(PortfolixTheme.tertiaryText)
+        }
+    }
+
+    @ViewBuilder
+    private func detailContent(_ item: InvestmentCloudItem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.xs) {
+            Text(item.title(language: language))
+                .font(PortfolixTypography.captionEmphasis)
+                .foregroundStyle(PortfolixTheme.secondaryText)
+
+            if let marketValue = item.marketValueCNY {
+                Text("·")
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                let valueText = formatMoney(marketValue * currency.rateFromCNY, currency: currency)
+                Text(valueText)
+                    .font(PortfolixTypography.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .portfolixNumericTransition(valueText)
+            }
+
+            if mode == .dailyProfit {
+                Text("·")
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                let profitText = formatSignedMoney(item.amountCNY * currency.rateFromCNY, currency: currency)
+                Text(profitText)
+                    .font(PortfolixTypography.captionEmphasis)
+                    .monospacedDigit()
+                    .foregroundStyle(PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme))
+                    .portfolixNumericTransition(profitText)
+                if let rate = itemRate(item) {
+                    let rateText = formatPercent(rate)
+                    Text(rateText)
+                        .font(PortfolixTypography.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme))
+                        .portfolixNumericTransition(rateText)
+                }
+            } else if let percentage = item.distributionPercentage {
+                Text("·")
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                let percentageText = String(format: "%.1f%%", percentage)
+                Text(percentageText)
+                    .font(PortfolixTypography.captionEmphasis)
+                    .monospacedDigit()
+                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .portfolixNumericTransition(percentageText)
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func itemRate(_ item: InvestmentCloudItem) -> Decimal? {
+        if let rate = item.dailyProfitRate, !item.isAggregated { return rate }
+        guard let marketValue = item.marketValueCNY else { return nil }
+        let base = marketValue - item.amountCNY
+        guard base != 0 else { return nil }
+        return item.amountCNY / base * 100
+    }
+
+    @ViewBuilder private var legend: some View {
+        let categories = items.filter { !$0.isAggregated }
+        HStack(spacing: PortfolixSpacing.md) {
+            ForEach(Array(categories.prefix(4))) { item in
+                HStack(spacing: PortfolixSpacing.xs) {
+                    Circle()
+                        .fill(InvestmentCloudCategoryPalette.color(for: item.id, among: items.map(\.id)))
+                        .frame(width: 6, height: 6)
+                    Text(item.title(language: language))
+                        .font(PortfolixTypography.caption)
+                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+            if categories.count > 4 {
+                Text(localizedText("+\(categories.count - 4) 类", "+\(categories.count - 4) groups", language: language))
+                    .font(PortfolixTypography.caption)
+                    .foregroundStyle(PortfolixTheme.tertiaryText)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 struct InvestmentCloudTreemap: View {
     let items: [InvestmentCloudItem]
     let currency: DisplayCurrency
     let language: AppLanguage
     var performanceColorScheme: PerformanceColorScheme = .greenUpRedDown
+    var weights: [Double]?
+    var highlightedID: Binding<InvestmentCloudItem.ID?>?
+    var showsHoverTooltip: Bool = true
     @Environment(\.colorScheme) private var colorScheme
-    @State private var highlightedID: InvestmentCloudItem.ID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var internalHighlightedID: InvestmentCloudItem.ID?
+
+    private var activeHighlightedID: InvestmentCloudItem.ID? {
+        highlightedID?.wrappedValue ?? internalHighlightedID
+    }
+
+    private func setHighlightedID(_ id: InvestmentCloudItem.ID?) {
+        if let highlightedID {
+            highlightedID.wrappedValue = id
+        } else {
+            internalHighlightedID = id
+        }
+    }
+
+    private var resolvedWeights: [Double] {
+        if let weights, weights.count == items.count { return weights }
+        return items.map(\.areaWeight)
+    }
+
+    private var maxMagnitude: Double {
+        items.map { abs($0.amountCNY.doubleValue) }.max() ?? 0
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let rectangles = PortfolioChartLayout.treemap(
-                weights: items.map(\.areaWeight), in: CGRect(origin: .zero, size: geometry.size),
+                weights: resolvedWeights, in: CGRect(origin: .zero, size: geometry.size),
                 spacing: PortfolixLayout.dataTileSpacing
             )
             ZStack(alignment: .topLeading) {
@@ -126,14 +373,16 @@ struct InvestmentCloudTreemap: View {
             .onContinuousHover { phase in
                 switch phase {
                 case let .active(location):
-                    highlightedID = rectangles.enumerated().first { $0.element.contains(location) }
+                    let hit = rectangles.enumerated().first { $0.element.contains(location) }
                         .flatMap { items.indices.contains($0.offset) ? items[$0.offset].id : nil }
+                    setHighlightedID(hit)
                 case .ended:
-                    highlightedID = nil
+                    setHighlightedID(nil)
                 }
             }
             .overlay(alignment: .topLeading) {
-                if let index = items.firstIndex(where: { $0.id == highlightedID }), index < rectangles.count,
+                if showsHoverTooltip,
+                   let index = items.firstIndex(where: { $0.id == activeHighlightedID }), index < rectangles.count,
                    shouldShowHover(item: items[index], rect: rectangles[index]) {
                     let frame = hoverFrame(item: items[index], tile: rectangles[index], bounds: geometry.size)
                     hoverDetails(items[index])
@@ -145,36 +394,41 @@ struct InvestmentCloudTreemap: View {
             }
         }
         .onChange(of: items.map(\.id)) { _, ids in
-            if let highlightedID, !ids.contains(highlightedID) { self.highlightedID = nil }
+            if let activeHighlightedID, !ids.contains(activeHighlightedID) {
+                setHighlightedID(nil)
+            }
         }
     }
 
     private func tile(item: InvestmentCloudItem, rect: CGRect) -> some View {
-        ZStack {
+        let dimmed: Bool = {
+            guard let activeHighlightedID else { return false }
+            return activeHighlightedID != item.id
+        }()
+        return ZStack {
             RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
-                .fill(item.mode == .dailyProfit
-                      ? PortfolixTheme.dailyProfitTileFill(for: item.amountCNY, scheme: performanceColorScheme)
-                      : PortfolixTheme.lilac.opacity(colorScheme == .dark ? 0.30 : 0.16))
-                .opacity(highlightedID == nil || highlightedID == item.id ? 1 : 0.62)
+                .fill(fillColor(for: item))
+                .opacity(dimmed ? 0.62 : 1)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: dimmed)
             if canShowLabels(item: item, rect: rect) {
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(item.title(language: language))
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(PortfolixTypography.captionEmphasis)
                         .lineLimit(2)
-                    if let percentage = item.distributionPercentage {
+                    if item.mode == .dailyProfit {
+                        Text(amountLabelText(item, rect: rect))
+                            .font(PortfolixTypography.captionEmphasis)
+                            .monospacedDigit()
+                            .portfolixNumericTransition(amountLabelText(item, rect: rect))
+                            .lineLimit(1)
+                            .foregroundStyle(PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme))
+                    } else if let percentage = item.distributionPercentage {
                         Text(String(format: "%.1f%%", percentage))
-                            .font(.system(size: 11, weight: .medium))
+                            .font(PortfolixTypography.captionEmphasis)
                             .monospacedDigit()
                             .portfolixNumericTransition(percentage)
+                            .foregroundStyle(PortfolixTheme.primaryText)
                     }
-                    Text(amountLabelText(item, rect: rect))
-                        .font(.system(size: 10))
-                        .monospacedDigit()
-                        .portfolixNumericTransition(amountLabelText(item, rect: rect))
-                        .lineLimit(1)
-                        .foregroundStyle(item.mode == .dailyProfit
-                                         ? PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
-                                         : PortfolixTheme.primaryText)
                 }
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .padding(PortfolixSpacing.sm)
@@ -183,7 +437,38 @@ struct InvestmentCloudTreemap: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([item.title(language: language), item.distributionPercentage.map { String(format: "%.1f%%", $0) }, amountText(item)].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(accessibilityLabel(for: item))
+        .accessibilityHint(localizedText("悬停查看详情", "Hover for details", language: language))
+    }
+
+    private func fillColor(for item: InvestmentCloudItem) -> Color {
+        if item.mode == .dailyProfit {
+            guard item.amountCNY != 0 else { return PortfolixTheme.panelSoft.opacity(0.55) }
+            let normalized = maxMagnitude > 0 ? min(abs(item.amountCNY.doubleValue) / maxMagnitude, 1) : 0
+            return PortfolixTheme.performanceColor(for: item.amountCNY, scheme: performanceColorScheme)
+                .opacity(0.12 + 0.28 * normalized)
+        }
+        if item.isAggregated {
+            return PortfolixTheme.panelSoft.opacity(0.55)
+        }
+        return InvestmentCloudCategoryPalette.color(for: item.id, among: items.map(\.id))
+            .opacity(colorScheme == .dark ? 0.30 : 0.18)
+    }
+
+    private func accessibilityLabel(for item: InvestmentCloudItem) -> String {
+        var parts: [String] = [item.title(language: language)]
+        if let marketValue = item.marketValueCNY {
+            parts.append(formatMoney(marketValue * currency.rateFromCNY, currency: currency))
+        }
+        if item.mode == .dailyProfit {
+            parts.append(formatSignedMoney(item.amountCNY * currency.rateFromCNY, currency: currency))
+            if let rate = item.dailyProfitRate, !item.isAggregated {
+                parts.append(formatPercent(rate))
+            }
+        } else if let percentage = item.distributionPercentage {
+            parts.append(String(format: "%.1f%%", percentage))
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func hoverDetails(_ item: InvestmentCloudItem) -> some View {
@@ -257,10 +542,16 @@ struct InvestmentCloudTreemap: View {
         let title = (item.title(language: language) as NSString).boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold)]
+            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]
         )
-        let amountWidth = (amountLabelText(item, rect: rect) as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)]).width
-        let detailsHeight: CGFloat = item.distributionPercentage == nil ? 33 : 50
-        return title.height <= 28 && rect.height >= ceil(title.height) + detailsHeight && amountWidth <= width
+        guard title.height <= 28 else { return false }
+        switch item.mode {
+        case .dailyProfit:
+            let amountWidth = (amountLabelText(item, rect: rect) as NSString)
+                .size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)]).width
+            return rect.height >= ceil(title.height) + 33 && amountWidth <= width
+        case .distribution:
+            return rect.height >= ceil(title.height) + 34
+        }
     }
 }
