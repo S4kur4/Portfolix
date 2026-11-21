@@ -15,24 +15,24 @@ struct PrimaryPositionOrderingTests {
 
         let visible = PrimaryPositionOrdering.visiblePositions(
             from: positions,
-            limit: .top30Percent,
+            limit: .top5,
             sortField: .profitRate,
             direction: .ascending,
             todayProfit: { _ in 0 }
         )
 
-        #expect(visible.count == 4)
-        #expect(visible.first?.name == "Asset 9")
+        #expect(visible.count == 5)
+        #expect(visible.first?.name == "Asset 8")
         #expect(visible.last?.name == "Asset 12")
-        #expect(!visible.contains(where: { $0.name == "Asset 8" }))
+        #expect(!visible.contains(where: { $0.name == "Asset 7" }))
     }
 
     @Test
-    func percentageLimitsRoundUpAndAlwaysShowAtLeastOneHolding() {
-        #expect(PrimaryPositionDisplayLimit.top10Percent.maximumCount(totalCount: 1) == 1)
-        #expect(PrimaryPositionDisplayLimit.top10Percent.maximumCount(totalCount: 13) == 2)
-        #expect(PrimaryPositionDisplayLimit.top30Percent.maximumCount(totalCount: 13) == 4)
-        #expect(PrimaryPositionDisplayLimit.top50Percent.maximumCount(totalCount: 13) == 7)
+    func limitsCapVisibleHoldingsAtFiveTenOrAll() {
+        #expect(PrimaryPositionDisplayLimit.top5.maximumCount(totalCount: 1) == 1)
+        #expect(PrimaryPositionDisplayLimit.top5.maximumCount(totalCount: 13) == 5)
+        #expect(PrimaryPositionDisplayLimit.top10.maximumCount(totalCount: 13) == 10)
+        #expect(PrimaryPositionDisplayLimit.top10.maximumCount(totalCount: 7) == 7)
         #expect(PrimaryPositionDisplayLimit.all.maximumCount(totalCount: 13) == nil)
     }
 
