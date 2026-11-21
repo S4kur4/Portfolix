@@ -30,6 +30,8 @@ enum SidebarIconLayout {
     static let navigationIconSize: CGFloat = 16
     static let navigationTextSize: CGFloat = 15
     static let navigationRowHeight: CGFloat = 40
+    static let expandedNavigationRowHeight: CGFloat = 48
+    static let selectionHeight: CGFloat = 40
     static let edgeInset = PortfolixSpacing.sm
     static let minimumExpandedWidth: CGFloat = 218
     static let toggleSize = CGSize(width: 28, height: 24)
@@ -103,7 +105,11 @@ struct SidebarView: View {
                         .anchorPreference(key: PortfolixSelectionBoundsKey<SidebarSection>.self, value: .bounds) { [item: $0] }
                     }
                 }
-                .portfolixSelectionBackground(selection: store.selection)
+                .portfolixSelectionBackground(
+                    selection: store.selection,
+                    height: SidebarIconLayout.selectionHeight,
+                    animates: false
+                )
                 .padding(.horizontal, SidebarIconLayout.edgeInset)
 
                 Spacer()
@@ -247,7 +253,7 @@ private struct SidebarVersion: View {
                         Image(systemName: "arrow.down.circle.fill")
                         Text(updateButtonTitle)
                     }
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(PortfolixTypography.captionEmphasis)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
                         .background(
@@ -260,7 +266,7 @@ private struct SidebarVersion: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(PortfolixTypography.captionEmphasis.monospacedDigit())
             .monospacedDigit()
             .foregroundStyle(PortfolixTheme.secondaryText)
             .lineLimit(1)
@@ -355,7 +361,7 @@ struct SidebarBrandMark: View {
             .frame(width: SidebarIconLayout.brandSize, height: SidebarIconLayout.brandSize)
 
             Text("Portfolix")
-                .font(.system(size: 16, weight: .semibold))
+                .font(PortfolixTypography.sectionTitle)
                 .foregroundStyle(PortfolixTheme.primaryText)
                 .fixedSize()
                 .opacity(isCollapsed ? 0 : 1)
@@ -374,11 +380,15 @@ struct SidebarItem: View {
     let isCollapsed: Bool
     let action: () -> Void
 
+    private var rowHeight: CGFloat {
+        isCollapsed ? SidebarIconLayout.navigationRowHeight : SidebarIconLayout.expandedNavigationRowHeight
+    }
+
     var body: some View {
         Button(action: action) {
             Color.clear
                 .frame(maxWidth: .infinity)
-                .frame(height: SidebarIconLayout.navigationRowHeight)
+                .frame(height: rowHeight)
                 .overlay(alignment: .leading) {
                     HStack(spacing: PortfolixSpacing.md) {
                         Image(systemName: item.symbol)
@@ -386,7 +396,7 @@ struct SidebarItem: View {
                             .frame(width: SidebarIconLayout.navigationWidth, height: SidebarIconLayout.navigationWidth)
 
                         Text(title)
-                            .font(.system(size: SidebarIconLayout.navigationTextSize, weight: .medium))
+                            .font(PortfolixTypography.sidebarLabel)
                             .fixedSize()
                             .opacity(isCollapsed ? 0 : 1)
                     }
