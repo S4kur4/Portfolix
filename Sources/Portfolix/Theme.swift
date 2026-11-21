@@ -123,15 +123,52 @@ enum PortfolixLayout {
     static let riskProfileSummaryContentHeight: CGFloat = 104
 }
 
+/// 文字系统（2026-11-21 增补）。所有界面文字只能使用本角色表中的字号与字重；
+/// 同类文案必须使用同一角色，不得按页面临时改变字号或字重。图标（SF Symbol）字号独立，不受本表约束。
 enum PortfolixTypography {
-    static let heroValue = Font.system(size: 36, weight: .light, design: .rounded)
+    // MARK: 展示级数值（圆体，仅用于统计值）
+    /// 组合总值：资产总览组合价值卡。
     static let portfolioHeroValue = Font.system(size: 56, weight: .medium, design: .rounded)
-    static let secondaryValue = Font.system(size: 24, weight: .light, design: .rounded)
+    /// 主统计值：页面级大数字（每屏最多一个）。
+    static let heroValue = Font.system(size: 36, weight: .light, design: .rounded)
+    /// 次主统计值：与 `heroValue` 并排时的次级大数字。
+    static let heroValueCompact = Font.system(size: 32, weight: .light, design: .rounded)
+    /// 卡片主统计值：每张卡最多一个（当前回撤、风险等级、风险承受度）。
+    static let secondaryValue = Font.system(size: 24, weight: .medium, design: .rounded)
+
+    // MARK: 标题
+    /// 页面标题（PageHeader）：27pt Semibold。
     static let pageTitle = Font.system(size: 27, weight: .semibold)
+    /// 弹窗标题（SheetHeader）：19pt Semibold。
+    static let sheetTitle = Font.system(size: 19, weight: .semibold)
+    /// 卡片/区块标题（SectionHeader）：15pt Semibold。
     static let sectionTitle = Font.system(size: 15, weight: .semibold)
+    /// 卡片摘要值：15pt Semibold，用于摘要行中的关键数字（总市值、本月累计等）。
+    static let headlineValue = Font.system(size: 15, weight: .semibold)
+    /// 报告/表单内小标题：13pt Semibold。
+    static let subheading = Font.system(size: 13, weight: .semibold)
+
+    // MARK: 正文与标签
+    /// 正文、表格内容、表单输入：13pt Regular。
     static let body = Font.system(size: 13)
+    /// 强调正文、派生值（收益率、日期细节）：13pt Medium。
+    static let bodyEmphasis = Font.system(size: 13, weight: .medium)
+    /// 标签、次级说明：12pt Regular。
+    static let label = Font.system(size: 12)
+    /// 强调标签、状态徽标：12pt Medium。
+    static let labelEmphasis = Font.system(size: 12, weight: .medium)
+    /// 控件文字（按钮、分段、菜单、链接）：12pt Medium。
+    static let control = Font.system(size: 12, weight: .medium)
+    /// 辅助信息、时间、meta 计数：11pt Regular。
     static let caption = Font.system(size: 11)
+    /// 强调辅助信息：11pt Medium。
     static let captionEmphasis = Font.system(size: 11, weight: .medium)
+    /// 微型文字（tooltip、紧凑徽标）：10pt Medium，仅限局部使用。
+    static let micro = Font.system(size: 10, weight: .medium)
+    /// 侧栏导航标签：15pt Medium（仅侧栏使用）。
+    static let sidebarLabel = Font.system(size: 15, weight: .medium)
+    /// 图表坐标轴、图例、日历日期：9pt Medium。
+    static let chartAxis = Font.system(size: 9, weight: .medium)
 }
 
 extension Color {
@@ -332,6 +369,8 @@ struct PortfolixSelectionBoundsKey<Value: Hashable>: PreferenceKey {
 private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
     let selection: Value
     let cornerRadius: CGFloat
+    let height: CGFloat?
+    let animates: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -339,15 +378,19 @@ private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
             GeometryReader { geometry in
                 if let selectedBounds = bounds[selection] {
                     let frame = geometry[selectedBounds]
+                    let resolvedHeight = min(height ?? frame.height, frame.height)
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(PortfolixTheme.controlSelectionFill)
-                        .frame(width: frame.width, height: frame.height)
-                        .offset(x: frame.minX, y: frame.minY)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selection)
+                        .frame(width: frame.width, height: resolvedHeight)
+                        .offset(x: frame.minX, y: frame.minY + (frame.height - resolvedHeight) / 2)
+                        .animation(
+                            animates && !reduceMotion ? .easeInOut(duration: 0.22) : nil,
+                            value: selection
+                        )
                         .transaction { transaction in
                             // Page switches remain immediate; only this persistent background animates.
-                            transaction.disablesAnimations = reduceMotion
-                            if reduceMotion { transaction.animation = nil }
+                            transaction.disablesAnimations = !animates || reduceMotion
+                            if !animates || reduceMotion { transaction.animation = nil }
                         }
                 }
             }
@@ -359,9 +402,11 @@ private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
 extension View {
     func portfolixSelectionBackground<Value: Hashable>(
         selection: Value,
-        cornerRadius: CGFloat = PortfolixRadius.compact
+        cornerRadius: CGFloat = PortfolixRadius.compact,
+        height: CGFloat? = nil,
+        animates: Bool = true
     ) -> some View {
-        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius))
+        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius, height: height, animates: animates))
     }
 }
 
@@ -393,7 +438,7 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                             Text(optionTitle(option))
                         }
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .font(PortfolixTypography.control)
                     .foregroundStyle(PortfolixTheme.glassControlText)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -554,7 +599,7 @@ struct SectionHeader<Trailing: View>: View {
 struct PortfolixChartTooltipStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(.system(size: 10, weight: .semibold))
+            .font(PortfolixTypography.micro)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
@@ -634,7 +679,7 @@ struct StatusBadge: View {
 
     var body: some View {
         Label(freshness.rawValue, systemImage: freshness.symbol)
-            .font(.system(size: 10, weight: .medium))
+            .font(PortfolixTypography.captionEmphasis)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(isSelected ? Color.white : freshness.color)
@@ -656,7 +701,7 @@ struct CapsuleLabel: View {
             }
             Text(title)
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(PortfolixTypography.captionEmphasis)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(color)
@@ -721,7 +766,7 @@ private struct InteractiveButtonLabel: View {
 
     var body: some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .font(PortfolixTypography.control)
             .lineLimit(1)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, preservesLabelSize ? 0 : PortfolixSpacing.md)
