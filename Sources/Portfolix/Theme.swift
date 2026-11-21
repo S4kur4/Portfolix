@@ -549,6 +549,9 @@ private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
     let fill: Color
     let height: CGFloat?
     let animates: Bool
+    let indicatorFill: Color?
+    let indicatorWidth: CGFloat
+    let indicatorHeight: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -557,19 +560,32 @@ private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
                 if let selectedBounds = bounds[selection] {
                     let frame = geometry[selectedBounds]
                     let resolvedHeight = min(height ?? frame.height, frame.height)
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(fill)
-                        .frame(width: frame.width, height: resolvedHeight)
-                        .offset(x: frame.minX, y: frame.minY + (frame.height - resolvedHeight) / 2)
-                        .animation(
-                            animates && !reduceMotion ? .easeInOut(duration: 0.22) : nil,
-                            value: selection
-                        )
-                        .transaction { transaction in
-                            // Page switches remain immediate; only this persistent background animates.
-                            transaction.disablesAnimations = !animates || reduceMotion
-                            if !animates || reduceMotion { transaction.animation = nil }
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(fill)
+                            .frame(width: frame.width, height: resolvedHeight)
+                            .offset(x: frame.minX, y: frame.minY + (frame.height - resolvedHeight) / 2)
+
+                        if let indicatorFill {
+                            let barHeight = min(indicatorHeight ?? 18, max(resolvedHeight - 14, 8))
+                            Capsule()
+                                .fill(indicatorFill)
+                                .frame(width: indicatorWidth, height: barHeight)
+                                .offset(
+                                    x: frame.minX + 2,
+                                    y: frame.minY + (frame.height - barHeight) / 2
+                                )
                         }
+                    }
+                    .animation(
+                        animates && !reduceMotion ? .easeInOut(duration: 0.22) : nil,
+                        value: selection
+                    )
+                    .transaction { transaction in
+                        // Page switches remain immediate; only this persistent background animates.
+                        transaction.disablesAnimations = !animates || reduceMotion
+                        if !animates || reduceMotion { transaction.animation = nil }
+                    }
                 }
             }
             .allowsHitTesting(false)
@@ -583,9 +599,21 @@ extension View {
         cornerRadius: CGFloat = PortfolixRadius.compact,
         fill: Color = PortfolixTheme.brandWashStrong,
         height: CGFloat? = nil,
-        animates: Bool = true
+        animates: Bool = true,
+        indicatorFill: Color? = nil,
+        indicatorWidth: CGFloat = 3,
+        indicatorHeight: CGFloat? = nil
     ) -> some View {
-        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius, fill: fill, height: height, animates: animates))
+        modifier(PortfolixSelectionBackground(
+            selection: selection,
+            cornerRadius: cornerRadius,
+            fill: fill,
+            height: height,
+            animates: animates,
+            indicatorFill: indicatorFill,
+            indicatorWidth: indicatorWidth,
+            indicatorHeight: indicatorHeight
+        ))
     }
 }
 
@@ -775,21 +803,37 @@ struct SectionHeader<Trailing: View>: View {
     }
 }
 
-struct PortfolixChartTooltipStyle: ViewModifier {
+/// 图表 hover 数据框与带问号的帮助提示共用同一套提示框外观：
+/// raised 底 + borderStrong 1pt 描边 + compact 圆角 + 8/5 内边距，浅色与深色一致。
+struct PortfolixTooltipSurfaceStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(PortfolixTypography.micro)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, 5)
-            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
+            .background(
+                PortfolixTheme.raised,
+                in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                    .stroke(PortfolixTheme.borderStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                    .strokeBorder(PortfolixTheme.borderStrong, lineWidth: 1)
             }
     }
 }
 
+struct PortfolixChartTooltipStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(PortfolixTypography.micro)
+            .portfolixTooltipSurface()
+    }
+}
+
 extension View {
+    func portfolixTooltipSurface() -> some View {
+        modifier(PortfolixTooltipSurfaceStyle())
+    }
+
     func portfolixChartTooltip() -> some View {
         modifier(PortfolixChartTooltipStyle())
     }

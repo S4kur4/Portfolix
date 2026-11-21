@@ -109,7 +109,8 @@ struct SidebarView: View {
                     selection: store.selection,
                     fill: PortfolixTheme.brandWash,
                     height: SidebarIconLayout.selectionHeight,
-                    animates: false
+                    animates: false,
+                    indicatorFill: PortfolixTheme.brandSolid
                 )
                 .padding(.horizontal, SidebarIconLayout.edgeInset)
 

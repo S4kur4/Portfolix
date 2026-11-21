@@ -190,12 +190,12 @@ struct InvestmentCloudMapView: View {
             Text(mode == .dailyProfit
                  ? localizedText("今日盈亏", "Today's P&L", language: language)
                  : localizedText("总市值", "Total value", language: language))
-                .font(PortfolixTypography.caption)
+                .font(PortfolixTypography.captionEmphasis)
                 .foregroundStyle(PortfolixTheme.secondary)
             Text(mode == .dailyProfit
                  ? formatSignedMoney(convertedTotal, currency: currency)
                  : formatMoney(convertedTotal, currency: currency))
-                .font(PortfolixTypography.headlineValue)
+                .font(PortfolixTypography.bodyEmphasis)
                 .monospacedDigit()
                 .foregroundStyle(mode == .dailyProfit
                                  ? PortfolixTheme.performanceStatusText(for: convertedTotal, scheme: performanceColorScheme)

@@ -456,7 +456,7 @@ private struct HeroValueTrendChart: View {
                     yEnd: .value("Value", point.value)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(PortfolixTheme.brandWash)
+                .foregroundStyle(PortfolixTheme.controlSelectionFill)
             }
 
             if let highlightedSnapshotID,
@@ -1657,7 +1657,7 @@ private struct AssetMixBarCard: View {
                     Spacer(minLength: PortfolixSpacing.sm)
 
                     Text(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
-                        .font(.system(size: 13, weight: .medium))
+                        .font(PortfolixTypography.bodyEmphasis)
                         .monospacedDigit()
                         .portfolixNumericTransition(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
                         .foregroundStyle(PortfolixTheme.text)

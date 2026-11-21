@@ -4341,13 +4341,7 @@ struct HelpTooltipBubble: View {
         tooltipText
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: contentWidth, alignment: .leading)
-            .padding(.horizontal, PortfolixSpacing.sm)
-            .padding(.vertical, PortfolixSpacing.xs)
-        .background(PortfolixTheme.soft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                .strokeBorder(PortfolixTheme.border, lineWidth: 1)
-        }
+            .portfolixTooltipSurface()
     }
 
     private var contentWidth: CGFloat {
@@ -4378,7 +4372,7 @@ struct HelpTooltipBubble: View {
     private var tooltipText: some View {
         Text(text)
             .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.text)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .multilineTextAlignment(.leading)
     }
 }

@@ -100,8 +100,10 @@ final class HoverHelpView: NSView {
         guard isHelpEnabled, tooltipWindow == nil, let window, window.isKeyWindow,
               !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let host = NSHostingView(rootView: HelpTooltipBubble(text: text))
-        host.appearance = window.effectiveAppearance
+        let appearance = NSApp.appearance ?? window.effectiveAppearance
+        let colorScheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+        let host = NSHostingView(rootView: HelpTooltipBubble(text: text).environment(\.colorScheme, colorScheme))
+        host.appearance = appearance
         let size = host.fittingSize
         let anchor = window.convertToScreen(convert(bounds, to: nil))
         guard let screen = window.screen else { return }
@@ -110,12 +112,12 @@ final class HoverHelpView: NSView {
         panel.isReleasedWhenClosed = false
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = true
         panel.animationBehavior = .none
         panel.isExcludedFromWindowsMenu = true
-        panel.appearance = window.effectiveAppearance
+        panel.appearance = appearance
         panel.contentView = host
         panel.setFrame(frame, display: false)
         tooltipWindow = panel
