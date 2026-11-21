@@ -2130,12 +2130,12 @@ private struct CompactPositionRow: View {
         HStack(spacing: PrimaryPositionColumnWidths.columnSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(position.category.assetClass.area)
+                    .fill(position.category.assetClass.pale)
                     .frame(width: 28, height: 28)
                     .overlay {
                         Text(String(position.name.prefix(1)))
                             .font(PortfolixTypography.captionEmphasis)
-                            .foregroundStyle(PortfolixTheme.classOnArea)
+                            .foregroundStyle(PortfolixTheme.classOnPale)
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
