@@ -228,14 +228,14 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: appearanceName))
         appearance.performAsCurrentDrawingAppearance {
             let panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)!
-            let pairs: [(Color, Color, CGFloat)] = [
-                (PortfolixTheme.performanceStatusText(for: 1), PortfolixTheme.mint, 0.13),
-                (PortfolixTheme.performanceStatusText(for: -1), PortfolixTheme.danger, 0.13),
-                (PortfolixTheme.positiveStatusText, PortfolixTheme.mint, 0.12),
-                (PortfolixTheme.warningStatusText, PortfolixTheme.amber, 0.12),
+            let pairs: [(Color, Color)] = [
+                (PortfolixTheme.gainText, PortfolixTheme.gainWash1),
+                (PortfolixTheme.lossText, PortfolixTheme.lossWash1),
+                (PortfolixTheme.warnText, PortfolixTheme.warnWash1),
+                (PortfolixTheme.text, PortfolixTheme.surface),
             ]
-            for (text, fill, opacity) in pairs {
-                let background = blend(NSColor(fill).usingColorSpace(.sRGB)!, over: panel, alpha: opacity)
+            for (text, fill) in pairs {
+                let background = blend(NSColor(fill).usingColorSpace(.sRGB)!, over: panel, alpha: 1)
                 #expect(contrast(NSColor(text).usingColorSpace(.sRGB)!, background) >= 4.5)
             }
             #expect(NSColor(PortfolixTheme.performanceStatusText(for: 0)).usingColorSpace(.sRGB)
@@ -261,9 +261,9 @@ struct ThemeTests {
                 #expect(resolved(PortfolixTheme.performanceStatusText(for: -1, scheme: scheme)) == resolved(lossText))
                 #expect(resolved(PortfolixTheme.performanceColor(for: Decimal(0), scheme: scheme)) == resolved(PortfolixTheme.secondaryText))
                 #expect(resolved(PortfolixTheme.performanceColor(for: Double(0), scheme: scheme)) == resolved(PortfolixTheme.secondaryText))
-                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: 1, scheme: scheme)) == resolved(gain.opacity(0.13)))
-                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: -1, scheme: scheme)) == resolved(loss.opacity(0.13)))
-                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: nil, scheme: scheme)) == resolved(.clear))
+                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: 1, scheme: scheme)) == resolved(PortfolixTheme.performanceWash(for: 1, scheme: scheme)))
+                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: -1, scheme: scheme)) == resolved(PortfolixTheme.performanceWash(for: -1, scheme: scheme)))
+                #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: nil, scheme: scheme)) == resolved(PortfolixTheme.neutralWash))
             }
         }
     }
@@ -312,8 +312,8 @@ struct ThemeTests {
     func userMessageTextHasContrastThroughoutItsGradient(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         appearance.performAsCurrentDrawingAppearance {
-            let text = NSColor(PortfolixTheme.userMessageText).usingColorSpace(.sRGB)!
-            let stops = PortfolixTheme.userMessageGradientColors.map { NSColor($0).usingColorSpace(.sRGB)! }
+            let text = NSColor(PortfolixTheme.brandBubbleInk).usingColorSpace(.sRGB)!
+            let stops = [PortfolixTheme.brandBubbleStart, PortfolixTheme.brandBubbleEnd].map { NSColor($0).usingColorSpace(.sRGB)! }
             #expect(stops.count == 2)
             for step in 0...100 {
                 let background = blend(stops[1], over: stops[0], alpha: CGFloat(step) / 100)
@@ -323,16 +323,16 @@ struct ThemeTests {
     }
 
     @Test
-    func darkStatusAndChatColorsRemainUnchanged() throws {
+    func darkSemanticAndBubbleColorsMatchSpec() throws {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
             let pairs: [(Color, Color)] = [
-                (PortfolixTheme.positiveStatusText, PortfolixTheme.mint),
-                (PortfolixTheme.negativeStatusText, PortfolixTheme.danger),
-                (PortfolixTheme.warningStatusText, PortfolixTheme.amber),
-                (PortfolixTheme.userMessageText, Color(hex: 0x120F20)),
-                (PortfolixTheme.userMessageGradientColors[0], Color(hex: 0xC3B1FF)),
-                (PortfolixTheme.userMessageGradientColors[1], Color(hex: 0x8068EF)),
+                (PortfolixTheme.gainText, Color(hex: 0x76C7B7)),
+                (PortfolixTheme.lossText, Color(hex: 0xDD7D88)),
+                (PortfolixTheme.warnText, Color(hex: 0xD7A967)),
+                (PortfolixTheme.brandBubbleInk, Color(hex: 0x1A1428)),
+                (PortfolixTheme.brandBubbleStart, Color(hex: 0xB7A5FF)),
+                (PortfolixTheme.brandBubbleEnd, Color(hex: 0x9D8CFF)),
             ]
             for (actual, expected) in pairs {
                 let actual = NSColor(actual).usingColorSpace(.sRGB)!
@@ -446,13 +446,13 @@ struct ThemeTests {
             #expect(host.fittingSize == SidebarCollapsedVersionIndicator.controlSize)
             if update == nil {
                 #expect(indicator.symbolName == "info.circle")
-                #expect(indicator.symbolColor == PortfolixTheme.secondaryText)
+                #expect(indicator.symbolColor == PortfolixTheme.secondary)
                 #expect(indicator.helpText == versionLabel)
                 indicator.openUpdateWindow()
                 #expect(updateWindowRequests == 0)
             } else {
                 #expect(indicator.symbolName == "arrow.up.circle.fill")
-                #expect(indicator.symbolColor == PortfolixTheme.violet)
+                #expect(indicator.symbolColor == PortfolixTheme.brandText)
                 #expect(indicator.helpText == (language == .chinese ? "检测到新版本 1.1" : "New version 1.1 available"))
                 indicator.openUpdateWindow()
                 #expect(updateWindowRequests == 1)
@@ -473,8 +473,9 @@ struct ThemeTests {
         let surface = try #require(panel)
         let background = try #require(canvas)
         #expect(surface.redComponent > background.redComponent + 0.025)
-        #expect(abs(surface.blueComponent - surface.redComponent) < 0.000001)
-        #expect(surface == NSColor(hex: 0x080808).usingColorSpace(.sRGB))
+        #expect(surface.blueComponent > surface.redComponent)
+        #expect(surface.redComponent > surface.greenComponent)
+        #expect(surface == NSColor(hex: 0x121016).usingColorSpace(.sRGB))
     }
 
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
@@ -485,15 +486,15 @@ struct ThemeTests {
         appearance.performAsCurrentDrawingAppearance {
             for surface in colors {
                 let color = NSColor(surface).usingColorSpace(.sRGB)!
-                #expect(abs(color.redComponent - color.greenComponent) < 0.000001)
-                #expect(abs(color.redComponent - color.blueComponent) < 0.000001)
+                #expect(color.blueComponent >= color.redComponent)
+                #expect(color.redComponent >= color.greenComponent)
                 #expect(color.alphaComponent == 1)
             }
             let canvas = NSColor(PortfolixTheme.canvas).usingColorSpace(.sRGB)!
             let panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)!
             let dark = appearanceName == .darkAqua
-            #expect(canvas == NSColor(hex: dark ? 0x000000 : 0xE8E8E8).usingColorSpace(.sRGB))
-            #expect(panel == NSColor(hex: dark ? 0x080808 : 0xF3F3F3).usingColorSpace(.sRGB))
+            #expect(canvas == NSColor(hex: dark ? 0x0A090D : 0xEFEDF2).usingColorSpace(.sRGB))
+            #expect(panel == NSColor(hex: dark ? 0x121016 : 0xF7F5FA).usingColorSpace(.sRGB))
         }
     }
 
@@ -501,13 +502,14 @@ struct ThemeTests {
     func neutralSurfacesDoNotChangeBrandPurples(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         let pairs: [(Color, UInt, UInt)] = [
-            (PortfolixTheme.lilac, 0x654BC8, 0xB7A5FF),
-            (PortfolixTheme.violet, 0x7253DB, 0x8C75FF),
-            (PortfolixTheme.controlAccent, 0x7253DB, 0x8C75FF),
-            (PortfolixTheme.primaryButtonTint, 0xAF9AFF, 0xB7A5FF),
-            (PortfolixTheme.controlSelectionFill, 0xDCD7E7, 0x3F3B4B),
-            (PortfolixTheme.selectionFill, 0xE2DDF1, 0x18151F),
-            (PortfolixTheme.selectionText, 0x513AB6, 0xC5BAF8),
+            (PortfolixTheme.brandText, 0x654BC8, 0xB7A5FF),
+            (PortfolixTheme.brandFocus, 0x7C63F2, 0xB7A5FF),
+            (PortfolixTheme.brandWash, 0xEAE7FE, 0x231D39),
+            (PortfolixTheme.brandWashStrong, 0xD8D2FD, 0x302754),
+            (PortfolixTheme.brandWashText, 0x513AB6, 0xC2BAFC),
+            (PortfolixTheme.brandSolid, 0x654BC8, 0xB7A5FF),
+            (PortfolixTheme.brandSolidInk, 0xFFFFFF, 0x1A1428),
+            (PortfolixTheme.brandChart, 0x7C63F2, 0xB7A5FF),
         ]
         appearance.performAsCurrentDrawingAppearance {
             for (color, light, dark) in pairs {
@@ -589,22 +591,24 @@ struct ThemeTests {
     }
 
     @Test
-    func lightPrimaryButtonsUseTheSameTextColorAsGlassSelectors() throws {
+    func lightPrimaryButtonsUseBrandSolidAndInk() throws {
         let appearance = try #require(NSAppearance(named: .aqua))
         appearance.performAsCurrentDrawingAppearance {
+            #expect(NSColor(PortfolixTheme.primaryButtonTint).usingColorSpace(.sRGB)
+                == NSColor(hex: 0x654BC8).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.primaryButtonText).usingColorSpace(.sRGB)
-                == NSColor(PortfolixTheme.glassControlText).usingColorSpace(.sRGB))
+                == NSColor(hex: 0xFFFFFF).usingColorSpace(.sRGB))
         }
     }
 
     @Test
-    func darkPurpleButtonsKeepTheirOriginalTintAndText() throws {
+    func darkPrimaryButtonsUseBrandSolidAndInk() throws {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.primaryButtonTint).usingColorSpace(.sRGB)
                 == NSColor(hex: 0xB7A5FF).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.primaryButtonText).usingColorSpace(.sRGB)
-                == NSColor(hex: 0x120F20).usingColorSpace(.sRGB))
+                == NSColor(hex: 0x1A1428).usingColorSpace(.sRGB))
         }
     }
 
@@ -772,38 +776,38 @@ struct ThemeTests {
     }
 
     @Test
-    func darkGlassControlsUseOpaquePureWhite() throws {
+    func darkTextTokenIsOpaqueOffWhite() throws {
         let appearance = try #require(NSAppearance(named: .darkAqua))
-        var color: NSColor?
         appearance.performAsCurrentDrawingAppearance {
-            color = NSColor(PortfolixTheme.glassControlText).usingColorSpace(.sRGB)
+            #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
+                == NSColor(hex: 0xF5F3F8).usingColorSpace(.sRGB))
         }
-        let resolved = try #require(color)
-        #expect(abs(resolved.redComponent - 1) < 0.001)
-        #expect(abs(resolved.greenComponent - 1) < 0.001)
-        #expect(abs(resolved.blueComponent - 1) < 0.001)
-        #expect(abs(resolved.alphaComponent - 1) < 0.001)
     }
 
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
-    func textUsesSystemLabelHierarchy(appearanceName: NSAppearance.Name) throws {
+    func textUsesFourLevelThemeHierarchy(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
+        let dark = appearanceName == .darkAqua
         appearance.performAsCurrentDrawingAppearance {
-            #expect(NSColor(PortfolixTheme.primaryText).usingColorSpace(.sRGB)
-                == NSColor.labelColor.usingColorSpace(.sRGB))
-            #expect(NSColor(PortfolixTheme.secondaryText).usingColorSpace(.sRGB)
-                == NSColor.secondaryLabelColor.usingColorSpace(.sRGB))
-            #expect(NSColor(PortfolixTheme.tertiaryText).usingColorSpace(.sRGB)
-                == NSColor.secondaryLabelColor.usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
+                == NSColor(hex: dark ? 0xF5F3F8 : 0x1B1722).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.secondary).usingColorSpace(.sRGB)
+                == NSColor(hex: dark ? 0xB2ABBF : 0x5C5668).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.tertiary).usingColorSpace(.sRGB)
+                == NSColor(hex: dark ? 0x8C8499 : 0x6F687C).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.disabled).usingColorSpace(.sRGB)
+                == NSColor(hex: dark ? 0x5B5468 : 0xA9A2B4).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.tertiary).usingColorSpace(.sRGB)
+                != NSColor(PortfolixTheme.secondary).usingColorSpace(.sRGB))
         }
     }
 
     @Test
-    func lightGlassControlsUseOpaqueDarkGray() throws {
+    func lightTextTokenIsOpaqueInk() throws {
         let appearance = try #require(NSAppearance(named: .aqua))
         appearance.performAsCurrentDrawingAppearance {
-            #expect(NSColor(PortfolixTheme.glassControlText).usingColorSpace(.sRGB)
-                == NSColor(hex: 0x3E3E3E).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
+                == NSColor(hex: 0x1B1722).usingColorSpace(.sRGB))
         }
     }
 }

@@ -10,7 +10,7 @@ struct SheetFormRowStyle: LabeledContentStyle {
         HStack(alignment: .center, spacing: PortfolixSpacing.md) {
             configuration.label
                 .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
             Spacer(minLength: PortfolixSpacing.md)
             configuration.content
                 .font(PortfolixTypography.body)
@@ -29,7 +29,7 @@ private struct CompactSheetFormStyle: FormStyle {
                         if !section.header.isEmpty {
                             ForEach(section.header) { header in
                                 header.font(PortfolixTypography.captionEmphasis)
-                                    .foregroundStyle(PortfolixTheme.secondaryText)
+                                    .foregroundStyle(PortfolixTheme.secondary)
                             }
                         }
                         VStack(spacing: 0) {
@@ -43,11 +43,11 @@ private struct CompactSheetFormStyle: FormStyle {
                                 }
                             }
                         }
-                        .background(PortfolixTheme.panel, in: RoundedRectangle(cornerRadius: PortfolixRadius.card))
+                        .background(PortfolixTheme.surface, in: RoundedRectangle(cornerRadius: PortfolixRadius.card))
                         if !section.footer.isEmpty {
                             ForEach(section.footer) { footer in
                                 footer.font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.secondaryText)
+                                    .foregroundStyle(PortfolixTheme.secondary)
                                     .multilineTextAlignment(.leading)
                                     .padding(.horizontal, PortfolixSpacing.md)
                             }

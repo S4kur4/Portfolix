@@ -63,7 +63,7 @@ struct PositionsView: View {
                         )
                         HStack(spacing: PortfolixSpacing.sm) {
                             Image(systemName: "magnifyingglass")
-                                .foregroundStyle(PortfolixTheme.tertiaryText)
+                                .foregroundStyle(PortfolixTheme.tertiary)
                             TextField(localizedText("搜索资产代码或名称", "Search code or name", language: store.appLanguage), text: $store.searchText)
                                 .textFieldStyle(.plain)
                                 .font(PortfolixTypography.label)
@@ -73,7 +73,7 @@ struct PositionsView: View {
                         .frame(width: 220, height: PortfolixLayout.positionsToolbarControlHeight)
                         .portfolixGlass(
                             in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                            fallbackTint: PortfolixTheme.panelElevated,
+                            fallbackTint: PortfolixTheme.raised,
                             fallbackOpacity: 0.62
                         )
                         .holdingVoiceInput(
@@ -186,7 +186,7 @@ struct PositionsView: View {
         return Table(positions, selection: selectedPositionBinding, sortOrder: $positionSortOrder) {
             TableColumn(localizedText("序号", "No.", language: store.appLanguage)) { position in
                 Text(String(numbers[position.id] ?? 0))
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .monospacedDigit()
                     .padding(.leading, 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -197,11 +197,11 @@ struct PositionsView: View {
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { position in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(position.name)
-                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                         .lineLimit(1)
                     Text(position.symbol)
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiary, selectedOpacity: 0.74))
                         .lineLimit(1)
                 }
             }
@@ -210,10 +210,10 @@ struct PositionsView: View {
             TableColumn(localizedText("类别", "Type", language: store.appLanguage)) { position in
                 HStack(spacing: PortfolixSpacing.xs) {
                     Circle()
-                        .fill(PositionTableForeground(color: position.category.color))
+                        .fill(PositionTableForeground(color: position.category.assetClass.area))
                         .frame(width: 5, height: 5)
                     Text(position.category.title(language: store.appLanguage))
-                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.secondaryText))
+                        .foregroundStyle(PositionTableForeground(color: PortfolixTheme.secondary))
                         .lineLimit(1)
                 }
             }
@@ -221,7 +221,7 @@ struct PositionsView: View {
 
             TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { position in
                 Text(NSDecimalNumber(decimal: position.quantity).stringValue)
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .monospacedDigit()
             }
             .width(72)
@@ -231,7 +231,7 @@ struct PositionsView: View {
                 value: \.averageCost
             ) { position in
                 Text(position.costIsKnown ? formatUnitCost(position.averageCost, currency: position.quoteCurrency) : "—")
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .monospacedDigit()
             }
             .width(104)
@@ -241,7 +241,7 @@ struct PositionsView: View {
                 value: \.totalCost
             ) { position in
                 Text(position.costIsKnown ? formatMoney(position.totalCost, currency: position.quoteCurrency) : "—")
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .monospacedDigit()
             }
             .width(116)
@@ -251,7 +251,7 @@ struct PositionsView: View {
                 value: \.marketValueCNY
             ) { position in
                 Text(formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency))
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .monospacedDigit()
             }
             .width(116)
@@ -273,7 +273,7 @@ struct PositionsView: View {
         }
         .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark))
         .scrollContentBackground(.hidden)
-        .background(PortfolixTheme.panel)
+        .background(PortfolixTheme.surface)
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
@@ -339,13 +339,13 @@ struct PositionsView: View {
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { record in
                 VStack(alignment: .leading, spacing: 4) {
                     activityText(record.name).lineLimit(1)
-                    activityText(record.symbol, color: PortfolixTheme.secondaryText).font(PortfolixTypography.caption)
+                    activityText(record.symbol, color: PortfolixTheme.secondary).font(PortfolixTypography.caption)
                 }
             }.width(min: 96, ideal: 140)
             TableColumn(localizedText("记录时间", "Record Time", language: store.appLanguage)) { record in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     activityText(record.recordedDateText)
-                    activityText(record.recordedClockText, color: PortfolixTheme.secondaryText).font(PortfolixTypography.caption)
+                    activityText(record.recordedClockText, color: PortfolixTheme.secondary).font(PortfolixTypography.caption)
                 }.monospacedDigit()
             }.width(88)
             TableColumn(localizedText("类型", "Type", language: store.appLanguage)) {
@@ -368,7 +368,7 @@ struct PositionsView: View {
             }.width(116)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark))
-        .scrollContentBackground(.hidden).background(PortfolixTheme.panel)
+        .scrollContentBackground(.hidden).background(PortfolixTheme.surface)
         .contextMenu(forSelectionType: UUID.self) { selection in
             if let record = records.first(where: { selection.contains($0.id) }) {
                 Button { recordDetail = record } label: {
@@ -397,12 +397,12 @@ struct PositionsView: View {
         .overlay {
             if records.isEmpty {
                 Text(localizedText("暂无操作记录", "No activity", language: store.appLanguage))
-                    .font(PortfolixTypography.body).foregroundStyle(PortfolixTheme.secondaryText).allowsHitTesting(false)
+                    .font(PortfolixTypography.body).foregroundStyle(PortfolixTheme.secondary).allowsHitTesting(false)
             }
         }
     }
 
-    private func activityText(_ value: String, color: Color = PortfolixTheme.primaryText) -> some View {
+    private func activityText(_ value: String, color: Color = PortfolixTheme.text) -> some View {
         Text(value).foregroundStyle(PositionTableForeground(color: color))
     }
 
@@ -452,13 +452,13 @@ struct PositionSourceCell: View {
         HStack(spacing: PortfolixSpacing.sm) {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(localizedQuoteSource(position.source, language: store.appLanguage))
-                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.primaryText))
+                    .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                     .lineLimit(1)
                 RelativeTimeText { now in
                     "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: now, language: store.appLanguage))"
                 }
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiaryText, selectedOpacity: 0.74))
+                .foregroundStyle(PositionTableForeground(color: PortfolixTheme.tertiary, selectedOpacity: 0.74))
                 .lineLimit(1)
             }
 
@@ -919,14 +919,14 @@ private struct AIReportChatHeader: View {
         HStack(spacing: PortfolixSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(PortfolixTheme.purpleGradient)
+                    .fill(PortfolixTheme.brandGradient)
                 PortfolixBrandGlyph(size: 20)
             }
                 .frame(width: 28, height: 28)
 
             Text(localizedText("Portfolix Agent", "Portfolix Agent", language: language))
                 .font(PortfolixTypography.subheading)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
 
             AIReportChatActionsMenu(
                 canClearHistory: isInteractionEnabled && canClearHistory,
@@ -955,7 +955,7 @@ private struct AIReportChatHeader: View {
             }
         }
         .font(PortfolixTypography.caption)
-        .foregroundStyle(PortfolixTheme.secondaryText)
+        .foregroundStyle(PortfolixTheme.secondary)
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
     }
@@ -1005,7 +1005,7 @@ private struct AIReportChatActionsMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.glassControlText)
+                .foregroundStyle(PortfolixTheme.text)
                 .frame(width: PortfolixLayout.glassControlHeight)
                 .portfolixGlassControl()
         }
@@ -1030,12 +1030,12 @@ private struct AIReportUserBubble: View {
 
             Text(text)
                 .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.userMessageText)
+                .foregroundStyle(PortfolixTheme.brandBubbleInk)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .padding(.horizontal, PortfolixSpacing.lg)
                 .padding(.vertical, PortfolixSpacing.md)
-                .background(PortfolixTheme.userMessageGradient, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+                .background(PortfolixTheme.brandBubbleGradient, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1053,7 +1053,7 @@ private struct AIReportAgentBubble<Content: View>: View {
         HStack(alignment: .top, spacing: PortfolixSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(PortfolixTheme.purpleGradient)
+                    .fill(PortfolixTheme.brandGradient)
                 PortfolixBrandGlyph(size: 20)
             }
                 .frame(width: 28, height: 28)
@@ -1098,7 +1098,7 @@ private struct AIReportFollowUpMessage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PortfolixSpacing.lg)
                     .padding(.vertical, PortfolixSpacing.md)
-                    .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+                    .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
             }
 
             AIReportDisclaimer(language: language, modelUsage: modelUsage, showsDisclosure: showsDisclaimer)
@@ -1268,11 +1268,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
     }
 
     private var citationColor: NSColor {
-        NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(hex: 0xB7A5FF)
-                : NSColor(hex: 0x654BC8)
-        }
+        NSColor(PortfolixTheme.brandText)
     }
 }
 
@@ -1363,7 +1359,7 @@ private struct AIReportChatDateSeparator: View {
     var body: some View {
         Text(chatDateText(date, language: language))
             .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .lineLimit(1)
             .monospacedDigit()
             .textSelection(.enabled)
@@ -1378,7 +1374,7 @@ private struct AIReportMessageTimestamp: View {
     var body: some View {
         Text(chatTimestampText(date, language: language))
             .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .lineLimit(1)
             .monospacedDigit()
             .textSelection(.enabled)
@@ -1465,10 +1461,10 @@ enum AIReportReadiness: Equatable {
 
     var color: Color {
         switch self {
-        case .ready: PortfolixTheme.mint
-        case .missing: PortfolixTheme.tertiaryText
-        case .needsValidation: PortfolixTheme.amber
-        case .invalid: PortfolixTheme.danger
+        case .ready: PortfolixTheme.gainText
+        case .missing: PortfolixTheme.tertiary
+        case .needsValidation: PortfolixTheme.warnText
+        case .invalid: PortfolixTheme.lossText
         }
     }
 }
@@ -1484,7 +1480,7 @@ private struct AIReportWelcomeMessage: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             Text(localizedText("我可以基于你的持仓、风险偏好和行情数据生成组合分析", "I can analyze your portfolio using holdings, risk profile, and market data", language: language))
                 .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
                 AIReportReadinessRow(
@@ -1507,7 +1503,7 @@ private struct AIReportWelcomeMessage: View {
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
 
@@ -1522,7 +1518,7 @@ private struct AIReportReadinessRow: View {
                 .foregroundStyle(readiness.color)
             Text(text)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
         }
     }
 
@@ -1572,7 +1568,7 @@ struct AIReportProgressCard: View {
 
             Text(displayLine.text)
                 .font(PortfolixTypography.labelEmphasis)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .portfolixNumericTransition(displayLine.text)
@@ -1582,7 +1578,7 @@ struct AIReportProgressCard: View {
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
 
@@ -1596,19 +1592,19 @@ private struct AIReportStaticStatusMessage: View {
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.md) {
-            StatusSymbolIcon(symbol: symbol, color: color)
+            StatusSymbolIcon(symbol: symbol, color: color, background: symbolBackground)
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
                     .font(PortfolixTypography.subheading)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                 Text(detail)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
             }
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 
     private var title: String {
@@ -1654,14 +1650,22 @@ private struct AIReportStaticStatusMessage: View {
 
     private var color: Color {
         if hasInvalidRequiredCredential {
-            return PortfolixTheme.danger
+            return PortfolixTheme.lossText
         }
         return switch status {
         case .failed:
-            PortfolixTheme.danger
+            PortfolixTheme.lossText
         default:
-            PortfolixTheme.amber
+            PortfolixTheme.warnText
         }
+    }
+
+    private var symbolBackground: Color {
+        if hasInvalidRequiredCredential {
+            return PortfolixTheme.lossWash1
+        }
+        if case .failed = status { return PortfolixTheme.lossWash1 }
+        return PortfolixTheme.warnWash1
     }
 
     private var hasInvalidRequiredCredential: Bool {
@@ -1678,9 +1682,9 @@ private struct AIReportChatReport: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
             HStack(spacing: PortfolixSpacing.sm) {
-                CapsuleLabel(title: localizedText("分析报告", "Analysis Report", language: language), color: PortfolixTheme.lilac, symbol: "doc.text.magnifyingglass")
+                CapsuleLabel(title: localizedText("分析报告", "Analysis Report", language: language), color: PortfolixTheme.brandText, symbol: "doc.text.magnifyingglass")
                 if run.usedFallback {
-                    CapsuleLabel(title: localizedText("安全回退", "Fallback", language: language), color: PortfolixTheme.amber, symbol: "exclamationmark.triangle.fill")
+                    CapsuleLabel(title: localizedText("安全回退", "Fallback", language: language), color: PortfolixTheme.warnText, symbol: "exclamationmark.triangle.fill")
                 }
                 Spacer()
             }
@@ -1690,7 +1694,7 @@ private struct AIReportChatReport: View {
                     HStack(alignment: .top, spacing: PortfolixSpacing.sm) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(PortfolixTheme.amber)
+                            .foregroundStyle(PortfolixTheme.warnText)
                             .padding(.top, 2)
                         Text(
                             run.fallbackReason
@@ -1701,14 +1705,14 @@ private struct AIReportChatReport: View {
                                 )
                         )
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PortfolixSpacing.md)
                     .padding(.vertical, PortfolixSpacing.sm)
                     .background(
-                        PortfolixTheme.amber.opacity(0.10),
+                        PortfolixTheme.warnWash1,
                         in: RoundedRectangle(
                             cornerRadius: PortfolixRadius.compact,
                             style: .continuous
@@ -1727,11 +1731,11 @@ private struct AIReportChatReport: View {
                 AIReportChatSection(title: localizedText("核心结论", "Core Takeaway", language: language), symbol: "target") {
                     Text(AIUserFacingTextSanitizer.sanitize(report.summary))
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1756,7 +1760,7 @@ private struct AIReportChatReport: View {
                                 "This report did not identify a holding that needs to be singled out; keep watching concentration, currency exposure, and recent performance.",
                                 language: language
                             ),
-                            color: PortfolixTheme.secondaryText,
+                            color: PortfolixTheme.secondary,
                             symbol: "checkmark.circle.fill"
                         )
                     } else {
@@ -1786,10 +1790,10 @@ private struct AIReportChatReport: View {
                 AIReportTimestampedAgentRow(date: report.generatedAt, language: language) {
                     AIReportChatSection(title: localizedText("后续复核", "Follow-up Review", language: language), symbol: "questionmark.circle") {
                         ForEach(Array(report.questionsToConsider.enumerated()), id: \.offset) { _, question in
-                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(question), body: nil, color: PortfolixTheme.lilac, symbol: "checkmark.circle.fill")
+                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(question), body: nil, color: PortfolixTheme.brandText, symbol: "checkmark.circle.fill")
                         }
                         ForEach(Array(report.limitations.enumerated()), id: \.offset) { _, limitation in
-                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(limitation), body: nil, color: PortfolixTheme.secondaryText, symbol: "info.circle.fill")
+                            AIReportBullet(title: AIUserFacingTextSanitizer.sanitize(limitation), body: nil, color: PortfolixTheme.secondary, symbol: "info.circle.fill")
                         }
                     }
                 }
@@ -1803,9 +1807,9 @@ private struct AIReportChatReport: View {
 
     private func color(for severity: String) -> Color {
         switch severity {
-        case "high": PortfolixTheme.danger
-        case "warning": PortfolixTheme.amber
-        default: PortfolixTheme.lilac
+        case "high": PortfolixTheme.lossText
+        case "warning": PortfolixTheme.warnText
+        default: PortfolixTheme.brandText
         }
     }
 }
@@ -1820,10 +1824,10 @@ private struct AIAnalysisDiagnosticCard: View {
             HStack(spacing: PortfolixSpacing.sm) {
                 Image(systemName: "stethoscope")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.amber)
+                    .foregroundStyle(PortfolixTheme.warnText)
                 Text(localizedText("诊断信息", "Diagnostics", language: language))
                     .font(PortfolixTypography.subheading)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                 Spacer()
                 Button(action: copyDiagnostic) {
                     Label(
@@ -1862,18 +1866,18 @@ private struct AIAnalysisDiagnosticCard: View {
         }
         .padding(PortfolixSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.amber.opacity(0.09), in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+        .background(PortfolixTheme.warnWash1, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
     }
 
     private func diagnosticRow(_ title: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: PortfolixSpacing.sm) {
             Text(title)
                 .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
                 .frame(width: 58, alignment: .leading)
             Text(value)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1906,7 +1910,7 @@ private struct AIReportChatSection<Content: View>: View {
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
     }
 }
 
@@ -1923,15 +1927,15 @@ private struct AIReportRebalanceMessageRow: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(AIUserFacingTextSanitizer.sanitize(action.title))
                     .font(PortfolixTypography.subheading)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                 if let assetName = action.assetName, !assetName.isEmpty {
                     Text([assetName, action.symbol].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(PortfolixTypography.captionEmphasis)
-                        .foregroundStyle(PortfolixTheme.lilac)
+                        .foregroundStyle(PortfolixTheme.brandText)
                 }
                 Text(recommendationDetails(for: action))
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
+                    .foregroundStyle(PortfolixTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -1953,15 +1957,15 @@ private struct AIReportRebalanceMessageRow: View {
 
     private var color: Color {
         switch action.action {
-        case "buy", "increase": PortfolixTheme.mint
-        case "sell", "exit": PortfolixTheme.danger
-        case "reduce": PortfolixTheme.amber
-        case "hold": PortfolixTheme.lilac
-        case "review_reduce": PortfolixTheme.amber
-        case "review_replenish": PortfolixTheme.mint
-        case "rebalance": PortfolixTheme.lilac
-        case "maintain": PortfolixTheme.mint
-        default: PortfolixTheme.secondaryText
+        case "buy", "increase": PortfolixTheme.gainText
+        case "sell", "exit": PortfolixTheme.lossText
+        case "reduce": PortfolixTheme.warnText
+        case "hold": PortfolixTheme.brandText
+        case "review_reduce": PortfolixTheme.warnText
+        case "review_replenish": PortfolixTheme.gainText
+        case "rebalance": PortfolixTheme.brandText
+        case "maintain": PortfolixTheme.gainText
+        default: PortfolixTheme.secondary
         }
     }
 }
@@ -1982,21 +1986,21 @@ private struct AIReportAssetAlertMessageRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
                     Text(AIUserFacingTextSanitizer.sanitize(alert.title))
                         .font(PortfolixTypography.subheading)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                 }
                 if !assetLabel.isEmpty {
                     Text(assetLabel)
                         .font(PortfolixTypography.captionEmphasis)
-                        .foregroundStyle(PortfolixTheme.lilac)
+                        .foregroundStyle(PortfolixTheme.brandText)
                 }
                 Text(AIUserFacingTextSanitizer.sanitize(alert.reason))
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
+                    .foregroundStyle(PortfolixTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !alert.sourceDomains.isEmpty {
                     Text(alert.sourceDomains.prefix(3).joined(separator: " · "))
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiaryText)
+                        .foregroundStyle(PortfolixTheme.tertiary)
                 }
             }
         }
@@ -2015,12 +2019,12 @@ private struct AIReportAssetAlertMessageRow: View {
         let isHigh = highRiskHints.contains { text.localizedCaseInsensitiveContains($0) }
         if isHigh {
             return (
-                PortfolixTheme.danger,
+                PortfolixTheme.lossText,
                 "exclamationmark.triangle.fill"
             )
         }
         return (
-            PortfolixTheme.amber,
+            PortfolixTheme.warnText,
             "exclamationmark.circle.fill"
         )
     }
@@ -2047,7 +2051,7 @@ private struct AIReportChatComposer: View {
                 ZStack {
                     AIReportComposerTextInput(placeholder: placeholder, text: draftTextBinding)
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
                         .focused($isComposerFocused)
                         .opacity(isVoiceActive ? 0 : 1)
@@ -2070,7 +2074,7 @@ private struct AIReportChatComposer: View {
                 } label: {
                     Image(systemName: isVoiceActive ? "stop.fill" : "mic.fill")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(isVoiceActive ? PortfolixTheme.lilac : PortfolixTheme.secondaryText)
+                        .foregroundStyle(isVoiceActive ? PortfolixTheme.brandText : PortfolixTheme.secondary)
                         .frame(width: 28, height: 28)
                         .contentShape(Circle())
                 }
@@ -2085,8 +2089,8 @@ private struct AIReportChatComposer: View {
                 Color.clear
                     .portfolixGlass(
                         in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                        tint: isVoiceActive ? PortfolixTheme.violet.opacity(0.18) : nil,
-                        fallbackTint: isVoiceActive ? PortfolixTheme.violet : PortfolixTheme.panelElevated,
+                        tint: isVoiceActive ? PortfolixTheme.brandFocus.opacity(0.18) : nil,
+                        fallbackTint: isVoiceActive ? PortfolixTheme.brandFocus : PortfolixTheme.raised,
                         fallbackOpacity: isVoiceActive ? 0.14 : 0.68
                     )
             }
@@ -2361,7 +2365,7 @@ private struct AIReportStatusCard: View {
                     title: title,
                     detail: detail,
                     icon: {
-                        StatusSymbolIcon(symbol: symbol, color: color)
+                        StatusSymbolIcon(symbol: symbol, color: color, background: symbolBackground)
                     }
                 )
             }
@@ -2375,11 +2379,11 @@ private struct AIReportStatusCard: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
                     .font(PortfolixTypography.subheading)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
                 Text(detail)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
             }
 
@@ -2388,7 +2392,7 @@ private struct AIReportStatusCard: View {
             if isRunningStatus {
                 CapsuleLabel(
                     title: localizedText("Agent 工作中", "Agent Running", language: language),
-                    color: PortfolixTheme.lilac,
+                    color: PortfolixTheme.brandText,
                     symbol: "sparkles"
                 )
             }
@@ -2468,12 +2472,22 @@ private struct AIReportStatusCard: View {
 
     private var color: Color {
         if !hasPositions || !hasLLMKey {
-            return PortfolixTheme.amber
+            return PortfolixTheme.warnText
         }
         if case .failed = status {
-            return PortfolixTheme.danger
+            return PortfolixTheme.lossText
         }
-        return PortfolixTheme.mint
+        return PortfolixTheme.gainText
+    }
+
+    private var symbolBackground: Color {
+        if !hasPositions || !hasLLMKey {
+            return PortfolixTheme.warnWash1
+        }
+        if case .failed = status {
+            return PortfolixTheme.lossWash1
+        }
+        return PortfolixTheme.gainWash1
     }
 }
 
@@ -2493,11 +2507,12 @@ private struct AIReportAgentThinkingIcon: View {
 private struct StatusSymbolIcon: View {
     let symbol: String
     let color: Color
+    var background: Color = PortfolixTheme.neutralWash
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(color.opacity(0.14))
+                .fill(background)
                 .frame(width: 32, height: 32)
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .semibold))
@@ -2524,7 +2539,7 @@ private struct AIReportEmptyCard: View {
                         : localizedText("添加持仓后可生成分析", "Add holdings to generate an analysis", language: language)
                 )
                 .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
             }
             .frame(minHeight: 160, alignment: .topLeading)
         }
@@ -2549,13 +2564,13 @@ private struct AIReportSummaryCard: View {
                 } else if let report {
                     Text(AIUserFacingTextSanitizer.sanitize(report.summary))
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(8)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(8)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -2589,7 +2604,7 @@ private struct AIReportMetaCard: View {
                 if run.usedFallback {
                     CapsuleLabel(
                         title: localizedText("已使用安全回退", "Fallback Used", language: language),
-                        color: PortfolixTheme.amber,
+                        color: PortfolixTheme.warnText,
                         symbol: "exclamationmark.triangle.fill"
                     )
                 }
@@ -2607,11 +2622,11 @@ private struct AIReportMetaRow: View {
         HStack {
             Text(title)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
             Spacer()
             Text(value)
                 .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .lineLimit(1)
         }
     }
@@ -2647,24 +2662,24 @@ private struct AIReportRebalanceCard: View {
                                         .frame(width: 18)
                                     Text(AIUserFacingTextSanitizer.sanitize(action.title))
                                         .font(PortfolixTypography.subheading)
-                                        .foregroundStyle(PortfolixTheme.primaryText)
+                                        .foregroundStyle(PortfolixTheme.text)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
                                 }
                                 if let assetName = action.assetName, !assetName.isEmpty {
                                     Text([assetName, action.symbol].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                                         .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.lilac)
+                                        .foregroundStyle(PortfolixTheme.brandText)
                                         .lineLimit(1)
                                 }
                                 Text(recommendationDetails(for: action))
                                     .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.secondaryText)
+                                    .foregroundStyle(PortfolixTheme.secondary)
                                     .lineLimit(5)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .padding(PortfolixSpacing.md)
-                            .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
                         }
                     }
                 }
@@ -2689,15 +2704,15 @@ private struct AIReportRebalanceCard: View {
 
     private func color(for action: String) -> Color {
         switch action {
-        case "buy", "increase": PortfolixTheme.mint
-        case "sell", "exit": PortfolixTheme.danger
-        case "reduce": PortfolixTheme.amber
-        case "hold": PortfolixTheme.lilac
-        case "review_reduce": PortfolixTheme.amber
-        case "review_replenish": PortfolixTheme.mint
-        case "rebalance": PortfolixTheme.lilac
-        case "maintain": PortfolixTheme.mint
-        default: PortfolixTheme.secondaryText
+        case "buy", "increase": PortfolixTheme.gainText
+        case "sell", "exit": PortfolixTheme.lossText
+        case "reduce": PortfolixTheme.warnText
+        case "hold": PortfolixTheme.brandText
+        case "review_reduce": PortfolixTheme.warnText
+        case "review_replenish": PortfolixTheme.gainText
+        case "rebalance": PortfolixTheme.brandText
+        case "maintain": PortfolixTheme.gainText
+        default: PortfolixTheme.secondary
         }
     }
 }
@@ -2746,9 +2761,9 @@ private struct AIReportRiskList: View {
 
     private func color(for severity: String) -> Color {
         switch severity {
-        case "high": PortfolixTheme.danger
-        case "warning": PortfolixTheme.amber
-        default: PortfolixTheme.lilac
+        case "high": PortfolixTheme.lossText
+        case "warning": PortfolixTheme.warnText
+        default: PortfolixTheme.brandText
         }
     }
 }
@@ -2775,11 +2790,11 @@ private struct AIReportAssetAlerts: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(alert.assetName)
                                         .font(PortfolixTypography.subheading)
-                                        .foregroundStyle(PortfolixTheme.primaryText)
+                                        .foregroundStyle(PortfolixTheme.text)
                                         .lineLimit(1)
                                     Text(alert.symbol)
                                         .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.tertiaryText)
+                                        .foregroundStyle(PortfolixTheme.tertiary)
                                         .lineLimit(1)
                                 }
 
@@ -2789,11 +2804,11 @@ private struct AIReportAssetAlerts: View {
                             }
                             Text(alert.reason)
                                 .font(PortfolixTypography.caption)
-                                .foregroundStyle(PortfolixTheme.secondaryText)
+                                .foregroundStyle(PortfolixTheme.secondary)
                                 .lineLimit(3)
                         }
                         .padding(PortfolixSpacing.md)
-                        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
                     }
                 }
             }
@@ -2813,13 +2828,13 @@ private struct AIReportAssetAlerts: View {
         if isHigh {
             return (
                 localizedText("高风险", "High Risk", language: language),
-                PortfolixTheme.danger,
+                PortfolixTheme.lossText,
                 "exclamationmark.triangle.fill"
             )
         }
         return (
             localizedText("中风险", "Medium Risk", language: language),
-            PortfolixTheme.amber,
+            PortfolixTheme.warnText,
             "exclamationmark.circle.fill"
         )
     }
@@ -2844,7 +2859,7 @@ private struct AIReportQuestionCard: View {
                         AIReportPlaceholder(text: localizedText("暂无需要额外复核的问题", "No review questions for now", language: language))
                     } else {
                         ForEach(Array(questions.prefix(5).enumerated()), id: \.offset) { _, question in
-                            AIReportBullet(title: question, body: nil, color: PortfolixTheme.lilac, symbol: "checkmark.circle.fill")
+                            AIReportBullet(title: question, body: nil, color: PortfolixTheme.brandText, symbol: "checkmark.circle.fill")
                         }
                     }
                 }
@@ -2873,7 +2888,7 @@ private struct AIReportLimitationsCard: View {
                         AIReportPlaceholder(text: localizedText("暂无额外限制说明", "No extra limitations", language: language))
                     } else {
                         ForEach(Array(limitations.prefix(5).enumerated()), id: \.offset) { _, limitation in
-                            AIReportBullet(title: limitation, body: nil, color: PortfolixTheme.secondaryText, symbol: "info.circle.fill")
+                            AIReportBullet(title: limitation, body: nil, color: PortfolixTheme.secondary, symbol: "info.circle.fill")
                         }
                     }
                 }
@@ -2899,10 +2914,10 @@ private struct AIReportSourceLinks: View {
                                     .lineLimit(1)
                             }
                             .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.lilac)
+                            .foregroundStyle(PortfolixTheme.brandText)
                             .padding(.horizontal, PortfolixSpacing.sm)
                             .padding(.vertical, 4)
-                            .background(PortfolixTheme.lilac.opacity(0.12), in: Capsule())
+                            .background(PortfolixTheme.brandWash, in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -2921,7 +2936,7 @@ private struct AIReportDataQualityCard: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 SectionHeader(title: localizedText("数据质量", "Data Quality", language: language), symbol: "waveform.path.ecg")
                 ForEach(Array(report.dataQualityNotes.prefix(5).enumerated()), id: \.offset) { _, note in
-                    AIReportBullet(title: note, body: nil, color: PortfolixTheme.mint, symbol: "info.circle.fill")
+                    AIReportBullet(title: note, body: nil, color: PortfolixTheme.gainText, symbol: "info.circle.fill")
                 }
             }
         }
@@ -2945,21 +2960,21 @@ private struct AIReportSourcesCard: View {
                                 HStack(spacing: PortfolixSpacing.sm) {
                                     Text(source.domain)
                                         .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.primaryText)
+                                        .foregroundStyle(PortfolixTheme.text)
                                         .lineLimit(1)
-                                    CapsuleLabel(title: source.credibility.title(language: language), color: PortfolixTheme.lilac)
+                                    CapsuleLabel(title: source.credibility.title(language: language), color: PortfolixTheme.brandText)
                                 }
                                 Text(source.title)
                                     .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.secondaryText)
+                                    .foregroundStyle(PortfolixTheme.secondary)
                                     .lineLimit(2)
                                 Text(source.assetName)
                                     .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                                    .foregroundStyle(PortfolixTheme.tertiary)
                                     .lineLimit(1)
                             }
                             .padding(PortfolixSpacing.md)
-                            .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+                            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
                         }
                     }
                 }
@@ -2984,7 +2999,7 @@ struct AIReportDisclaimer: View {
     var body: some View {
         Text(text)
             .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3013,12 +3028,12 @@ private struct AIReportBullet: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(title)
                     .font(PortfolixTypography.bodyEmphasis)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 if let bodyText {
                     Text(bodyText)
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -3032,7 +3047,7 @@ private struct AIReportPlaceholder: View {
     var body: some View {
         Text(text)
             .font(PortfolixTypography.body)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .frame(maxWidth: .infinity, minHeight: 80, alignment: .center)
     }
 }
@@ -3336,11 +3351,11 @@ private enum RiskReviewStatus {
     var color: Color {
         switch self {
         case .valid:
-            PortfolixTheme.mint
+            PortfolixTheme.gainText
         case .reviewSuggested:
-            PortfolixTheme.amber
+            PortfolixTheme.warnText
         case .notConfigured:
-            PortfolixTheme.tertiaryText
+            PortfolixTheme.tertiary
         }
     }
 
@@ -3374,12 +3389,12 @@ private struct RiskProfileSummaryCard: View {
                     VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                         Text(level)
                             .font(PortfolixTypography.secondaryValue)
-                            .foregroundStyle(PortfolixTheme.lilac)
+                            .foregroundStyle(PortfolixTheme.brandText)
                             .lineLimit(1)
 
                         Text(description)
                             .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.secondaryText)
+                            .foregroundStyle(PortfolixTheme.secondary)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -3389,13 +3404,13 @@ private struct RiskProfileSummaryCard: View {
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {
                         Text(tolerance)
                             .font(PortfolixTypography.secondaryValue)
-                            .foregroundStyle(PortfolixTheme.primaryText)
+                            .foregroundStyle(PortfolixTheme.text)
                             .monospacedDigit()
                             .portfolixNumericTransition(tolerance)
                             .lineLimit(1)
                         Text(localizedText("风险承受度", "Risk Tolerance", language: language))
                             .font(PortfolixTypography.captionEmphasis)
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -3439,7 +3454,7 @@ private struct RiskPortfolioMatchCard: View {
                             .portfolixNumericTransition(scoreText)
                         Text(localizedText("关键约束匹配", "Key constraint fit", language: language))
                             .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                     }
 
                     Spacer(minLength: 0)
@@ -3448,12 +3463,12 @@ private struct RiskPortfolioMatchCard: View {
                         RiskCountPill(
                             title: localizedText("通过", "Passed", language: language),
                             value: "\(passedCount)/\(totalCount)",
-                            color: PortfolixTheme.mint
+                            color: PortfolixTheme.gainText
                         )
                         RiskCountPill(
                             title: localizedText("需关注", "Watch", language: language),
                             value: "\(breachCount)",
-                            color: breachCount == 0 ? PortfolixTheme.tertiaryText : PortfolixTheme.amber
+                            color: breachCount == 0 ? PortfolixTheme.tertiary : PortfolixTheme.warnText
                         )
                     }
                 }
@@ -3477,15 +3492,15 @@ private struct RiskPortfolioMatchCard: View {
 
     private var scoreColor: Color {
         guard let score else {
-            return PortfolixTheme.tertiaryText
+            return PortfolixTheme.tertiary
         }
         if score >= 75 {
-            return PortfolixTheme.mint
+            return PortfolixTheme.gainText
         }
         if score >= 50 {
-            return PortfolixTheme.amber
+            return PortfolixTheme.warnText
         }
-        return PortfolixTheme.danger
+        return PortfolixTheme.lossText
     }
 }
 
@@ -3511,12 +3526,12 @@ private struct RiskConstraintSliderRow: View {
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(title)
                         .font(PortfolixTypography.bodyEmphasis)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
 
                     Text(actualCaption)
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiaryText)
+                        .foregroundStyle(PortfolixTheme.tertiary)
                         .lineLimit(1)
                         .portfolixNumericTransition(actualCaption)
                 }
@@ -3528,20 +3543,20 @@ private struct RiskConstraintSliderRow: View {
                             onCommit()
                         }
                     }
-                        .tint(PortfolixTheme.controlAccent)
+                        .tint(PortfolixTheme.brandFocus)
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.xs) {
                         Text("\(limitLabel) \(percentText(value))")
                             .font(PortfolixTypography.labelEmphasis)
-                            .foregroundStyle(PortfolixTheme.secondaryText)
+                            .foregroundStyle(PortfolixTheme.secondary)
                             .monospacedDigit()
                             .portfolixNumericTransition(percentText(value))
                             .lineLimit(1)
 
                         RiskLimitBadge(
                             title: isPassing ? localizedText("正常", "OK", language: language) : localizedText("需关注", "Watch", language: language),
-                            color: isPassing ? PortfolixTheme.mint : PortfolixTheme.amber,
-                            textColor: isPassing ? PortfolixTheme.positiveStatusText : PortfolixTheme.warningStatusText
+                            color: isPassing ? PortfolixTheme.gainText : PortfolixTheme.warnText,
+                            textColor: isPassing ? PortfolixTheme.gainText : PortfolixTheme.warnText
                         )
                     }
                     .frame(width: 92, alignment: .trailing)
@@ -3656,7 +3671,7 @@ private struct RiskSettingValue: View {
     var body: some View {
         Text(value)
             .font(PortfolixTypography.labelEmphasis)
-            .foregroundStyle(PortfolixTheme.primaryText)
+            .foregroundStyle(PortfolixTheme.text)
             .monospacedDigit()
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -3671,7 +3686,7 @@ private struct RiskCountPill: View {
     var body: some View {
         HStack(spacing: PortfolixSpacing.xs) {
             Text(title)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
             Text(value)
                 .foregroundStyle(color)
                 .monospacedDigit()
@@ -3867,7 +3882,7 @@ struct SettingsView: View {
                     SettingsRow(title: settingsText("数据存储", "Data Storage")) {
                         Label(settingsText("仅本机", "Local only"), systemImage: "lock.shield.fill")
                             .font(PortfolixTypography.captionEmphasis)
-                            .foregroundStyle(PortfolixTheme.mint)
+                            .foregroundStyle(PortfolixTheme.gainText)
                     }
                     SettingsDivider()
                     SettingsRow(
@@ -4084,7 +4099,7 @@ struct SettingsView: View {
         guard !providers.isEmpty else {
             return (
                 settingsText("未启用", "Disabled"),
-                PortfolixTheme.tertiaryText,
+                PortfolixTheme.tertiary,
                 "minus.circle.fill"
             )
         }
@@ -4111,14 +4126,14 @@ struct SettingsView: View {
             }
         }
         if states.contains(.invalid) {
-            return (settingsText("验证失败", "Validation failed"), PortfolixTheme.danger, "xmark.circle.fill")
+            return (settingsText("验证失败", "Validation failed"), PortfolixTheme.lossText, "xmark.circle.fill")
         }
         if states.contains(where: { $0 != .ready }) {
-            return (settingsText("待验证", "Needs validation"), PortfolixTheme.amber, "exclamationmark.circle.fill")
+            return (settingsText("待验证", "Needs validation"), PortfolixTheme.warnText, "exclamationmark.circle.fill")
         }
         return (
             settingsText("已启用 \(providers.count) 个", "\(providers.count) enabled"),
-            PortfolixTheme.mint,
+            PortfolixTheme.gainText,
             "checkmark.circle.fill"
         )
     }
@@ -4240,12 +4255,12 @@ private struct DataTransferInlineStatusView: View {
                     Text(title)
                 }
                 .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
                 .transition(.opacity)
             case let .success(title, detail):
                 Label(title, systemImage: "checkmark.circle.fill")
                     .font(PortfolixTypography.captionEmphasis)
-                    .foregroundStyle(PortfolixTheme.mint)
+                    .foregroundStyle(PortfolixTheme.gainText)
                     .portfolixHelp(detail)
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .trailing)))
             }
@@ -4310,7 +4325,7 @@ struct HelpIcon: View {
     var body: some View {
         Image(systemName: "questionmark.circle")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .contentShape(Rectangle())
             .portfolixHelp(text, placement: placement)
             .accessibilityLabel(text)
@@ -4328,7 +4343,7 @@ struct HelpTooltipBubble: View {
             .frame(width: contentWidth, alignment: .leading)
             .padding(.horizontal, PortfolixSpacing.sm)
             .padding(.vertical, PortfolixSpacing.xs)
-        .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
+        .background(PortfolixTheme.soft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
                 .strokeBorder(PortfolixTheme.border, lineWidth: 1)
@@ -4363,7 +4378,7 @@ struct HelpTooltipBubble: View {
     private var tooltipText: some View {
         Text(text)
             .font(PortfolixTypography.caption)
-            .foregroundStyle(PortfolixTheme.primaryText)
+            .foregroundStyle(PortfolixTheme.text)
             .multilineTextAlignment(.leading)
     }
 }
@@ -4376,12 +4391,12 @@ private struct SettingsText: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(title)
                 .font(PortfolixTypography.bodyEmphasis)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .lineLimit(1)
             if let detail {
                 Text(detail)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
             }
         }
@@ -4430,7 +4445,7 @@ private struct PositionRefreshButton: View {
                 .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(PortfolixTheme.glassControlText)
+        .foregroundStyle(PortfolixTheme.text)
         .portfolixGlass(in: Circle(), interactive: true)
         .opacity(isRefreshing ? 0.5 : 1)
         .accessibilityLabel(
@@ -4471,12 +4486,12 @@ struct PageHeader<Trailing: View>: View {
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
                 Text(title)
                     .font(PortfolixTypography.pageTitle)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
                 if let subtitle {
                     Text(subtitle)
                         .font(PortfolixTypography.label)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(1)
                 }
             }

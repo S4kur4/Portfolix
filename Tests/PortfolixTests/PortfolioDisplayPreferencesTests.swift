@@ -25,6 +25,7 @@ struct PortfolioDisplayPreferencesTests {
         store.primaryPositionSortDirection = .ascending
         store.trendMetric = .profitRate
         store.trendRange = .year
+        store.performanceRiskRange = .quarter
         store.displayCurrency = .usd
         store.appearanceMode = .dark
         store.performanceColorScheme = .redUpGreenDown
@@ -45,6 +46,7 @@ struct PortfolioDisplayPreferencesTests {
         #expect(restored.primaryPositionSortDirection == .ascending)
         #expect(restored.trendMetric == .profitRate)
         #expect(restored.trendRange == .year)
+        #expect(restored.performanceRiskRange == .quarter)
         #expect(restored.displayCurrency == .usd)
         #expect(restored.appearanceMode == .dark)
         #expect(restored.performanceColorScheme == .redUpGreenDown)
@@ -83,6 +85,10 @@ struct PortfolioDisplayPreferencesTests {
             store.trendRange = range
             #expect(PortfolioStore(positionRepository: repository).trendRange == range)
         }
+        for range in PerformanceRiskRange.allCases {
+            store.performanceRiskRange = range
+            #expect(PortfolioStore(positionRepository: repository).performanceRiskRange == range)
+        }
     }
 
     @Test
@@ -117,6 +123,7 @@ struct PortfolioDisplayPreferencesTests {
         #expect(store.primaryPositionSortDirection == .descending)
         #expect(store.trendMetric == .profitValue)
         #expect(store.trendRange == .month)
+        #expect(store.performanceRiskRange == .month)
         #expect(store.displayCurrency == .cny)
         #expect(store.appearanceMode == .system)
         #expect(store.performanceColorScheme == .greenUpRedDown)

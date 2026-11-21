@@ -55,7 +55,7 @@ struct PortfolixDateTimePicker: View {
         HStack(spacing: PortfolixSpacing.sm) {
             Button { isPresented.toggle() } label: {
                 HStack(spacing: PortfolixSpacing.sm) {
-                    Image(systemName: "calendar").foregroundStyle(PortfolixTheme.secondaryText)
+                    Image(systemName: "calendar").foregroundStyle(PortfolixTheme.secondary)
                     Text(dateText).monospacedDigit()
                 }
                 .frame(height: PortfolixLayout.glassControlHeight)
@@ -74,13 +74,13 @@ struct PortfolixDateTimePicker: View {
                     .frame(width: 0.5, height: PortfolixSpacing.md)
                 HStack(spacing: PortfolixSpacing.xs) {
                     timeMenu(.hour, title: text("小时（24 小时制）", "Hour (24-hour clock)"), options: hours)
-                    Text(":").foregroundStyle(PortfolixTheme.secondaryText)
+                    Text(":").foregroundStyle(PortfolixTheme.secondary)
                     timeMenu(.minute, title: text("分钟", "Minute"), options: minutes)
                 }
             }
         }
         .font(PortfolixTypography.captionEmphasis)
-        .foregroundStyle(PortfolixTheme.glassControlText)
+        .foregroundStyle(PortfolixTheme.text)
         .padding(.horizontal, PortfolixSpacing.sm)
         .portfolixGlassControl()
         .fixedSize()
@@ -101,7 +101,7 @@ struct PortfolixDateTimePicker: View {
                 if component == .minute {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                 }
             }
             .frame(height: PortfolixLayout.glassControlHeight)
@@ -139,7 +139,7 @@ struct PortfolixDateTimeEditor: View {
                 in: Date(timeIntervalSince1970: 0)...Date.now, displayedComponents: .date)
                 .datePickerStyle(.graphical)
                 .labelsHidden()
-                .tint(PortfolixTheme.lilac)
+                .tint(PortfolixTheme.brandText)
                 .environment(\.locale, Locale(identifier: language == .english ? "en_US" : "zh_CN"))
                 .fixedSize()
             HStack(spacing: PortfolixSpacing.sm) {
@@ -154,7 +154,7 @@ struct PortfolixDateTimeEditor: View {
         // Let the calendar's intrinsic width define the button row as well.
         .fixedSize(horizontal: true, vertical: true)
         .padding(PortfolixSpacing.lg)
-        .background(PortfolixTheme.panel)
+        .background(PortfolixTheme.surface)
         .onExitCommand(perform: onDone)
     }
 }

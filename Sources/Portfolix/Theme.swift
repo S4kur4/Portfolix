@@ -2,88 +2,265 @@ import AppKit
 import SwiftUI
 
 enum PortfolixTheme {
-    // Keep large surfaces neutral so brand color is reserved for meaning and interaction.
-    static let canvas = adaptive(light: 0xE8E8E8, dark: 0x000000)
-    private static let primarySurface = adaptive(light: 0xF3F3F3, dark: 0x080808)
-    static let sidebar = primarySurface
-    static let panel = primarySurface
-    static let panelElevated = adaptive(light: 0xE8E8E8, dark: 0x141414)
-    static let panelSoft = adaptive(light: 0xE0E0E0, dark: 0x1A1A1A)
-    static let selectionFill = adaptive(light: 0xE2DDF1, dark: 0x18151F)
-    static let selectionText = adaptive(light: 0x513AB6, dark: 0xC5BAF8)
-    static let controlSelectionFill = adaptive(light: 0xDCD7E7, dark: 0x3F3B4B)
-    static let border = Color(nsColor: .separatorColor)
-    static let borderStrong = Color(nsColor: .gridColor)
-    static let primaryText = Color(nsColor: .labelColor)
-    static let secondaryText = Color(nsColor: .secondaryLabelColor)
-    // Keep useful metadata readable; reserve the dimmer system color for disabled controls.
-    static let tertiaryText = secondaryText
-    static let disabledText = Color(nsColor: .disabledControlTextColor)
-    // Opaque text avoids different vibrancy blending between AppKit and SwiftUI glass.
-    private static let lightGlassText: UInt = 0x3E3E3E
-    static let glassControlText = adaptive(light: lightGlassText, dark: 0xFFFFFF)
-    static let lilac = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
-    static let violet = adaptive(light: 0x7253DB, dark: 0x8C75FF)
-    static let blue = adaptive(light: 0x3B6FCC, dark: 0x7FA7FF)
-    static let rose = adaptive(light: 0xA34C98, dark: 0xD184C6)
-    static let amber = adaptive(light: 0x9B681E, dark: 0xD7A967)
-    static let mint = adaptive(light: 0x287D70, dark: 0x76C7B7)
-    static let danger = adaptive(light: 0xB44755, dark: 0xDD7D88)
-    // Text on tonal status backgrounds needs more contrast than the decorative fill.
-    static let positiveStatusText = adaptive(light: 0x20675C, dark: 0x76C7B7)
-    static let negativeStatusText = adaptive(light: 0x9E3947, dark: 0xDD7D88)
-    static let warningStatusText = adaptive(light: 0x805319, dark: 0xD7A967)
-    static let controlAccent = violet
-    static let primaryButtonTint = adaptive(light: 0xAF9AFF, dark: 0xB7A5FF)
-    static let primaryButtonText = adaptive(light: lightGlassText, dark: 0x120F20)
-    static let buttonShadow = Color.black.opacity(0.12)
+    // MARK: 基础中性色（设计规范 v1.2 · 2026-11-21）
+    // 中性色负责结构；大面积表面只用 canvas / surface / raised，不使用纯黑或纯白。
+    static let canvas = adaptive(light: 0xEFEDF2, dark: 0x0A090D)
+    static let surface = adaptive(light: 0xF7F5FA, dark: 0x121016)
+    static let raised = adaptive(light: 0xFDFCFF, dark: 0x1A1720)
+    static let soft = adaptive(light: 0xE5E2EA, dark: 0x241F2C)
+    static let border = adaptive(light: 0xD7D3DE, dark: 0x302A3B)
+    static let borderStrong = adaptive(light: 0x8F87A1, dark: 0x696079)
+    static let text = adaptive(light: 0x1B1722, dark: 0xF5F3F8)
+    static let secondary = adaptive(light: 0x5C5668, dark: 0xB2ABBF)
+    static let tertiary = adaptive(light: 0x6F687C, dark: 0x8C8499)
+    static let disabled = adaptive(light: 0xA9A2B4, dark: 0x5B5468)
+    static let inverse = adaptive(light: 0xF7F5FA, dark: 0x121016)
 
+    // MARK: 品牌紫（事件色：品牌 / 交互 / 选中 / 焦点 / 单系列数据）
+    static let brandText = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
+    static let brandSolid = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
+    static let brandSolidHover = adaptive(light: 0x513AB6, dark: 0xC2BAFC)
+    static let brandSolidPressed = adaptive(light: 0x3E308F, dark: 0x9D8CFF)
+    static let brandSolidInk = adaptive(light: 0xFFFFFF, dark: 0x1A1428)
+    static let brandWash = adaptive(light: 0xEAE7FE, dark: 0x231D39)
+    static let brandWashStrong = adaptive(light: 0xD8D2FD, dark: 0x302754)
+    static let brandWashText = adaptive(light: 0x513AB6, dark: 0xC2BAFC)
+    static let brandFocus = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
+    static let brandChart = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
+    static let brandLogoStart = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
+    static let brandLogoEnd = adaptive(light: 0x654BC8, dark: 0x7C63F2)
+    static let brandLogoInk = Color(hex: 0xFFFFFF)
+    static let brandGradientStart = adaptive(light: 0xB7A5FF, dark: 0xB7A5FF)
+    static let brandGradientEnd = adaptive(light: 0x7C63F2, dark: 0x9D8CFF)
+    static let brandBubbleStart = adaptive(light: 0xC2BAFC, dark: 0xB7A5FF)
+    static let brandBubbleEnd = adaptive(light: 0xB7A5FF, dark: 0x9D8CFF)
+    static let brandBubbleInk = Color(hex: 0x1A1428)
+
+    static let brandLogoGradient = LinearGradient(
+        colors: [brandLogoStart, brandLogoEnd],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    static let brandGradient = LinearGradient(
+        colors: [brandGradientStart, brandGradientEnd],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    static let brandBubbleGradient = LinearGradient(
+        colors: [brandBubbleStart, brandBubbleEnd],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    // MARK: 语义色（涨跌 / 风险）
+    static let gainFill = adaptive(light: 0x287D70, dark: 0x76C7B7)
+    static let gainText = adaptive(light: 0x20675C, dark: 0x76C7B7)
+    static let gainOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
+    static let lossFill = adaptive(light: 0xB44755, dark: 0xDD7D88)
+    static let lossText = adaptive(light: 0x9E3947, dark: 0xDD7D88)
+    static let lossOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
+    static let warnFill = adaptive(light: 0x9B681E, dark: 0xD7A967)
+    static let warnText = adaptive(light: 0x805319, dark: 0xD7A967)
+    static let warnOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
+    static let lossSolidHover = adaptive(light: 0x9E3947, dark: 0xE89AA4)
+    static let lossSolidPressed = adaptive(light: 0x7A2B35, dark: 0xF0B0B8)
+
+    // 不透明语义 wash（W1 最浅 → W4 最深），用于徽标底、图表弱填充与日历热力。
+    static let gainWash1 = adaptive(light: 0xE2E9EC, dark: 0x202A2D)
+    static let gainWash2 = adaptive(light: 0xD2DFE1, dark: 0x2A3C3D)
+    static let gainWash3 = adaptive(light: 0xC1D6D6, dark: 0x344E4D)
+    static let gainWash4 = adaptive(light: 0xB1CCCB, dark: 0x3E615D)
+    static let lossWash1 = adaptive(light: 0xF0E4EA, dark: 0x2E1F26)
+    static let lossWash2 = adaptive(light: 0xEBD6DC, dark: 0x432A31)
+    static let lossWash3 = adaptive(light: 0xE6C8CF, dark: 0x57353D)
+    static let lossWash4 = adaptive(light: 0xE0BAC2, dark: 0x6B4048)
+    static let warnWash1 = adaptive(light: 0xEEE7E4, dark: 0x2E2521)
+    static let warnWash2 = adaptive(light: 0xE6DCD2, dark: 0x413529)
+    static let warnWash3 = adaptive(light: 0xDFD0C1, dark: 0x554432)
+    static let warnWash4 = adaptive(light: 0xD8C5AF, dark: 0x69533A)
+    static let neutralWash = adaptive(light: 0xEBE8EE, dark: 0x222027)
+
+    // MARK: 资产大类色 A+ 紫晶（规范 v1.2，2026-11-21 更新：12% 品牌紫混合；同一大类在全 App 使用同一组颜色）
+    static let classStockFill = adaptive(light: 0x6D85F7, dark: 0x7089FF)
+    static let classStockMark = adaptive(light: 0x5F74D9, dark: 0x7089FF)
+    static let classFundFill = adaptive(light: 0xAF71E4, dark: 0xB373E9)
+    static let classFundMark = adaptive(light: 0x9862C6, dark: 0xB373E9)
+    static let classCryptoFill = adaptive(light: 0xCC6DA9, dark: 0xE078BA)
+    static let classCryptoMark = adaptive(light: 0xBE669E, dark: 0xE078BA)
+    static let classCashFill = adaptive(light: 0x728FBB, dark: 0x728FBB)
+    static let classCashMark = adaptive(light: 0x617A9F, dark: 0x728FBB)
+    static let classOtherFill = adaptive(light: 0x9D898F, dark: 0xB49DA4)
+    static let classOtherMark = adaptive(light: 0x958288, dark: 0xB49DA4)
+    static let classOnFill = Color(hex: 0x121016)
+    static let classMarkInk = adaptive(light: 0xFFFFFF, dark: 0x121016)
+
+    // MARK: 资产大类大面积色阶（P1-A 试验：55% A+ fill + 45% 中性色，降低大色块彩度；小标记仍用 classMark）
+    static let classStockArea = adaptive(light: 0x7C86D0, dark: 0x535EA7)
+    static let classFundArea = adaptive(light: 0xA17BC6, dark: 0x78529B)
+    static let classCryptoArea = adaptive(light: 0xB179A5, dark: 0x915581)
+    static let classCashArea = adaptive(light: 0x7F8BAF, dark: 0x546281)
+    static let classOtherArea = adaptive(light: 0x978897, dark: 0x796975)
+    static let classOnArea = adaptive(light: 0x121016, dark: 0xF5F3F8)
+
+    // MARK: 资产大类淡彩大色块（P1-A 试验：约 35% A+ fill 与 surface 混合，颜色浓度接近语义 W3；
+    // 小标记继续用 classMark/classArea，保证小面积可辨认）
+    static let classStockPale = adaptive(light: 0xC8CFFC, dark: 0x333A68)
+    static let classFundPale = adaptive(light: 0xDFC8F4, dark: 0x4A3360)
+    static let classCryptoPale = adaptive(light: 0xEFC9E4, dark: 0x5A344F)
+    static let classCashPale = adaptive(light: 0xC8D1E4, dark: 0x343C50)
+    static let classOtherPale = adaptive(light: 0xE0D6DC, dark: 0x4B4148)
+    static let classOnPale = adaptive(light: 0x121016, dark: 0xF5F3F8)
+
+    // MARK: 收益/回撤 0 轴淡彩面积（P1-A 试验：比 W4 更明确可辨的红/绿，仍为面积填充，不加折线）
+    static let lossAreaWash = adaptive(light: 0xE58A96, dark: 0x7C3F4A)
+    static let gainAreaWash = adaptive(light: 0xA8CBC3, dark: 0x3E615D)
+
+    // MARK: 旧 token 兼容别名（迁移完成后删除）
+    // 仅用于迁移期编译；新代码禁止使用以下名称。
+    static let sidebar = surface
+    static let panel = surface
+    static let panelElevated = raised
+    static let panelSoft = soft
+    static let selectionFill = brandWash
+    static let selectionText = brandWashText
+    static let controlSelectionFill = brandWashStrong
+    static let primaryText = text
+    static let secondaryText = secondary
+    static let tertiaryText = tertiary
+    static let disabledText = disabled
+    static let glassControlText = text
+    static let lilac = brandText
+    static let violet = brandFocus
+    static let blue = classStockFill
+    static let rose = classOtherFill
+    static let amber = warnFill
+    static let mint = gainFill
+    static let danger = lossFill
+    static let positiveStatusText = gainText
+    static let negativeStatusText = lossText
+    static let warningStatusText = warnText
+    static let controlAccent = brandFocus
+    static let primaryButtonTint = brandSolid
+    static let primaryButtonText = brandSolidInk
+    static let buttonShadow = Color.black.opacity(0.12)
+    static let userMessageText = brandBubbleInk
+    static let userMessageGradient = brandBubbleGradient
+    static let userMessageGradientColors: [Color] = [brandBubbleStart, brandBubbleEnd]
+    static let purpleGradient = brandGradient
+
+    // MARK: 涨跌映射（图形用 *Fill，紧凑文字用 *Text）
     static func performanceColor(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
-        if value > 0 { return scheme == .greenUpRedDown ? mint : danger }
-        if value < 0 { return scheme == .greenUpRedDown ? danger : mint }
-        return secondaryText
+        if value > 0 { return scheme == .greenUpRedDown ? gainFill : lossFill }
+        if value < 0 { return scheme == .greenUpRedDown ? lossFill : gainFill }
+        return secondary
     }
 
     static func performanceColor(for value: Double, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
-        if value > 0 { return scheme == .greenUpRedDown ? mint : danger }
-        if value < 0 { return scheme == .greenUpRedDown ? danger : mint }
-        return secondaryText
+        if value > 0 { return scheme == .greenUpRedDown ? gainFill : lossFill }
+        if value < 0 { return scheme == .greenUpRedDown ? lossFill : gainFill }
+        return secondary
     }
 
     static func performanceStatusText(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
-        if value > 0 { return scheme == .greenUpRedDown ? positiveStatusText : negativeStatusText }
-        if value < 0 { return scheme == .greenUpRedDown ? negativeStatusText : positiveStatusText }
-        return secondaryText
+        if value > 0 { return scheme == .greenUpRedDown ? gainText : lossText }
+        if value < 0 { return scheme == .greenUpRedDown ? lossText : gainText }
+        return secondary
+    }
+
+    static func performanceWash(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
+        if value > 0 { return scheme == .greenUpRedDown ? gainWash2 : lossWash2 }
+        if value < 0 { return scheme == .greenUpRedDown ? lossWash2 : gainWash2 }
+        return neutralWash
     }
 
     static func dailyProfitTileFill(for amount: Decimal?, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
-        guard let amount else { return .clear }
-        if amount != 0 { return performanceColor(for: amount, scheme: scheme).opacity(0.13) }
-        return panelSoft.opacity(0.55)
+        guard let amount, amount != 0 else { return neutralWash }
+        return performanceWash(for: amount, scheme: scheme)
     }
 
-    static let userMessageText = Color(hex: 0x120F20)
-    static let userMessageGradientColors = [
-        adaptive(light: 0xAF9AFF, dark: 0xC3B1FF),
-        adaptive(light: 0x8F75EB, dark: 0x8068EF),
-    ]
-    static let userMessageGradient = LinearGradient(
-        colors: userMessageGradientColors,
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
+    // MARK: 资产大类映射
+    static func classFill(_ assetClass: AssetClass) -> Color {
+        switch assetClass {
+        case .stock: return classStockFill
+        case .fund: return classFundFill
+        case .crypto: return classCryptoFill
+        case .cash: return classCashFill
+        case .other: return classOtherFill
+        }
+    }
 
-    static let purpleGradient = LinearGradient(
-        colors: [adaptive(light: 0xAF9AFF, dark: 0xC3B1FF), adaptive(light: 0x7457E2, dark: 0x8068EF)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
+    static func classMark(_ assetClass: AssetClass) -> Color {
+        switch assetClass {
+        case .stock: return classStockMark
+        case .fund: return classFundMark
+        case .crypto: return classCryptoMark
+        case .cash: return classCashMark
+        case .other: return classOtherMark
+        }
+    }
+
+    static func classArea(_ assetClass: AssetClass) -> Color {
+        switch assetClass {
+        case .stock: return classStockArea
+        case .fund: return classFundArea
+        case .crypto: return classCryptoArea
+        case .cash: return classCashArea
+        case .other: return classOtherArea
+        }
+    }
+
+    static func classPale(_ assetClass: AssetClass) -> Color {
+        switch assetClass {
+        case .stock: return classStockPale
+        case .fund: return classFundPale
+        case .crypto: return classCryptoPale
+        case .cash: return classCashPale
+        case .other: return classOtherPale
+        }
+    }
 
     private static func adaptive(light: UInt, dark: UInt) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             let match = appearance.bestMatch(from: [.darkAqua, .aqua])
             return NSColor(hex: match == .darkAqua ? dark : light)
         })
+    }
+}
+
+/// 资产大类（设计规范 v1.2 的 5 类）：股票（A/B/HK/US）、基金、加密、现金、其他。
+enum AssetClass: String, CaseIterable, Identifiable, Sendable {
+    case stock
+    case fund
+    case crypto
+    case cash
+    case other
+
+    var id: String { rawValue }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .stock: return language == .chinese ? "股票" : "Stocks"
+        case .fund: return language == .chinese ? "基金" : "Funds"
+        case .crypto: return language == .chinese ? "加密" : "Crypto"
+        case .cash: return language == .chinese ? "现金" : "Cash"
+        case .other: return language == .chinese ? "其他" : "Other"
+        }
+    }
+
+    var fill: Color { PortfolixTheme.classFill(self) }
+    var mark: Color { PortfolixTheme.classMark(self) }
+    var area: Color { PortfolixTheme.classArea(self) }
+    var pale: Color { PortfolixTheme.classPale(self) }
+}
+
+extension AssetCategory {
+    var assetClass: AssetClass {
+        switch self {
+        case .cnStock, .bStock, .hkStock, .usStock: return .stock
+        case .fund: return .fund
+        case .crypto: return .crypto
+        case .cash: return .cash
+        }
     }
 }
 
@@ -209,14 +386,14 @@ struct PortfolixSidebarBackground: View {
     var body: some View {
         Group {
             if reduceTransparency {
-                PortfolixTheme.sidebar
+                PortfolixTheme.surface
             } else if #available(macOS 26.0, *) {
-                PortfolixTheme.sidebar
+                PortfolixTheme.surface
                     .glassEffect(.clear, in: Rectangle())
                     // Extend the glass rim beyond the clipped sidebar so it does not read as a divider.
                     .padding(-PortfolixSpacing.xs)
             } else {
-                PortfolixTheme.sidebar
+                PortfolixTheme.surface
             }
         }
         .clipped()
@@ -309,7 +486,7 @@ private struct PortfolixGlassControlSurface: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        let label = content.frame(height: height).foregroundStyle(PortfolixTheme.glassControlText)
+        let label = content.frame(height: height).foregroundStyle(PortfolixTheme.text)
         Group {
             if isInForm && colorScheme == .light {
                 label.background {
@@ -338,7 +515,7 @@ extension View {
     func portfolixGlass<S: Shape>(
         in shape: S,
         tint: Color? = nil,
-        fallbackTint: Color = PortfolixTheme.panelSoft,
+        fallbackTint: Color = PortfolixTheme.soft,
         fallbackOpacity: Double = 0.42,
         interactive: Bool = false
     ) -> some View {
@@ -369,6 +546,7 @@ struct PortfolixSelectionBoundsKey<Value: Hashable>: PreferenceKey {
 private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
     let selection: Value
     let cornerRadius: CGFloat
+    let fill: Color
     let height: CGFloat?
     let animates: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -380,7 +558,7 @@ private struct PortfolixSelectionBackground<Value: Hashable>: ViewModifier {
                     let frame = geometry[selectedBounds]
                     let resolvedHeight = min(height ?? frame.height, frame.height)
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(PortfolixTheme.controlSelectionFill)
+                        .fill(fill)
                         .frame(width: frame.width, height: resolvedHeight)
                         .offset(x: frame.minX, y: frame.minY + (frame.height - resolvedHeight) / 2)
                         .animation(
@@ -403,10 +581,11 @@ extension View {
     func portfolixSelectionBackground<Value: Hashable>(
         selection: Value,
         cornerRadius: CGFloat = PortfolixRadius.compact,
+        fill: Color = PortfolixTheme.brandWashStrong,
         height: CGFloat? = nil,
         animates: Bool = true
     ) -> some View {
-        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius, height: height, animates: animates))
+        modifier(PortfolixSelectionBackground(selection: selection, cornerRadius: cornerRadius, fill: fill, height: height, animates: animates))
     }
 }
 
@@ -439,7 +618,7 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                         }
                     }
                     .font(PortfolixTypography.control)
-                    .foregroundStyle(PortfolixTheme.glassControlText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, optionSymbol == nil ? PortfolixSpacing.md : PortfolixSpacing.sm)
@@ -546,7 +725,7 @@ struct Panel<Content: View>: View {
             .padding(padding)
             .background {
                 RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
-                    .fill(PortfolixTheme.panel)
+                    .fill(PortfolixTheme.surface)
             }
     }
 }
@@ -576,13 +755,13 @@ struct SectionHeader<Trailing: View>: View {
             if let symbol {
                 Image(systemName: symbol)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.lilac)
+                    .foregroundStyle(PortfolixTheme.secondary)
                     .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
             }
 
             Text(title)
                 .font(PortfolixTypography.sectionTitle)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .lineLimit(1)
                 .frame(height: PortfolixLayout.cardHeaderHeight)
 
@@ -602,7 +781,7 @@ struct PortfolixChartTooltipStyle: ViewModifier {
             .font(PortfolixTypography.micro)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(PortfolixTheme.panelSoft, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
+            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
             .overlay {
                 RoundedRectangle(cornerRadius: PortfolixRadius.compact)
                     .stroke(PortfolixTheme.borderStrong, lineWidth: 1)
@@ -657,7 +836,7 @@ struct CardMetaLabel: View {
             Text(title)
         }
         .font(PortfolixTypography.caption)
-        .foregroundStyle(PortfolixTheme.tertiaryText)
+        .foregroundStyle(PortfolixTheme.tertiary)
         .lineLimit(1)
     }
 }
@@ -677,15 +856,32 @@ struct StatusBadge: View {
     let freshness: Freshness
     var isSelected = false
 
+    private var badgeForeground: Color {
+        if isSelected { return PortfolixTheme.brandWashText }
+        switch freshness {
+        case .updated: return PortfolixTheme.secondary
+        case .stale: return PortfolixTheme.warnText
+        case .manual: return PortfolixTheme.secondary
+        }
+    }
+
+    private var badgeBackground: Color {
+        if isSelected { return PortfolixTheme.brandWash }
+        switch freshness {
+        case .stale: return PortfolixTheme.warnWash1
+        default: return PortfolixTheme.neutralWash
+        }
+    }
+
     var body: some View {
         Label(freshness.rawValue, systemImage: freshness.symbol)
             .font(PortfolixTypography.captionEmphasis)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(isSelected ? Color.white : freshness.color)
+            .foregroundStyle(badgeForeground)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(isSelected ? Color.white.opacity(0.16) : freshness.color.opacity(0.11), in: Capsule())
+            .background(badgeBackground, in: Capsule())
     }
 }
 
@@ -693,6 +889,7 @@ struct CapsuleLabel: View {
     let title: String
     let color: Color
     var symbol: String? = nil
+    var background: Color = PortfolixTheme.neutralWash
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.xs) {
@@ -707,7 +904,7 @@ struct CapsuleLabel: View {
         .foregroundStyle(color)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(color.opacity(0.11), in: Capsule())
+        .background(background, in: Capsule())
     }
 }
 
@@ -805,9 +1002,9 @@ private struct InteractiveButtonLabel: View {
     }
 
     private var foregroundColor: Color {
-        if !isEnabled { return PortfolixTheme.disabledText }
-        if configuration.role == .destructive { return PortfolixTheme.danger }
-        return isPrimary ? PortfolixTheme.primaryButtonText : PortfolixTheme.glassControlText
+        if !isEnabled { return PortfolixTheme.disabled }
+        if configuration.role == .destructive { return PortfolixTheme.lossFill }
+        return isPrimary ? PortfolixTheme.primaryButtonText : PortfolixTheme.text
     }
 }
 

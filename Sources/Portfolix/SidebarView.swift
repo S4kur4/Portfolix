@@ -30,7 +30,7 @@ enum SidebarIconLayout {
     static let navigationIconSize: CGFloat = 16
     static let navigationTextSize: CGFloat = 15
     static let navigationRowHeight: CGFloat = 40
-    static let expandedNavigationRowHeight: CGFloat = 48
+    static let expandedNavigationRowHeight: CGFloat = 44
     static let selectionHeight: CGFloat = 40
     static let edgeInset = PortfolixSpacing.sm
     static let minimumExpandedWidth: CGFloat = 218
@@ -107,6 +107,7 @@ struct SidebarView: View {
                 }
                 .portfolixSelectionBackground(
                     selection: store.selection,
+                    fill: PortfolixTheme.brandWash,
                     height: SidebarIconLayout.selectionHeight,
                     animates: false
                 )
@@ -258,17 +259,17 @@ private struct SidebarVersion: View {
                         .padding(.vertical, 4)
                         .background(
                             Capsule()
-                                .fill(PortfolixTheme.violet.opacity(0.16))
+                                .fill(PortfolixTheme.brandWash)
                         )
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(PortfolixTheme.violet)
+                .foregroundStyle(PortfolixTheme.brandWashText)
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
             .font(PortfolixTypography.captionEmphasis.monospacedDigit())
             .monospacedDigit()
-            .foregroundStyle(PortfolixTheme.secondaryText)
+            .foregroundStyle(PortfolixTheme.secondary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
             .padding(.top, PortfolixSpacing.sm)
@@ -302,7 +303,7 @@ struct SidebarCollapsedVersionIndicator: View {
     static let controlSize = CGSize(width: 28, height: 24)
 
     var symbolName: String { availableUpdate == nil ? "info.circle" : "arrow.up.circle.fill" }
-    var symbolColor: Color { availableUpdate == nil ? PortfolixTheme.secondaryText : PortfolixTheme.violet }
+    var symbolColor: Color { availableUpdate == nil ? PortfolixTheme.secondary : PortfolixTheme.brandText }
 
     var helpText: String {
         guard let availableUpdate else { return versionLabel }
@@ -353,7 +354,7 @@ struct SidebarBrandMark: View {
         HStack(spacing: PortfolixSpacing.md) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(PortfolixTheme.purpleGradient)
+                    .fill(PortfolixTheme.brandLogoGradient)
                     .frame(width: SidebarIconLayout.brandSize, height: SidebarIconLayout.brandSize)
 
                 PortfolixBrandGlyph(size: 24)
@@ -362,7 +363,7 @@ struct SidebarBrandMark: View {
 
             Text("Portfolix")
                 .font(PortfolixTypography.sectionTitle)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .fixedSize()
                 .opacity(isCollapsed ? 0 : 1)
         }
@@ -379,6 +380,9 @@ struct SidebarItem: View {
     let iconCenterX: CGFloat
     let isCollapsed: Bool
     let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
 
     private var rowHeight: CGFloat {
         isCollapsed ? SidebarIconLayout.navigationRowHeight : SidebarIconLayout.expandedNavigationRowHeight
@@ -403,14 +407,28 @@ struct SidebarItem: View {
                     .fixedSize()
                     .padding(.leading, SidebarIconLayout.navigationIconLeading(centerX: iconCenterX))
                 }
-            .foregroundStyle(isSelected ? PortfolixTheme.glassControlText : PortfolixTheme.primaryText)
+            .foregroundStyle(navigationForegroundStyle)
+            .background {
+                if isHovered && !isSelected && !isCollapsed {
+                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                        .fill(PortfolixTheme.soft)
+                        .frame(height: SidebarIconLayout.selectionHeight)
+                }
+            }
             .clipped()
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarNavigationButtonStyle())
+        .onHover { isHovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
         .portfolixHelp(title, placement: .trailing, isEnabled: isCollapsed)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var navigationForegroundStyle: Color {
+        if isSelected { return PortfolixTheme.brandWashText }
+        return isHovered ? PortfolixTheme.text : PortfolixTheme.secondary
     }
 }
 

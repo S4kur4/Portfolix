@@ -80,7 +80,7 @@ struct LLMConfigurationSheet: View {
                     ProviderFormRow(label: text("供应商", "Provider")) {
                         Text("DeepSeek")
                             .font(PortfolixTypography.body)
-                            .foregroundStyle(PortfolixTheme.primaryText)
+                            .foregroundStyle(PortfolixTheme.text)
                         .frame(width: valueFieldWidth, alignment: .trailing)
                     }
 
@@ -910,9 +910,9 @@ enum ProviderConnectionStatus: Equatable {
 
     var color: Color {
         switch self {
-        case .success: PortfolixTheme.mint
-        case .failure: PortfolixTheme.danger
-        case .validating: PortfolixTheme.lilac
+        case .success: PortfolixTheme.gainText
+        case .failure: PortfolixTheme.lossText
+        case .validating: PortfolixTheme.brandText
         }
     }
 
@@ -1027,7 +1027,7 @@ private struct ProviderFormRow<Value: View>: View {
     var body: some View {
         LabeledContent {
             value
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
         } label: {
             AssetEntryFieldLabel(title: label, isInvalid: isInvalid, showsRequiredIndicator: isRequired)
         }
@@ -1069,11 +1069,11 @@ private struct ProviderInputField: View {
     }
 
     private var placeholderColor: Color {
-        isInvalid ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
+        isInvalid ? PortfolixTheme.lossText : PortfolixTheme.tertiary
     }
 
     private var inputColor: Color {
-        isInvalid ? PortfolixTheme.danger : PortfolixTheme.primaryText
+        isInvalid ? PortfolixTheme.lossText : PortfolixTheme.text
     }
 }
 
@@ -1120,7 +1120,7 @@ private struct ProviderAPIKeyInputField: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .accessibilityLabel(isVisible ? visibleHelp : hiddenHelp)
         }
         .frame(width: ProviderConfigurationLayout.valueFieldWidth, alignment: .trailing)
@@ -1168,11 +1168,11 @@ private struct ProviderAPIKeyInputField: View {
     }
 
     private var placeholderColor: Color {
-        isInvalid ? PortfolixTheme.danger : PortfolixTheme.tertiaryText
+        isInvalid ? PortfolixTheme.lossText : PortfolixTheme.tertiary
     }
 
     private var inputColor: Color {
-        isInvalid ? PortfolixTheme.danger : PortfolixTheme.primaryText
+        isInvalid ? PortfolixTheme.lossText : PortfolixTheme.text
     }
 }
 
@@ -1341,10 +1341,7 @@ final class ProviderAPIKeyTextInputView: NSView {
 }
 
 private extension NSColor {
-    static let portfolixDanger = NSColor(name: nil) { appearance in
-        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
-        return NSColor(hex: match == .darkAqua ? 0xDD7D88 : 0xB44755)
-    }
+    static let portfolixDanger = NSColor(PortfolixTheme.lossText)
 }
 
 struct SheetHeader: View {
@@ -1355,12 +1352,12 @@ struct SheetHeader: View {
         HStack {
             Text(title)
                 .font(PortfolixTypography.sheetTitle)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .lineLimit(1)
             Spacer()
             Image(systemName: symbol)
                 .font(.system(size: 20))
-                .foregroundStyle(PortfolixTheme.lilac)
+                .foregroundStyle(PortfolixTheme.brandText)
         }
         .padding(PortfolixSpacing.xl)
     }
@@ -1405,7 +1402,7 @@ private struct ProviderNoticeSection: View {
                 titleColor: titleColor
             )
         }
-        .listRowBackground(PortfolixTheme.panel)
+        .listRowBackground(PortfolixTheme.surface)
         .listRowSeparator(.hidden)
     }
 }
@@ -1444,7 +1441,7 @@ struct ProviderNoticeRow: View {
                 if let message, !message.isEmpty {
                     Text(message)
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(2)
                 }
             }

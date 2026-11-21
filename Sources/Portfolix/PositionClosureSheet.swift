@@ -36,9 +36,9 @@ struct PositionClosureSheet: View {
                 Section {
                     LabeledContent(text("资产", "Asset")) {
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text(position.name).foregroundStyle(PortfolixTheme.primaryText)
+                            Text(position.name).foregroundStyle(PortfolixTheme.text)
                             Text("\(position.symbol) · \(position.quoteCurrency.rawValue)")
-                                .font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondaryText)
+                                .font(PortfolixTypography.caption).foregroundStyle(PortfolixTheme.secondary)
                         }
                     }
                     LabeledContent(text("清仓数量", "Quantity"), value: PositionClosureMath.string(position.quantity))
@@ -59,7 +59,7 @@ struct PositionClosureSheet: View {
                             Text(formatMoney(position.latestPrice, currency: position.quoteCurrency))
                             Text(position.quoteTime).font(PortfolixTypography.caption)
                         }
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                     }
                 }
                 Section {
@@ -83,7 +83,7 @@ struct PositionClosureSheet: View {
                 }
             }
             .portfolixSheetForm()
-            .foregroundStyle(PortfolixTheme.primaryText)
+            .foregroundStyle(PortfolixTheme.text)
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }
@@ -107,7 +107,7 @@ struct PositionClosureSheet: View {
                     .focused($focusedField, equals: field)
                     .holdingVoiceInput(text: binding, isFocused: focusedField == field, numeric: true,
                         language: language, appearance: .waveformOnly)
-                Text(position.quoteCurrency.rawValue).foregroundStyle(PortfolixTheme.secondaryText)
+                Text(position.quoteCurrency.rawValue).foregroundStyle(PortfolixTheme.secondary)
             }
             .frame(width: 280, height: 28)
         }

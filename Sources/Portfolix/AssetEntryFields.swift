@@ -67,7 +67,7 @@ struct AssetEntryTextField<Field: Hashable>: View {
             if focus.wrappedValue != field, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(placeholder)
                     .font(PortfolixTypography.body)
-                    .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.tertiaryText)
+                    .foregroundStyle(isInvalid ? PortfolixTheme.lossText : PortfolixTheme.tertiary)
                     .lineLimit(1)
                     .allowsHitTesting(false)
             }
@@ -77,7 +77,7 @@ struct AssetEntryTextField<Field: Hashable>: View {
                 .font(PortfolixTypography.body)
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
-                .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.primaryText)
+                .foregroundStyle(isInvalid ? PortfolixTheme.lossText : PortfolixTheme.text)
                 .focused(focus, equals: field)
                 .frame(height: AssetEntryLayout.valueFieldHeight, alignment: .center)
                 .holdingVoiceInput(text: $text, isFocused: focus.wrappedValue == field,
@@ -97,7 +97,7 @@ struct AssetEntryFieldLabel: View {
             Text(title)
             if showsRequiredIndicator {
                 Circle()
-                    .foregroundStyle(isInvalid ? PortfolixTheme.danger : PortfolixTheme.lilac)
+                    .foregroundStyle(isInvalid ? PortfolixTheme.lossText : PortfolixTheme.brandText)
                     .frame(width: 4, height: 4)
                     .accessibilityHidden(true)
             }

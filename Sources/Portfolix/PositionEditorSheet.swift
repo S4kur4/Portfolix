@@ -121,7 +121,7 @@ struct PositionEditorSheet: View {
                     Text(text.wrappedValue)
                         .font(PortfolixTypography.body)
                         .monospacedDigit()
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(1)
                         .frame(
                             maxWidth: .infinity,
@@ -205,7 +205,7 @@ struct PositionEditorSheet: View {
                         HStack(spacing: PortfolixSpacing.sm) {
                             Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
                                 .font(PortfolixTypography.caption)
-                                .foregroundStyle(PortfolixTheme.secondaryText)
+                                .foregroundStyle(PortfolixTheme.secondary)
 
                             Spacer()
 
@@ -246,7 +246,7 @@ struct PositionEditorSheet: View {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                             Text(sheetText("数据候选", "Data Candidates"))
                                 .font(PortfolixTypography.labelEmphasis)
-                                .foregroundStyle(PortfolixTheme.tertiaryText)
+                                .foregroundStyle(PortfolixTheme.tertiary)
 
                             ForEach(assetCandidates) { candidate in
                                 AssetCandidateButton(candidate: candidate, language: language) {
@@ -1011,11 +1011,11 @@ private struct AssetCandidateButton: View {
             HStack(spacing: PortfolixSpacing.sm) {
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                     Text(candidate.name)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
                     Text(candidate.symbol)
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiaryText)
+                        .foregroundStyle(PortfolixTheme.tertiary)
                         .lineLimit(1)
                 }
 
@@ -1023,12 +1023,12 @@ private struct AssetCandidateButton: View {
 
                 Text(candidate.category.title(language: language))
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(candidate.category.color)
+                    .foregroundStyle(candidate.category.assetClass.area)
                     .lineLimit(1)
 
                 Text(sourceLabel)
                     .font(PortfolixTypography.chartAxis)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
             }
             .padding(.horizontal, PortfolixSpacing.sm)

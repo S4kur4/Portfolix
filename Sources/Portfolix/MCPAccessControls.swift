@@ -64,7 +64,7 @@ struct MCPConnectionSheet: View {
                 HStack(spacing: PortfolixSpacing.md) {
                     Text(text("Agent 客户端", "Agent client"))
                         .font(PortfolixTypography.body.weight(.medium))
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                     Spacer(minLength: 0)
                     clientMenu
                 }
@@ -72,10 +72,10 @@ struct MCPConnectionSheet: View {
                 VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
                     Text(text("配置位置", "Configuration location"))
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                     Text(configurationTitle)
                         .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -88,7 +88,7 @@ struct MCPConnectionSheet: View {
                     )
                 )
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             }
@@ -152,12 +152,12 @@ struct MCPConnectionSheet: View {
                 } else {
                     Text(text("配置内容", "Configuration"))
                         .font(PortfolixTypography.captionEmphasis)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                 }
                 Spacer()
                 Text(referenceKind == .command ? "Shell" : client.configurationFormat)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
+                    .foregroundStyle(PortfolixTheme.secondary)
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(displayedCode, forType: .string)
@@ -173,7 +173,7 @@ struct MCPConnectionSheet: View {
             MCPReferenceCodeView(text: displayedCode)
                 .id(client)
                 .frame(width: codeWidth, height: MCPReferenceCodeLayout.viewportHeight(for: displayedCode, width: codeWidth))
-                .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
+                .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
                 .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact))
         }
     }

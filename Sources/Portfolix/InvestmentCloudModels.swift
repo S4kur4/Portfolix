@@ -29,6 +29,8 @@ struct InvestmentCloudItem: Identifiable {
     let mode: InvestmentCloudMode
     let isAggregated: Bool
     let aggregatedCount: Int
+    /// 资产大类（投资分布按域归类；每日盈亏按持仓类别）。
+    let assetClass: AssetClass
 
     init(distribution: InvestmentDistributionItem) {
         id = distribution.id
@@ -42,6 +44,7 @@ struct InvestmentCloudItem: Identifiable {
         mode = .distribution
         isAggregated = false
         aggregatedCount = 0
+        assetClass = Self.resolvedAssetClass(forDomainID: distribution.domain.id)
     }
 
     init(position: Position, dailyProfitCNY: Decimal) {
@@ -57,6 +60,7 @@ struct InvestmentCloudItem: Identifiable {
         mode = .dailyProfit
         isAggregated = false
         aggregatedCount = 0
+        assetClass = position.category.assetClass
     }
 
     init(aggregating items: [InvestmentCloudItem]) {
@@ -74,6 +78,24 @@ struct InvestmentCloudItem: Identifiable {
         mode = items.first?.mode ?? .dailyProfit
         isAggregated = true
         aggregatedCount = count
+        assetClass = .other
+    }
+
+    /// 将投资分布域映射到 5 个资产大类（规范 v1.2）。
+    static func resolvedAssetClass(forDomainID id: String) -> AssetClass {
+        let lowered = id.lowercased()
+        if lowered.contains("cash") { return .cash }
+        if lowered.contains("crypto") || lowered.contains("bitcoin") || lowered.contains("ethereum") {
+            return .crypto
+        }
+        if lowered.contains("bond") || lowered.contains("gold") || lowered.contains("fund") {
+            return .fund
+        }
+        if lowered.contains("equity") || lowered.contains("semiconductor")
+            || lowered.contains("optical") || lowered.contains("stock") {
+            return .stock
+        }
+        return .other
     }
 
     func title(language: AppLanguage) -> String {

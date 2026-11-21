@@ -595,13 +595,13 @@ struct InvestmentDistributionTests {
     func cloudAndCalendarUseTheSameProfitTileColors(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         appearance.performAsCurrentDrawingAppearance {
-            for (amount, expected): (Decimal, Color) in [(1, PortfolixTheme.mint), (-1, PortfolixTheme.danger)] {
+            for amount: Decimal in [1, -1] {
                 let actual = NSColor(PortfolixTheme.dailyProfitTileFill(for: amount)).usingColorSpace(.sRGB)!
-                let expected = NSColor(expected).usingColorSpace(.sRGB)!
+                let expected = NSColor(PortfolixTheme.performanceWash(for: amount)).usingColorSpace(.sRGB)!
                 #expect(abs(actual.redComponent - expected.redComponent) < 0.00001)
                 #expect(abs(actual.greenComponent - expected.greenComponent) < 0.00001)
                 #expect(abs(actual.blueComponent - expected.blueComponent) < 0.00001)
-                #expect(abs(actual.alphaComponent - 0.13) < 0.00001)
+                #expect(abs(actual.alphaComponent - 1) < 0.00001)
             }
         }
     }

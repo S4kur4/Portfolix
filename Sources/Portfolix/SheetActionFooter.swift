@@ -21,11 +21,11 @@ struct SheetNotice: Equatable {
 
     var color: Color {
         switch kind {
-        case .error: PortfolixTheme.danger
-        case .warning: PortfolixTheme.amber
-        case .information: PortfolixTheme.secondaryText
-        case .progress: PortfolixTheme.lilac
-        case .success: PortfolixTheme.mint
+        case .error: PortfolixTheme.lossText
+        case .warning: PortfolixTheme.warnText
+        case .information: PortfolixTheme.secondary
+        case .progress: PortfolixTheme.brandText
+        case .success: PortfolixTheme.gainText
         }
     }
 }

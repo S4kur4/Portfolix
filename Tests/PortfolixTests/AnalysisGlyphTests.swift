@@ -22,13 +22,30 @@ struct AnalysisGlyphTests {
 
     private func inkMetrics(_ image: CGImage, scale: CGFloat) throws -> (bounds: CGRect, center: CGPoint) {
         let bitmap = NSBitmapImageRep(cgImage: image)
+        var samples: [NSColor] = []
+        let center = 20 * scale
+        for angle in stride(from: 0.0, to: Double.pi * 2, by: Double.pi / 8) {
+            let radius = 12 * scale
+            let x = Int((center + CGFloat(cos(angle)) * radius).rounded())
+            let y = Int((center + CGFloat(sin(angle)) * radius).rounded())
+            if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) { samples.append(color) }
+        }
+        guard !samples.isEmpty else { return (.zero, .zero) }
+        let background = NSColor(
+            srgbRed: samples.map(\.redComponent).reduce(0, +) / CGFloat(samples.count),
+            green: samples.map(\.greenComponent).reduce(0, +) / CGFloat(samples.count),
+            blue: samples.map(\.blueComponent).reduce(0, +) / CGFloat(samples.count),
+            alpha: 1
+        )
         var weight = 0.0, sumX = 0.0, sumY = 0.0
         var minX = image.width, minY = image.height, maxX = -1, maxY = -1
         for y in 0..<image.height {
             for x in 0..<image.width {
                 guard hypot(CGFloat(x) + 0.5 - 20 * scale, CGFloat(y) + 0.5 - 20 * scale) < 14 * scale,
                       let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                let amount = max(0, 1 - color.blueComponent)
+                let amount = (abs(color.redComponent - background.redComponent)
+                    + abs(color.greenComponent - background.greenComponent)
+                    + abs(color.blueComponent - background.blueComponent)) / 3
                 weight += amount
                 sumX += (Double(x) + 0.5) * amount
                 sumY += (Double(y) + 0.5) * amount

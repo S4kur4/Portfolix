@@ -145,7 +145,7 @@ private struct PortfolioHeroCard: View {
                         if store.isRefreshing {
                             Text(localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage))
                                 .font(PortfolixTypography.caption)
-                                .foregroundStyle(PortfolixTheme.lilac)
+                                .foregroundStyle(PortfolixTheme.secondary)
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                         } else {
@@ -153,7 +153,7 @@ private struct PortfolioHeroCard: View {
                                 updateSummary(now: now)
                             }
                             .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         }
@@ -174,7 +174,7 @@ private struct PortfolioHeroCard: View {
                     .font(PortfolixTypography.portfolioHeroValue)
                     .monospacedDigit()
                     .portfolixNumericTransition(heroValueText)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     .padding(.top, PortfolixSpacing.lg)
@@ -185,7 +185,7 @@ private struct PortfolioHeroCard: View {
                 HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.xs) {
                     Text(localizedText("今日收益", "Today Return", language: store.appLanguage))
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(1)
 
                     Text(todayProfitText)
@@ -296,14 +296,14 @@ private struct HeroMetricsGrid: View {
                     label: localizedText("持仓成本", "Cost Basis", language: store.appLanguage),
                     value: costBasisText,
                     rate: nil,
-                    valueColor: PortfolixTheme.primaryText,
+                    valueColor: PortfolixTheme.text,
                     rateColor: nil
                 )
                 HeroMetricCell(
                     label: localizedText("现金", "Cash", language: store.appLanguage),
                     value: cashAmountText,
                     rate: nil,
-                    valueColor: PortfolixTheme.primaryText,
+                    valueColor: PortfolixTheme.text,
                     rateColor: nil
                 )
             }
@@ -388,7 +388,7 @@ private struct HeroMetricCell: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(label)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .lineLimit(1)
 
             HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.xs) {
@@ -432,7 +432,7 @@ private struct HeroValueTrendChart: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(localizedText("近 30 天走势", "30-day trend", language: store.appLanguage))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
                 .lineLimit(1)
 
             if points.count >= 2 {
@@ -456,13 +456,13 @@ private struct HeroValueTrendChart: View {
                     yEnd: .value("Value", point.value)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(PortfolixTheme.lilac)
+                .foregroundStyle(PortfolixTheme.brandWash)
             }
 
             if let highlightedSnapshotID,
                let point = points.first(where: { $0.snapshot.id == highlightedSnapshotID }) {
                 RuleMark(x: .value("Date", point.snapshot.date))
-                    .foregroundStyle(PortfolixTheme.lilac.opacity(0.45))
+                    .foregroundStyle(PortfolixTheme.brandFocus)
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
                 PointMark(
@@ -470,16 +470,16 @@ private struct HeroValueTrendChart: View {
                     y: .value("Value", point.value)
                 )
                 .symbolSize(30)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .annotation(
                     position: shouldPlaceAnnotationLeading(for: point) ? .topLeading : .topTrailing,
                     spacing: PortfolixSpacing.xs
                 ) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(point.snapshot.date.formatted(.dateTime.month().day()))
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                         Text(formatMoney(Decimal(point.value), currency: store.displayCurrency))
-                            .foregroundStyle(PortfolixTheme.primaryText)
+                            .foregroundStyle(PortfolixTheme.text)
                     }
                     .portfolixChartTooltip()
                 }
@@ -489,7 +489,7 @@ private struct HeroValueTrendChart: View {
                     y: .value("Value", last.value)
                 )
                 .symbolSize(22)
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
             }
         }
         .chartOverlay { proxy in
@@ -513,7 +513,7 @@ private struct HeroValueTrendChart: View {
                         Text(dayLabel(date))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -529,7 +529,7 @@ private struct HeroValueTrendChart: View {
                         Text(axisValueLabel(numeric))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -542,10 +542,10 @@ private struct HeroValueTrendChart: View {
         VStack(spacing: PortfolixSpacing.xs) {
             Image(systemName: "chart.line.uptrend.xyaxis")
                 .font(.system(size: 13))
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
             Text(localizedText("暂无走势数据", "No trend data yet", language: store.appLanguage))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -692,7 +692,7 @@ private struct PriceRefreshButton: View {
         .foregroundStyle(foregroundStyle)
         .portfolixGlass(
             in: Circle(),
-            fallbackTint: PortfolixTheme.panelSoft,
+            fallbackTint: PortfolixTheme.soft,
             fallbackOpacity: isHovering && !store.isRefreshing ? 0.64 : 0.42,
             interactive: true
         )
@@ -703,11 +703,11 @@ private struct PriceRefreshButton: View {
     }
 
     private var foregroundStyle: AnyShapeStyle {
-        AnyShapeStyle(PortfolixTheme.glassControlText)
+        AnyShapeStyle(PortfolixTheme.text)
     }
 }
 
-private enum PerformanceRiskRange: String, CaseIterable, Identifiable {
+enum PerformanceRiskRange: String, CaseIterable, Identifiable {
     case month
     case quarter
     case year
@@ -751,6 +751,19 @@ private struct PerformanceRiskPoint: Identifiable {
     let peakProfitRate: Double
 
     var id: Date { date }
+}
+
+private struct ProfitAreaPoint: Identifiable {
+    let date: Date
+    let value: Double
+
+    var id: Date { date }
+}
+
+private struct ProfitAreaSeries: Identifiable {
+    let id: String
+    let isPositive: Bool
+    let points: [ProfitAreaPoint]
 }
 
 private struct PerformanceRiskSummary {
@@ -839,7 +852,7 @@ private struct RiskChartHoverLayer: View {
 
                 if let yOffset = proxy.position(forY: value(point)) {
                     Circle()
-                        .fill(PortfolixTheme.primaryText)
+                        .fill(PortfolixTheme.text)
                         .frame(width: 7, height: 7)
                         .position(x: xPosition, y: plotFrame.minY + yOffset)
                         .allowsHitTesting(false)
@@ -895,10 +908,10 @@ private struct RiskChartHoverLayer: View {
     private func tooltip(for point: PerformanceRiskPoint) -> some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(Self.dateFormatter.string(from: point.date))
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
             HStack(spacing: PortfolixSpacing.xs) {
                 Text(localizedText("浮盈", "P&L", language: language))
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                 Text(moneyText(point.profitCNY))
                     .foregroundStyle(PortfolixTheme.performanceStatusText(
                         for: Decimal(point.profitCNY),
@@ -907,7 +920,7 @@ private struct RiskChartHoverLayer: View {
             }
             HStack(spacing: PortfolixSpacing.xs) {
                 Text(localizedText("回撤", "Drawdown", language: language))
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                 Text(moneyText(point.drawdownCNY))
                     .foregroundStyle(PortfolixTheme.performanceStatusText(
                         for: Decimal(point.drawdownCNY),
@@ -921,7 +934,6 @@ private struct RiskChartHoverLayer: View {
 
 private struct PerformanceRiskCard: View {
     @Environment(PortfolioStore.self) private var store
-    @State private var range: PerformanceRiskRange = .month
     @State private var hoverTracker = RiskChartHoverTracker()
 
     private var calendar: Calendar { .current }
@@ -948,7 +960,7 @@ private struct PerformanceRiskCard: View {
         }
         let sortedDays = snapshotByDay.keys.sorted()
         let start: Date
-        if let days = range.days {
+        if let days = store.performanceRiskRange.days {
             start = calendar.date(byAdding: .day, value: -days, to: today) ?? today
         } else {
             start = sortedDays.first ?? today
@@ -980,7 +992,7 @@ private struct PerformanceRiskCard: View {
 
     private var dailyProfitPoints: [DailyProfitPoint] {
         let today = calendar.startOfDay(for: .now)
-        let start = range.days
+        let start = store.performanceRiskRange.days
             .flatMap { calendar.date(byAdding: .day, value: -$0, to: today) }
             ?? Date.distantPast
         return store.dailyProfitHistory
@@ -1061,7 +1073,7 @@ private struct PerformanceRiskCard: View {
 
                     PortfolixGlassSegmentedPicker(
                         title: localizedText("时间范围", "Range", language: store.appLanguage),
-                        selection: $range,
+                        selection: $store.performanceRiskRange,
                         options: PerformanceRiskRange.allCases,
                         optionTitle: { $0.title(language: store.appLanguage) },
                         width: 208
@@ -1072,7 +1084,7 @@ private struct PerformanceRiskCard: View {
                 HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
                     Text(headlineTitle(summary))
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
 
                     Text(headlineValueText(summary))
                         .font(PortfolixTypography.secondaryValue)
@@ -1105,14 +1117,14 @@ private struct PerformanceRiskCard: View {
                         value: summary.maxDrawdownDate == nil ? "—" : moneyText(summary.maxDrawdownCNY),
                         detail: maxDrawdownDetail(summary),
                         color: summary.maxDrawdownDate == nil
-                            ? PortfolixTheme.tertiaryText
+                            ? PortfolixTheme.tertiary
                             : PortfolixTheme.performanceStatusText(for: Decimal(summary.maxDrawdownCNY), scheme: store.performanceColorScheme)
                     )
                     riskStatCell(
                         title: localizedText("年化波动率", "Annualized Volatility", language: store.appLanguage),
                         value: summary.annualizedVolatility.map { String(format: "%.1f%%", $0) } ?? "—",
                         detail: nil,
-                        color: PortfolixTheme.primaryText
+                        color: PortfolixTheme.text
                     )
                     riskStatCell(
                         title: localizedText("上涨日占比", "Up Days", language: store.appLanguage),
@@ -1120,14 +1132,14 @@ private struct PerformanceRiskCard: View {
                         detail: summary.trackedDayCount > 0
                             ? String(format: "%d/%d", summary.upDayCount, summary.trackedDayCount)
                             : nil,
-                        color: PortfolixTheme.primaryText
+                        color: PortfolixTheme.text
                     )
                     riskStatCell(
                         title: localizedText("最差单日", "Worst Day", language: store.appLanguage),
                         value: summary.worstDayCNY.map(moneyText) ?? "—",
                         detail: summary.worstDayDate.map(dateLabel),
                         color: summary.worstDayCNY == nil
-                            ? PortfolixTheme.tertiaryText
+                            ? PortfolixTheme.tertiary
                             : PortfolixTheme.performanceStatusText(for: Decimal(summary.worstDayCNY ?? 0), scheme: store.performanceColorScheme)
                     )
                 }
@@ -1147,9 +1159,11 @@ private struct PerformanceRiskCard: View {
                 profitChart
                     .frame(maxHeight: .infinity)
                     .layoutPriority(1)
+                    .zIndex(1)
 
                 drawdownChart
                     .frame(height: 46)
+                    .zIndex(0)
             }
         }
     }
@@ -1160,32 +1174,27 @@ private struct PerformanceRiskCard: View {
                 .foregroundStyle(PortfolixTheme.border)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
 
-            ForEach(profitAreaPoints) { point in
-                AreaMark(
-                    x: .value("日期", point.date),
-                    yStart: .value("基线", 0),
-                    yEnd: .value("浮盈", max(point.profitCNY * displayRate, 0))
-                )
-                .interpolationMethod(.monotone)
-                .foregroundStyle(by: .value("方向", "浮盈"))
-            }
-
-            ForEach(profitAreaPoints) { point in
-                AreaMark(
-                    x: .value("日期", point.date),
-                    yStart: .value("基线", 0),
-                    yEnd: .value("浮亏", min(point.profitCNY * displayRate, 0))
-                )
-                .interpolationMethod(.monotone)
-                .foregroundStyle(by: .value("方向", "浮亏"))
+            // 正负面积拆成互不重叠的连续段：每段只含同符号点，并在零交叉处
+            // 插入插值得到的 0 点。这样另一符号不会在 0 轴上留下零高度
+            // AreaMark 的抗锯齿边缘，交界处不会再出现红绿叠加。
+            ForEach(profitAreaSeries) { series in
+                ForEach(series.points) { point in
+                    AreaMark(
+                        x: .value("日期", point.date),
+                        yStart: .value("基线", 0),
+                        yEnd: .value("浮盈", point.value)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(by: .value("段", series.id))
+                }
             }
         }
-        .chartForegroundStyleScale([
-            "浮盈": profitPositiveColor,
-            "浮亏": profitNegativeColor,
-        ])
+        .chartForegroundStyleScale(
+            domain: profitAreaStyleDomain,
+            range: profitAreaStyleRange
+        )
         .chartLegend(.hidden)
-        .chartOverlay { proxy in
+                .chartOverlay { proxy in
             GeometryReader { geometry in
                 RiskChartHoverLayer(
                     tracker: hoverTracker,
@@ -1214,7 +1223,8 @@ private struct PerformanceRiskCard: View {
                         Text(axisMoneyLabel(numeric))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
+                            .frame(width: Self.chartYAxisLabelWidth, alignment: .trailing)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
@@ -1238,7 +1248,7 @@ private struct PerformanceRiskCard: View {
                     yEnd: .value("回撤", point.drawdownCNY * displayRate)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(drawdownColor)
+                .foregroundStyle(drawdownAreaColor)
             }
 
         }
@@ -1270,7 +1280,7 @@ private struct PerformanceRiskCard: View {
                         Text(axisDateLabel(date))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -1284,7 +1294,8 @@ private struct PerformanceRiskCard: View {
                         Text(axisMoneyLabel(numeric))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
+                            .frame(width: Self.chartYAxisLabelWidth, alignment: .trailing)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
@@ -1295,34 +1306,80 @@ private struct PerformanceRiskCard: View {
         .accessibilityValue(accessibilitySummary(summary))
     }
 
-    /// Profit samples for the area fills, with an interpolated zero point inserted at each
-    /// sign change. Inserting the crossing keeps the positive and negative fills meeting exactly
-    /// on the zero line, so no stroke overlay is needed (strokes drew a line along the fill edge
-    /// and protruded past the first/last data point).
-    private var profitAreaPoints: [PerformanceRiskPoint] {
-        guard points.count > 1 else { return points }
-        let sampled = chartPoints
-        guard sampled.count > 1 else { return sampled }
-        var result: [PerformanceRiskPoint] = [sampled[0]]
-        result.reserveCapacity(sampled.count + 4)
-        for index in 1..<sampled.count {
-            let previous = sampled[index - 1]
-            let current = sampled[index]
-            if previous.profitCNY * current.profitCNY < 0 {
-                let ratio = previous.profitCNY / (previous.profitCNY - current.profitCNY)
-                let interval = current.date.timeIntervalSince(previous.date)
-                let crossingDate = previous.date.addingTimeInterval(interval * ratio)
-                result.append(PerformanceRiskPoint(
-                    date: crossingDate,
-                    drawdownCNY: 0,
-                    profitCNY: 0,
-                    profitRate: 0,
-                    peakProfitRate: 0
-                ))
-            }
-            result.append(current)
+    static let chartYAxisLabelWidth: CGFloat = 52
+
+    /// 浮盈面积分段：连续同符号点组成一段，两端补零交叉插值点，
+    /// 保证任意时刻只有一段面积覆盖 0 轴某一侧，交界处不出现颜色叠加。
+    private var profitAreaSeries: [ProfitAreaSeries] {
+        let samples: [(date: Date, value: Double)] = chartPoints.map {
+            ($0.date, $0.profitCNY * displayRate)
         }
-        return result
+        guard !samples.isEmpty else { return [] }
+
+        var series: [ProfitAreaSeries] = []
+        var index = 0
+        while index < samples.count {
+            let isPositive = samples[index].value >= 0
+            var runEnd = index
+            while runEnd + 1 < samples.count,
+                  (samples[runEnd + 1].value >= 0) == isPositive {
+                runEnd += 1
+            }
+
+            var points: [ProfitAreaPoint] = []
+            if index > 0 {
+                points.append(
+                    ProfitAreaPoint(
+                        date: zeroCrossingDate(samples[index - 1], samples[index]),
+                        value: 0
+                    )
+                )
+            }
+            for sampleIndex in index...runEnd {
+                points.append(
+                    ProfitAreaPoint(
+                        date: samples[sampleIndex].date,
+                        value: samples[sampleIndex].value
+                    )
+                )
+            }
+            if runEnd < samples.count - 1 {
+                points.append(
+                    ProfitAreaPoint(
+                        date: zeroCrossingDate(samples[runEnd], samples[runEnd + 1]),
+                        value: 0
+                    )
+                )
+            }
+
+            series.append(
+                ProfitAreaSeries(
+                    id: "\(isPositive ? "positive" : "negative")-\(series.count)",
+                    isPositive: isPositive,
+                    points: points
+                )
+            )
+            index = runEnd + 1
+        }
+        return series
+    }
+
+    private var profitAreaStyleDomain: [String] {
+        profitAreaSeries.map(\.id)
+    }
+
+    private var profitAreaStyleRange: [Color] {
+        profitAreaSeries.map { $0.isPositive ? profitPositiveAreaColor : profitNegativeAreaColor }
+    }
+
+    private func zeroCrossingDate(
+        _ start: (date: Date, value: Double),
+        _ end: (date: Date, value: Double)
+    ) -> Date {
+        let span = start.value - end.value
+        guard abs(span) > Double.ulpOfOne else { return end.date }
+        let fraction = min(max(start.value / span, 0), 1)
+        return start.date.addingTimeInterval(end.date.timeIntervalSince(start.date) * fraction)
     }
 
     private var chartPoints: [PerformanceRiskPoint] {
@@ -1348,6 +1405,30 @@ private struct PerformanceRiskCard: View {
 
     private func profitColor(for valueCNY: Double) -> Color {
         valueCNY >= 0 ? profitPositiveColor : profitNegativeColor
+    }
+
+    /// 面积按 0 轴正负分段：红涨绿跌下 0 轴以上红/粉、以下绿；
+    /// 绿涨红跌时反向。零交叉处插入 0 点，两块面积自然相接；
+    /// 上下图都使用 W4（比 W3 更清晰的淡彩，不改变面积风格）。
+    private var profitPositiveAreaColor: Color {
+        switch store.performanceColorScheme {
+        case .redUpGreenDown: return PortfolixTheme.lossAreaWash
+        case .greenUpRedDown: return PortfolixTheme.gainAreaWash
+        }
+    }
+
+    private var profitNegativeAreaColor: Color {
+        switch store.performanceColorScheme {
+        case .redUpGreenDown: return PortfolixTheme.gainAreaWash
+        case .greenUpRedDown: return PortfolixTheme.lossAreaWash
+        }
+    }
+
+    private var drawdownAreaColor: Color {
+        switch store.performanceColorScheme {
+        case .redUpGreenDown: return PortfolixTheme.gainAreaWash
+        case .greenUpRedDown: return PortfolixTheme.lossAreaWash
+        }
     }
 
     private var profitYDomain: ClosedRange<Double> {
@@ -1380,10 +1461,10 @@ private struct PerformanceRiskCard: View {
         let domain = xDomain
         let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
         let count: Int
-        if range == .all {
+        if store.performanceRiskRange == .all {
             count = span > 240 * 86_400 ? 6 : 4
         } else {
-            count = range == .year ? 5 : 4
+            count = store.performanceRiskRange == .year ? 5 : 4
         }
         var dates: [Date] = []
         for index in 0..<count {
@@ -1466,9 +1547,9 @@ private struct PerformanceRiskCard: View {
 
     private func axisDateLabel(_ date: Date) -> String {
         let usesMonthLabels: Bool
-        if range == .year {
+        if store.performanceRiskRange == .year {
             usesMonthLabels = true
-        } else if range == .all {
+        } else if store.performanceRiskRange == .all {
             usesMonthLabels = xDomain.upperBound.timeIntervalSince(xDomain.lowerBound) > 200 * 86_400
         } else {
             usesMonthLabels = false
@@ -1511,7 +1592,7 @@ private struct PerformanceRiskCard: View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
             Text(title)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .lineLimit(1)
 
             Text(value)
@@ -1525,7 +1606,7 @@ private struct PerformanceRiskCard: View {
             if let detail {
                 Text(detail)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
                     .monospacedDigit()
             }
@@ -1579,7 +1660,7 @@ private struct AssetMixBarCard: View {
                         .font(.system(size: 13, weight: .medium))
                         .monospacedDigit()
                         .portfolixNumericTransition(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
                 }
                 .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
@@ -1615,6 +1696,8 @@ private struct AssetMixSegmentBar: View {
     let items: [PositionShareItem]
     @Binding var highlightedItemID: PositionShareItem.ID?
 
+    /// P1-A：条带使用淡彩资产大类色（classArea），与云图的大色块同色阶；
+    /// 段间保留 2pt 间隙，图例沿用同一淡彩，避免“色块抢眼、图例另有一套色”。
     var body: some View {
         GeometryReader { proxy in
             let rectangles = PortfolioChartLayout.barSegments(weights: items.map(\.value), size: proxy.size)
@@ -1622,10 +1705,10 @@ private struct AssetMixSegmentBar: View {
             ZStack(alignment: .leading) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     if index < rectangles.count {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(item.color.gradient)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(item.color)
                             .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.32)
-                            .frame(width: rectangles[index].width, height: rectangles[index].height)
+                            .frame(width: max(rectangles[index].width - 2, 0.5), height: rectangles[index].height)
                             .offset(x: rectangles[index].minX)
                     }
                 }
@@ -1663,11 +1746,11 @@ private struct AssetMixLegendItem: View {
                 .fill(item.color)
                 .frame(width: 8, height: 8)
             Text(item.name)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Text(String(format: "%.1f%%", item.value))
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(PortfolixTheme.text)
                 .monospacedDigit()
                 .portfolixNumericTransition(item.value)
                 .lineLimit(1)
@@ -1917,7 +2000,7 @@ private struct DashboardGlassCapsuleLabel: View {
         }
         .font(PortfolixTypography.captionEmphasis)
         .lineLimit(1)
-        .foregroundStyle(PortfolixTheme.glassControlText)
+        .foregroundStyle(PortfolixTheme.text)
         .padding(.horizontal, PortfolixSpacing.sm)
         .portfolixGlassControl()
     }
@@ -1986,10 +2069,10 @@ private struct PositionHeaderRow: View {
             .frame(minWidth: PrimaryPositionColumnWidths.todayColumnWidth, maxWidth: .infinity, alignment: .trailing)
         }
         .font(PortfolixTypography.captionEmphasis)
-        .foregroundStyle(PortfolixTheme.tertiaryText)
+        .foregroundStyle(PortfolixTheme.tertiary)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(PortfolixTheme.panelElevated, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
+        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
     }
 }
 
@@ -2018,7 +2101,7 @@ private struct SortablePositionHeader: View {
                     .font(.system(size: 8, weight: .bold))
                     .opacity(isSelected ? 1 : 0)
             }
-            .foregroundStyle(isSelected ? PortfolixTheme.lilac : PortfolixTheme.tertiaryText)
+            .foregroundStyle(isSelected ? PortfolixTheme.brandText : PortfolixTheme.secondary)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2047,18 +2130,18 @@ private struct CompactPositionRow: View {
         HStack(spacing: PrimaryPositionColumnWidths.columnSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(position.category.color.opacity(0.18))
+                    .fill(position.category.assetClass.area)
                     .frame(width: 28, height: 28)
                     .overlay {
                         Text(String(position.name.prefix(1)))
                             .font(PortfolixTypography.captionEmphasis)
-                            .foregroundStyle(position.category.color)
+                            .foregroundStyle(PortfolixTheme.classOnArea)
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(position.name)
                         .font(PortfolixTypography.bodyEmphasis)
-                        .foregroundStyle(PortfolixTheme.primaryText)
+                        .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
                     HStack(spacing: PortfolixSpacing.xs) {
                         Text(position.symbol)
@@ -2066,7 +2149,7 @@ private struct CompactPositionRow: View {
                         Text(position.category.title(language: store.appLanguage))
                     }
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
                 }
             }
@@ -2078,13 +2161,13 @@ private struct CompactPositionRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(marketValueText)
                     .font(PortfolixTypography.label)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .monospacedDigit()
                     .portfolixNumericTransition(store.converted(position.marketValueCNY))
                     .lineLimit(1)
                 Text(weightText)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .monospacedDigit()
                     .lineLimit(1)
             }
@@ -2111,7 +2194,7 @@ private struct CompactPositionRow: View {
         .frame(minHeight: PrimaryPositionColumnWidths.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? PortfolixTheme.primaryText.opacity(0.055) : PortfolixTheme.panelElevated.opacity(0.42))
+                .fill(isHovered ? PortfolixTheme.text.opacity(0.055) : PortfolixTheme.raised.opacity(0.42))
         )
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .onHover { hovering in
@@ -2187,6 +2270,20 @@ private struct PositionSparkline: View {
         PortfolixTheme.performanceColor(for: trendDelta, scheme: store.performanceColorScheme)
     }
 
+    /// 表格内的小面积图与卡片大图使用同一套“淡彩面积”语言；这里用 W4 保证 28pt
+    /// 高度下仍能看出形状，方向仍按红涨绿跌/绿涨红跌映射。
+    private var paleAreaColor: Color {
+        // 全平走势不表达涨跌方向，使用与投资云图「其他」一致的灰色
+        if trendDelta == 0 { return PortfolixTheme.neutralWash }
+        let isPositive = trendDelta >= 0
+        switch store.performanceColorScheme {
+        case .redUpGreenDown:
+            return isPositive ? PortfolixTheme.lossWash4 : PortfolixTheme.gainWash4
+        case .greenUpRedDown:
+            return isPositive ? PortfolixTheme.gainWash4 : PortfolixTheme.lossWash4
+        }
+    }
+
     private var trendDelta: Double {
         guard let first = values.first, let last = values.last else { return 0 }
         return last - first
@@ -2203,10 +2300,10 @@ private struct PositionSparkline: View {
             if points.count < 2 {
                 ZStack {
                     Capsule()
-                        .fill(PortfolixTheme.tertiaryText.opacity(0.22))
+                        .fill(PortfolixTheme.tertiary.opacity(0.22))
                         .frame(width: 36, height: 2)
                     Circle()
-                        .fill(PortfolixTheme.tertiaryText.opacity(0.72))
+                        .fill(PortfolixTheme.tertiary.opacity(0.72))
                         .frame(width: 5, height: 5)
                 }
                 .frame(maxWidth: .infinity, minHeight: 28)
@@ -2218,7 +2315,7 @@ private struct PositionSparkline: View {
                         yEnd: .value("价格", point.value)
                     )
                     .interpolationMethod(.catmullRom)
-                    .foregroundStyle(color)
+                    .foregroundStyle(paleAreaColor)
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
@@ -2247,18 +2344,23 @@ private struct PositionSparkline: View {
 
 extension PortfolioStore {
     fileprivate var positionShareItems: [PositionShareItem] {
-        let palette = [
-            PortfolixTheme.lilac, PortfolixTheme.mint, PortfolixTheme.rose,
-            PortfolixTheme.blue, PortfolixTheme.amber, PortfolixTheme.violet,
-        ]
-        return HoldingShareEngine.groups(positions: positions, language: appLanguage)
-            .enumerated().map { index, group in
-                PositionShareItem(
-                    id: group.id, name: group.name, amountCNY: group.amountCNY,
-                    value: group.percentage,
-                    color: group.id == "other_holdings" ? PortfolixTheme.tertiaryText : palette[index % palette.count]
-                )
+        let positionsByID = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0) })
+        return HoldingShareEngine.groups(positions: positions, language: appLanguage).map { group in
+            let color: Color
+            if group.id == "other_holdings" {
+                // 与投资云图聚合「其他」色块保持一致
+                color = PortfolixTheme.neutralWash
+            } else if let uuid = UUID(uuidString: group.id.replacingOccurrences(of: "holding_", with: "")),
+                      let position = positionsByID[uuid] {
+                color = PortfolixTheme.classPale(position.category.assetClass)
+            } else {
+                color = PortfolixTheme.classOtherPale
             }
+            return PositionShareItem(
+                id: group.id, name: group.name, amountCNY: group.amountCNY,
+                value: group.percentage, color: color
+            )
+        }
     }
 
 }
@@ -2391,12 +2493,12 @@ private struct DailyProfitCard: View {
             HStack(spacing: PortfolixSpacing.sm) {
                 Image(systemName: "calendar.badge.clock")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PortfolixTheme.lilac)
+                    .foregroundStyle(PortfolixTheme.secondary)
                     .frame(width: 16, height: PortfolixLayout.cardHeaderHeight)
 
                 Text(localizedText("盈亏日历", "P&L Calendar", language: store.appLanguage))
                     .font(PortfolixTypography.sectionTitle)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(height: PortfolixLayout.cardHeaderHeight)
@@ -2447,7 +2549,7 @@ private struct DailyProfitCard: View {
             } label: {
                 Text(monthTitle)
                     .font(PortfolixTypography.captionEmphasis)
-                    .foregroundStyle(PortfolixTheme.glassControlText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, PortfolixSpacing.xs)
@@ -2484,7 +2586,7 @@ private struct DailyProfitCard: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(enabled ? PortfolixTheme.glassControlText : PortfolixTheme.disabledText)
+        .foregroundStyle(enabled ? PortfolixTheme.text : PortfolixTheme.disabled)
         .disabled(!enabled)
         .accessibilityLabel(label)
     }
@@ -2493,13 +2595,13 @@ private struct DailyProfitCard: View {
         HStack(alignment: .lastTextBaseline, spacing: PortfolixSpacing.sm) {
             Text(monthSummaryTitle)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .lineLimit(1)
 
             Text(points.isEmpty ? "—" : moneyText(monthlyProfitCNY))
                 .font(PortfolixTypography.headlineValue)
                 .monospacedDigit()
-                .foregroundStyle(points.isEmpty ? PortfolixTheme.tertiaryText : profitColor(monthlyProfitCNY))
+                .foregroundStyle(points.isEmpty ? PortfolixTheme.tertiary : profitColor(monthlyProfitCNY))
                 .portfolixNumericTransition(points.isEmpty ? "—" : moneyText(monthlyProfitCNY))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -2521,7 +2623,7 @@ private struct DailyProfitCard: View {
         } else if !points.isEmpty {
             Text(countsText)
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .transition(.opacity)
@@ -2551,7 +2653,7 @@ private struct DailyProfitCard: View {
         HStack(spacing: PortfolixSpacing.xs) {
             Text(dayTitle(date))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
             if let point = pointsByDay[calendar.startOfDay(for: date)] {
                 Text(moneyText(point.amountCNY))
                     .font(PortfolixTypography.captionEmphasis)
@@ -2561,7 +2663,7 @@ private struct DailyProfitCard: View {
             } else {
                 Text(localizedText("无记录", "No record", language: store.appLanguage))
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
             }
         }
         .lineLimit(1)
@@ -2582,7 +2684,7 @@ private struct DailyProfitCard: View {
                         ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
                             Text(weekday)
                                 .font(PortfolixTypography.chartAxis)
-                                .foregroundStyle(PortfolixTheme.tertiaryText)
+                                .foregroundStyle(PortfolixTheme.tertiary)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: DailyProfitCalendarLayout.weekdayHeight)
                         }
@@ -2634,13 +2736,13 @@ private struct DailyProfitCard: View {
                     x: .value("Date", point.date),
                     y: .value("Daily P&L", convertedAmount(point.amountCNY))
                 )
-                .foregroundStyle(profitColor(point.amountCNY))
+                .foregroundStyle(profitBarColor(point.amountCNY))
                 .cornerRadius(2)
             }
 
             if let highlightedPoint {
                 RuleMark(x: .value("Selected date", highlightedPoint.date))
-                    .foregroundStyle(PortfolixTheme.lilac.opacity(0.55))
+                    .foregroundStyle(PortfolixTheme.brandFocus)
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
         }
@@ -2659,7 +2761,7 @@ private struct DailyProfitCard: View {
                 AxisValueLabel {
                     if let date = value.as(Date.self) {
                         Text(String(calendar.component(.day, from: date)))
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -2673,7 +2775,7 @@ private struct DailyProfitCard: View {
                 AxisValueLabel {
                     if let amount = value.as(Double.self) {
                         Text(compactNumber(amount))
-                            .foregroundStyle(PortfolixTheme.tertiaryText)
+                            .foregroundStyle(PortfolixTheme.tertiary)
                     }
                 }
             }
@@ -2715,8 +2817,7 @@ private struct DailyProfitCard: View {
                     .font(PortfolixTypography.chartAxis)
                     .monospacedDigit()
                     .foregroundStyle(
-                        todayForeground
-                            ?? PortfolixTheme.performanceStatusText(for: amount, scheme: store.performanceColorScheme)
+                        PortfolixTheme.performanceStatusText(for: amount, scheme: store.performanceColorScheme)
                     )
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -2727,13 +2828,14 @@ private struct DailyProfitCard: View {
         .background {
             if isToday {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(PortfolixTheme.lilac)
+                    .fill(
+                        colorScheme == .dark
+                            ? PortfolixTheme.brandWash
+                            : PortfolixTheme.brandWashStrong
+                    )
             } else {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(PortfolixTheme.panelSoft.opacity(0.55))
-
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(cellTint(amount))
+                    .fill(PortfolixTheme.soft.opacity(0.55))
 
                 if isHovered {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -2748,9 +2850,9 @@ private struct DailyProfitCard: View {
         .accessibilityValue(accessibilityValue(amount: amount))
     }
 
-    /// Foreground used inside the solid lilac "today" tile.
+    /// Foreground used inside the light brand wash "today" tile.
     private var todayCellForeground: Color {
-        colorScheme == .dark ? Color.black.opacity(0.92) : Color.white
+        PortfolixTheme.brandWashText
     }
 
     private var calendarColumns: [GridItem] {
@@ -2911,14 +3013,20 @@ private struct DailyProfitCard: View {
         PortfolixTheme.performanceColor(for: amount, scheme: store.performanceColorScheme)
     }
 
-    private func cellTint(_ amount: Decimal?) -> Color {
-        guard let amount, amount != 0 else { return .clear }
-        return PortfolixTheme.performanceColor(for: amount, scheme: store.performanceColorScheme).opacity(0.13)
+    /// 柱状图沿用收益面积图的淡彩块，与「收益与回撤」卡的视觉语言保持一致。
+    private func profitBarColor(_ amount: Decimal) -> Color {
+        let isPositive = amount >= 0
+        switch (isPositive, store.performanceColorScheme) {
+        case (true, .redUpGreenDown), (false, .greenUpRedDown):
+            return PortfolixTheme.lossAreaWash
+        default:
+            return PortfolixTheme.gainAreaWash
+        }
     }
 
     private func dayNumberColor(isToday: Bool, isFuture: Bool) -> Color {
-        if isToday { return PortfolixTheme.lilac }
-        return isFuture ? PortfolixTheme.tertiaryText : PortfolixTheme.primaryText
+        if isToday { return PortfolixTheme.brandWashText }
+        return isFuture ? PortfolixTheme.tertiary : PortfolixTheme.text
     }
 
     private func accessibilityValue(amount: Decimal?) -> String {
@@ -2972,7 +3080,7 @@ private struct DashboardEmptyState: View {
     var body: some View {
         Text(title)
             .font(PortfolixTypography.captionEmphasis)
-            .foregroundStyle(PortfolixTheme.tertiaryText)
+            .foregroundStyle(PortfolixTheme.tertiary)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }

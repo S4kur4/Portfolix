@@ -73,7 +73,7 @@ struct ProviderConfigurationSheetTests {
     func validatingProviderUsesTheDeepSeekAccentColor() {
         #expect(
             ProviderConnectionStatus.validating("Validating API").color
-                == PortfolixTheme.lilac
+                == PortfolixTheme.brandText
         )
     }
 
@@ -84,11 +84,11 @@ struct ProviderConfigurationSheetTests {
         let failure = ProviderConnectionStatus.failure("API 验证失败")
 
         #expect(validating.symbol == "clock.arrow.circlepath")
-        #expect(validating.color == PortfolixTheme.lilac)
+        #expect(validating.color == PortfolixTheme.brandText)
         #expect(success.symbol == "checkmark.circle.fill")
-        #expect(success.color == PortfolixTheme.mint)
+        #expect(success.color == PortfolixTheme.gainText)
         #expect(failure.symbol == "xmark.circle.fill")
-        #expect(failure.color == PortfolixTheme.danger)
+        #expect(failure.color == PortfolixTheme.lossText)
     }
 
     @Test

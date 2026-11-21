@@ -80,14 +80,6 @@ enum DisplayCurrency: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .cny: PortfolixTheme.lilac
-        case .hkd: PortfolixTheme.violet
-        case .usd: PortfolixTheme.blue
-        case .usdt: PortfolixTheme.amber
-        }
-    }
 
 }
 
@@ -260,17 +252,11 @@ enum AssetCategory: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .cnStock: PortfolixTheme.lilac
-        case .bStock: PortfolixTheme.violet
-        case .hkStock: PortfolixTheme.violet
-        case .usStock: PortfolixTheme.blue
-        case .fund: PortfolixTheme.rose
-        case .crypto: PortfolixTheme.amber
-        case .cash: PortfolixTheme.mint
-        }
-    }
+    /// 资产大类标记色：圆点、图例、头像等小面积元素。
+    var color: Color { assetClass.mark }
+
+    /// 资产大类实色块：云图、堆叠条等大面积元素。
+    var fillColor: Color { assetClass.fill }
 }
 
 enum Freshness: String, Sendable {
@@ -288,9 +274,9 @@ enum Freshness: String, Sendable {
 
     var color: Color {
         switch self {
-        case .updated: PortfolixTheme.mint
-        case .stale: PortfolixTheme.amber
-        case .manual: PortfolixTheme.lilac
+        case .updated: PortfolixTheme.secondary
+        case .stale: PortfolixTheme.warnText
+        case .manual: PortfolixTheme.secondary
         }
     }
 }
@@ -773,6 +759,9 @@ final class PortfolioStore {
             rebuildVisibleSnapshots()
         }
     }
+    var performanceRiskRange: PerformanceRiskRange = .month {
+        didSet { persistDisplayPreference(performanceRiskRange, for: .performanceRiskRange) }
+    }
     var riskLevel = "未配置"
     var riskProfileConfigured = false
     var riskProfileVersion = 0
@@ -1092,6 +1081,7 @@ final class PortfolioStore {
         performanceColorScheme = PortfolioDisplayPreferenceKey.performanceColorScheme.load(from: activeRepository, default: PerformanceColorScheme.greenUpRedDown)
         trendMetric = PortfolioDisplayPreferenceKey.trendMetric.load(from: activeRepository, default: TrendMetric.profitValue)
         trendRange = PortfolioDisplayPreferenceKey.trendRange.load(from: activeRepository, default: TrendRange.month)
+        performanceRiskRange = PortfolioDisplayPreferenceKey.performanceRiskRange.load(from: activeRepository, default: PerformanceRiskRange.month)
         investmentCloudMode = PortfolioDisplayPreferenceKey.investmentCloudMode.load(from: activeRepository, default: InvestmentCloudMode.defaultMode)
         dailyProfitDisplayMode = PortfolioDisplayPreferenceKey.dailyProfitDisplayMode.load(from: activeRepository, default: DailyProfitDisplayMode.calendar)
         primaryPositionSortField = PortfolioDisplayPreferenceKey.primaryPositionSortField.load(from: activeRepository, default: PrimaryPositionSortField.marketValue)
@@ -1212,7 +1202,7 @@ final class PortfolioStore {
         allocationItems(AssetCategory.allCases) { category in
             (
                 category.title(language: appLanguage),
-                category.color,
+                category.fillColor,
                 derivedMetrics.categoryValues[category, default: 0]
             )
         }
@@ -1222,7 +1212,7 @@ final class PortfolioStore {
         allocationItems(DisplayCurrency.allCases) { currency in
             (
                 currency.rawValue,
-                currency.color,
+                PortfolixTheme.secondary,
                 derivedMetrics.currencyValues[currency, default: 0]
             )
         }

@@ -44,7 +44,7 @@ struct BatchPositionUpdateSheet: View {
                             }
                         }
                     }
-                    .background(PortfolixTheme.panel)
+                    .background(PortfolixTheme.surface)
                 }
                 .clipShape(
                     RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
@@ -58,7 +58,7 @@ struct BatchPositionUpdateSheet: View {
             SheetActionFooter(errorMessage: saveErrorMessage) {
                 Text(pendingUpdateText)
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.secondaryText)
+                    .foregroundStyle(PortfolixTheme.secondary)
                     .monospacedDigit()
 
             } actions: {
@@ -134,7 +134,7 @@ private struct PositionUpdateTableHeader: View {
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, minHeight: PositionUpdateLayout.headerHeight, alignment: .leading)
-        .background(colorScheme == .dark ? PortfolixTheme.panel : PortfolixTheme.panelElevated)
+        .background(colorScheme == .dark ? PortfolixTheme.surface : PortfolixTheme.raised)
     }
 
     private func header(
@@ -144,7 +144,7 @@ private struct PositionUpdateTableHeader: View {
     ) -> some View {
         Text(title)
             .font(PortfolixTypography.captionEmphasis)
-            .foregroundStyle(PortfolixTheme.secondaryText)
+            .foregroundStyle(PortfolixTheme.secondary)
             .lineLimit(1)
             .frame(width: width, alignment: alignment)
     }
@@ -196,24 +196,24 @@ private struct PositionUpdateRow: View {
         }
         .padding(.horizontal, PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, minHeight: PositionUpdateLayout.rowHeight, alignment: .leading)
-        .background(draft.isChanged ? PortfolixTheme.selectionFill.opacity(0.34) : Color.clear)
+        .background(draft.isChanged ? PortfolixTheme.brandWash.opacity(0.34) : Color.clear)
     }
 
     private var assetCell: some View {
         HStack(spacing: PortfolixSpacing.sm) {
             Circle()
-                .fill(draft.position.category.color)
+                .fill(draft.position.category.assetClass.area)
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(draft.position.name)
                     .font(PortfolixTypography.body)
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .lineLimit(1)
 
                 Text("\(draft.position.symbol) · \(draft.position.quoteCurrency.rawValue)")
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                     .lineLimit(1)
             }
         }
@@ -222,7 +222,7 @@ private struct PositionUpdateRow: View {
     private func readOnlyNumber(_ value: String) -> some View {
         Text(value)
             .font(PortfolixTypography.body)
-            .foregroundStyle(PortfolixTheme.secondaryText)
+            .foregroundStyle(PortfolixTheme.secondary)
             .lineLimit(1)
             .monospacedDigit()
     }
@@ -236,20 +236,20 @@ private struct PositionUpdateRow: View {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain)
             .font(PortfolixTypography.body)
-            .foregroundStyle(isDisabled ? PortfolixTheme.secondaryText : PortfolixTheme.primaryText)
+            .foregroundStyle(isDisabled ? PortfolixTheme.secondary : PortfolixTheme.text)
             .multilineTextAlignment(.leading)
             .monospacedDigit()
             .padding(.horizontal, PortfolixSpacing.sm)
             .frame(height: PositionUpdateLayout.inputHeight)
             .background {
                 RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
-                    .fill(isDisabled ? PortfolixTheme.panelSoft.opacity(0.5) : PortfolixTheme.panelElevated)
+                    .fill(isDisabled ? PortfolixTheme.soft.opacity(0.5) : PortfolixTheme.raised)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
                     .stroke(
                         highlightsInvalidFields && !draft.isValid(field)
-                            ? PortfolixTheme.danger
+                            ? PortfolixTheme.lossText
                             : PortfolixTheme.border,
                         lineWidth: 1
                     )

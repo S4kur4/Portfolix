@@ -653,10 +653,10 @@ private struct HoldingVoiceInputModifier: ViewModifier {
         switch appearance {
         case .highlightedField:
             RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                .fill(PortfolixTheme.panelElevated)
+                .fill(PortfolixTheme.raised)
                 .overlay {
                     RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                        .fill(PortfolixTheme.violet.opacity(0.14))
+                        .fill(PortfolixTheme.brandWash)
                 }
                 .overlay { waveform }
                 .allowsHitTesting(false)
@@ -771,7 +771,7 @@ struct HoldingVoiceWaveform: View {
                 roundedRect: rect,
                 cornerRadius: HoldingVoiceWaveformMetrics.barWidth / 2
             ),
-            with: .color(PortfolixTheme.violet.opacity(0.9))
+            with: .color(PortfolixTheme.brandFocus.opacity(0.9))
         )
     }
 }

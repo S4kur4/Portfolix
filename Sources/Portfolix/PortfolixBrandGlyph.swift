@@ -14,7 +14,7 @@ struct PortfolixBrandGlyph: View {
                 Image(systemName: "square.grid.2x2.fill")
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(Color(hex: 0x12101D))
+                    .foregroundStyle(PortfolixTheme.brandLogoInk)
             }
         }
         .frame(width: size, height: size)

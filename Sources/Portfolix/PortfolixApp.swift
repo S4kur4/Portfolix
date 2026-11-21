@@ -89,7 +89,7 @@ struct RootView: View {
             .ignoresSafeArea(edges: .top)
         }
         .background(PortfolixTheme.canvas)
-        .tint(PortfolixTheme.controlAccent)
+        .tint(PortfolixTheme.brandFocus)
         .sheet(item: $store.positionEditorPresentation) { presentation in
             PositionEditorSheet(presentation: presentation)
                 .id(presentation.id)

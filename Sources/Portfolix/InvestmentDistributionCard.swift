@@ -46,7 +46,7 @@ struct InvestmentCloudCard: View {
                  ? localizedText("暂无今日盈亏", "No P&L for today", language: store.appLanguage)
                  : localizedText("暂无投资分布", "No investment distribution yet", language: store.appLanguage))
                 .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             InvestmentCloudMapView(
@@ -107,19 +107,6 @@ struct InvestmentCloudHeader: View {
                 optionTitle: { $0.title(language: language) }
             )
         }
-    }
-}
-
-enum InvestmentCloudCategoryPalette {
-    static let colors: [Color] = [
-        PortfolixTheme.lilac, PortfolixTheme.violet, PortfolixTheme.blue,
-        PortfolixTheme.amber, PortfolixTheme.mint, PortfolixTheme.rose,
-    ]
-
-    static func color(for id: String, among ids: [String]) -> Color {
-        let ordered = Set(ids).sorted()
-        guard let index = ordered.firstIndex(of: id) else { return colors[0] }
-        return colors[index % colors.count]
     }
 }
 
@@ -204,7 +191,7 @@ struct InvestmentCloudMapView: View {
                  ? localizedText("今日盈亏", "Today's P&L", language: language)
                  : localizedText("总市值", "Total value", language: language))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
             Text(mode == .dailyProfit
                  ? formatSignedMoney(convertedTotal, currency: currency)
                  : formatMoney(convertedTotal, currency: currency))
@@ -212,7 +199,7 @@ struct InvestmentCloudMapView: View {
                 .monospacedDigit()
                 .foregroundStyle(mode == .dailyProfit
                                  ? PortfolixTheme.performanceStatusText(for: convertedTotal, scheme: performanceColorScheme)
-                                 : PortfolixTheme.primaryText)
+                                 : PortfolixTheme.text)
                 .portfolixNumericTransition(convertedTotal)
         }
     }
@@ -223,12 +210,12 @@ struct InvestmentCloudMapView: View {
             let down = items.filter { $0.amountCNY < 0 }.count
             Text(localizedText("涨 \(up) · 跌 \(down)", "\(up) up · \(down) down", language: language))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
         } else {
             let categories = items.filter { !$0.isAggregated }.count
             Text(localizedText("\(categories) 类", "\(categories) groups", language: language))
                 .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiaryText)
+                .foregroundStyle(PortfolixTheme.tertiary)
         }
     }
 
@@ -237,24 +224,24 @@ struct InvestmentCloudMapView: View {
         HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.xs) {
             Text(item.title(language: language))
                 .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.secondaryText)
+                .foregroundStyle(PortfolixTheme.secondary)
 
             if let marketValue = item.marketValueCNY {
                 Text("·")
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                 let valueText = formatMoney(marketValue * currency.rateFromCNY, currency: currency)
                 Text(valueText)
                     .font(PortfolixTypography.caption)
                     .monospacedDigit()
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .portfolixNumericTransition(valueText)
             }
 
             if mode == .dailyProfit {
                 Text("·")
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                 let profitText = formatSignedMoney(item.amountCNY * currency.rateFromCNY, currency: currency)
                 Text(profitText)
                     .font(PortfolixTypography.captionEmphasis)
@@ -272,12 +259,12 @@ struct InvestmentCloudMapView: View {
             } else if let percentage = item.distributionPercentage {
                 Text("·")
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
                 let percentageText = String(format: "%.1f%%", percentage)
                 Text(percentageText)
                     .font(PortfolixTypography.captionEmphasis)
                     .monospacedDigit()
-                    .foregroundStyle(PortfolixTheme.primaryText)
+                    .foregroundStyle(PortfolixTheme.text)
                     .portfolixNumericTransition(percentageText)
             }
         }
@@ -299,18 +286,18 @@ struct InvestmentCloudMapView: View {
             ForEach(Array(categories.prefix(4))) { item in
                 HStack(spacing: PortfolixSpacing.xs) {
                     Circle()
-                        .fill(InvestmentCloudCategoryPalette.color(for: item.id, among: items.map(\.id)))
+                        .fill(item.assetClass.area)
                         .frame(width: 6, height: 6)
                     Text(item.title(language: language))
                         .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.secondaryText)
+                        .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(1)
                 }
             }
             if categories.count > 4 {
                 Text(localizedText("+\(categories.count - 4) 类", "+\(categories.count - 4) groups", language: language))
                     .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiaryText)
+                    .foregroundStyle(PortfolixTheme.tertiary)
             }
             Spacer(minLength: 0)
         }
@@ -325,7 +312,6 @@ struct InvestmentCloudTreemap: View {
     var weights: [Double]?
     var highlightedID: Binding<InvestmentCloudItem.ID?>?
     var showsHoverTooltip: Bool = true
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var internalHighlightedID: InvestmentCloudItem.ID?
 
@@ -344,10 +330,6 @@ struct InvestmentCloudTreemap: View {
     private var resolvedWeights: [Double] {
         if let weights, weights.count == items.count { return weights }
         return items.map(\.areaWeight)
-    }
-
-    private var maxMagnitude: Double {
-        items.map { abs($0.amountCNY.doubleValue) }.max() ?? 0
     }
 
     var body: some View {
@@ -421,16 +403,16 @@ struct InvestmentCloudTreemap: View {
                             .monospacedDigit()
                             .portfolixNumericTransition(amountLabelText(item, rect: rect))
                             .lineLimit(1)
-                            .foregroundStyle(PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme))
+                            .foregroundStyle(tileTextColor(for: item))
                     } else if let percentage = item.distributionPercentage {
                         Text(String(format: "%.1f%%", percentage))
                             .font(PortfolixTypography.captionEmphasis)
                             .monospacedDigit()
                             .portfolixNumericTransition(percentage)
-                            .foregroundStyle(PortfolixTheme.primaryText)
+                            .foregroundStyle(tileTitleColor(for: item))
                     }
                 }
-                .foregroundStyle(PortfolixTheme.primaryText)
+                .foregroundStyle(tileTitleColor(for: item))
                 .padding(PortfolixSpacing.sm)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -443,16 +425,25 @@ struct InvestmentCloudTreemap: View {
 
     private func fillColor(for item: InvestmentCloudItem) -> Color {
         if item.mode == .dailyProfit {
-            guard item.amountCNY != 0 else { return PortfolixTheme.panelSoft.opacity(0.55) }
-            let normalized = maxMagnitude > 0 ? min(abs(item.amountCNY.doubleValue) / maxMagnitude, 1) : 0
-            return PortfolixTheme.performanceColor(for: item.amountCNY, scheme: performanceColorScheme)
-                .opacity(0.12 + 0.28 * normalized)
+            return PortfolixTheme.neutralWash
         }
         if item.isAggregated {
-            return PortfolixTheme.panelSoft.opacity(0.55)
+            return PortfolixTheme.neutralWash
         }
-        return InvestmentCloudCategoryPalette.color(for: item.id, among: items.map(\.id))
-            .opacity(colorScheme == .dark ? 0.30 : 0.18)
+        return item.assetClass.pale
+    }
+
+    /// 分布模式的大色块使用大面积色阶（classArea），文字用配套的 classOnArea；
+    /// 聚合块底为中性 wash，仍用 text；每日盈亏模式保持中性底 + 语义数字。
+    private func tileTitleColor(for item: InvestmentCloudItem) -> Color {
+        guard item.mode == .distribution, !item.isAggregated else { return PortfolixTheme.text }
+        return PortfolixTheme.classOnPale
+    }
+
+    private func tileTextColor(for item: InvestmentCloudItem) -> Color {
+        guard item.mode == .dailyProfit else { return tileTitleColor(for: item) }
+        guard item.amountCNY != 0 else { return PortfolixTheme.text }
+        return PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
     }
 
     private func accessibilityLabel(for item: InvestmentCloudItem) -> String {
@@ -484,9 +475,9 @@ struct InvestmentCloudTreemap: View {
                 .portfolixNumericTransition(amountText(item))
                 .foregroundStyle(item.mode == .dailyProfit
                                  ? PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
-                                 : PortfolixTheme.primaryText)
+                                 : PortfolixTheme.text)
         }
-        .foregroundStyle(PortfolixTheme.primaryText)
+        .foregroundStyle(PortfolixTheme.text)
         .portfolixChartTooltip()
     }
 

@@ -291,17 +291,19 @@ private enum RoseOrbitPalette {
         isDarkMode: Bool,
         alpha: Double
     ) -> CGColor {
-        let hex: UInt32 = switch family {
-        case .highlight: isDarkMode ? 0xC3B1FF : 0xAF9AFF
-        case .light: isDarkMode ? 0xA995FF : 0x927BEE
-        case .brand: isDarkMode ? 0x8C75FF : 0x7253DB
-        case .deep: isDarkMode ? 0x8068EF : 0x654BC8
+        _ = isDarkMode
+        let color: NSColor = switch family {
+        case .highlight: NSColor(PortfolixTheme.brandWashText)
+        case .light: NSColor(PortfolixTheme.brandText)
+        case .brand: NSColor(PortfolixTheme.brandChart)
+        case .deep: NSColor(PortfolixTheme.brandSolidPressed)
         }
-        return cgColor(hex: hex, alpha: alpha)
+        return color.withAlphaComponent(alpha).cgColor
     }
 
     static func violet(isDarkMode: Bool, alpha: Double) -> CGColor {
-        cgColor(hex: isDarkMode ? 0x8C75FF : 0x7253DB, alpha: alpha)
+        _ = isDarkMode
+        return NSColor(PortfolixTheme.brandChart).withAlphaComponent(alpha).cgColor
     }
 
     private static func cgColor(hex: UInt32, alpha: Double) -> CGColor {
