@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 
 enum PortfolixReleaseInfo {
-    static let fallbackVersion = "0.1.13"
-    static let fallbackBuild = "26"
+    static let fallbackVersion = "0.1.14"
+    static let fallbackBuild = "27"
     static let fallbackCopyright = "Copyright © 2026 S4kur4. All rights reserved."
 
     static var version: String {
