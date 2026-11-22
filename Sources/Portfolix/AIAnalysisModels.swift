@@ -1346,12 +1346,13 @@ struct AIPositionContext: Encodable {
     let symbol: String
     let assetType: String
     let quoteCurrency: String
+    let costStatus: String
     let quantity: String
-    let averageCost: String
+    let averageCost: String?
     let latestPrice: String
-    let totalCostQuote: String
+    let totalCostQuote: String?
     let marketValueCNY: String
-    let unrealizedProfitQuote: String
+    let unrealizedProfitQuote: String?
     let allocationPct: Double
     let unrealizedProfitRatePct: Double?
     let oneWeek: AIPerformanceWindowContext

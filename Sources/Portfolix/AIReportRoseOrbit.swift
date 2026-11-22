@@ -291,27 +291,27 @@ private enum RoseOrbitPalette {
         isDarkMode: Bool,
         alpha: Double
     ) -> CGColor {
-        _ = isDarkMode
-        let color: NSColor = switch family {
-        case .highlight: NSColor(PortfolixTheme.brandWashText)
-        case .light: NSColor(PortfolixTheme.brandText)
-        case .brand: NSColor(PortfolixTheme.brandChart)
-        case .deep: NSColor(PortfolixTheme.brandSolidPressed)
+        let token: Color = switch family {
+        case .highlight: PortfolixTheme.brandWashText
+        case .light: PortfolixTheme.brandText
+        case .brand: PortfolixTheme.brandChart
+        case .deep: PortfolixTheme.brandSolidPressed
         }
-        return color.withAlphaComponent(alpha).cgColor
+        return resolvedCGColor(token, isDarkMode: isDarkMode, alpha: alpha)
     }
 
     static func violet(isDarkMode: Bool, alpha: Double) -> CGColor {
-        _ = isDarkMode
-        return NSColor(PortfolixTheme.brandChart).withAlphaComponent(alpha).cgColor
+        resolvedCGColor(PortfolixTheme.brandChart, isDarkMode: isDarkMode, alpha: alpha)
     }
 
-    private static func cgColor(hex: UInt32, alpha: Double) -> CGColor {
-        CGColor(
-            red: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: CGFloat(alpha)
-        )
+    private static func resolvedCGColor(_ color: Color, isDarkMode: Bool, alpha: Double) -> CGColor {
+        let appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
+        var resolved: CGColor?
+        if let appearance {
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = NSColor(color).withAlphaComponent(alpha).cgColor
+            }
+        }
+        return resolved ?? NSColor(color).withAlphaComponent(alpha).cgColor
     }
 }

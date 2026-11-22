@@ -4,8 +4,6 @@ enum PortfolioDisplayPreferenceKey: String, CaseIterable {
     case displayCurrency = "display_currency"
     case appearanceMode = "appearance_mode"
     case performanceColorScheme = "performance_color_scheme"
-    case trendMetric = "dashboard_trend_metric"
-    case trendRange = "dashboard_trend_range"
     case performanceRiskRange = "dashboard_performance_risk_range"
     case investmentCloudMode = "dashboard_investment_cloud_mode"
     case dailyProfitDisplayMode = "dashboard_daily_profit_display_mode"

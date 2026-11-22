@@ -155,6 +155,7 @@ final class PositionRepository {
     ) throws -> PortfolixDataPackage.Payload {
         try migrateOpeningBalances()
         let reconciliationRecords = try reconciliationInputs()
+        let snapshotAssetIDsByDay = reconciliationRecords.isEmpty ? [:] : try fetchSnapshotAssetIDsByDay()
         let holdingStatement = try prepare(
             """
             SELECT
@@ -210,7 +211,11 @@ final class PositionRepository {
                     weeklyTrend: weeklyTrend,
                     createdAt: text(at: 14, in: holdingStatement),
                     updatedAt: text(at: 15, in: holdingStatement),
-                    costKnown: try UUID(uuidString: text(at: 0, in: holdingStatement)).map { try costIsKnown(for: $0) ? nil : false } ?? nil
+                    costKnown: RecordedReconciliation.costKnown(
+                        reconciliationRecords,
+                        assetID: text(at: 0, in: holdingStatement),
+                        through: "9999-12-31"
+                    ) ? nil : false
                 )
             )
         }
@@ -225,15 +230,22 @@ final class PositionRepository {
         defer { sqlite3_finalize(portfolioStatement) }
         var portfolioSnapshots: [PortfolixDataPackage.PortfolioHistory] = []
         while sqlite3_step(portfolioStatement) == SQLITE_ROW {
+            let day = text(at: 0, in: portfolioStatement)
+            let known = reconciliationRecords.isEmpty
+                || RecordedReconciliation.costKnown(
+                    reconciliationRecords,
+                    assetIDs: snapshotAssetIDsByDay[day] ?? [],
+                    through: day
+                )
             portfolioSnapshots.append(
                 PortfolixDataPackage.PortfolioHistory(
-                    date: text(at: 0, in: portfolioStatement),
+                    date: day,
                     totalValueCNY: text(at: 1, in: portfolioStatement),
                     totalCostCNY: text(at: 2, in: portfolioStatement),
                     totalProfitCNY: text(at: 3, in: portfolioStatement),
                     profitRate: text(at: 4, in: portfolioStatement),
                     updatedAt: text(at: 5, in: portfolioStatement),
-                    costKnown: try snapshotCostIsKnown(day: text(at: 0, in: portfolioStatement), records: reconciliationRecords) ? nil : false
+                    costKnown: known ? nil : false
                 )
             )
         }
@@ -715,7 +727,10 @@ final class PositionRepository {
             guard var record = try fetchPositionClosures().first(where: { $0.id == id }), !record.isReversed else {
                 throw PositionClosureError.invalidRecord
             }
-            try requireAfterReconciliation(accountIDs: Set([record.holding.id, record.cashPositionID].compactMap { $0 }), date: PositionClosureMath.date(record.tradeDate)!)
+            guard let tradeDate = PositionClosureMath.date(record.tradeDate) else {
+                throw PositionClosureError.invalidRecord
+            }
+            try requireAfterReconciliation(accountIDs: Set([record.holding.id, record.cashPositionID].compactMap { $0 }), date: tradeDate)
             guard let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt), Calendar.current.isDate(recordedAt, inSameDayAs: now) else {
                 throw PositionClosureError.reversalExpired
             }
@@ -798,21 +813,29 @@ final class PositionRepository {
         try bind(limitDays, to: 1, in: statement)
 
         let reconciliations = try reconciliationInputs()
+        let snapshotAssetIDsByDay = reconciliations.isEmpty ? [:] : try fetchSnapshotAssetIDsByDay()
         var snapshots: [PortfolioSnapshot] = []
         while sqlite3_step(statement) == SQLITE_ROW {
+            let day = text(at: 0, in: statement)
             guard
-                let date = Self.date(fromDayString: text(at: 0, in: statement)),
+                let date = Self.date(fromDayString: day),
                 let totalValue = Double(text(at: 1, in: statement)),
                 let profitRate = Double(text(at: 2, in: statement))
             else {
                 throw PositionRepositoryError.invalidStoredData("无法解析组合快照")
             }
+            let costKnown = reconciliations.isEmpty
+                || RecordedReconciliation.costKnown(
+                    reconciliations,
+                    assetIDs: snapshotAssetIDsByDay[day] ?? [],
+                    through: day
+                )
             snapshots.append(
                 PortfolioSnapshot(
                     date: date,
                     totalValueCNY: totalValue,
                     profitRate: profitRate,
-                    costIsKnown: try snapshotCostIsKnown(day: text(at: 0, in: statement), records: reconciliations)
+                    costIsKnown: costKnown
                 )
             )
         }
@@ -2166,18 +2189,21 @@ final class PositionRepository {
         return PositionDailyPriceBaseline(day: day, price: price, unitValueCNY: quantity > 0 ? value / quantity : nil)
     }
 
-    private func weeklyTrend(for assetID: UUID, latestPrice: Decimal) throws -> [Double] {
+    private func weeklyTrend(for assetID: UUID, latestPrice: Decimal, asOf date: Date = .now) throws -> [Double] {
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -6, to: date) ?? date
+        let cutoffDay = Self.dayString(from: cutoffDate)
         let statement = try prepare(
             """
             SELECT latest_price
             FROM asset_price_snapshots
             WHERE asset_id = ?
-              AND snapshot_date >= date('now', '-6 day')
+              AND snapshot_date >= ?
             ORDER BY snapshot_date ASC
             """
         )
         defer { sqlite3_finalize(statement) }
         try bind(assetID.uuidString, to: 1, in: statement)
+        try bind(cutoffDay, to: 2, in: statement)
 
         var trend: [Double] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -2279,12 +2305,17 @@ final class PositionRepository {
         NSDecimalNumber(decimal: value).stringValue
     }
 
+    private static let timestampLock = NSLock()
+    private nonisolated(unsafe) static let isoTimestampFormatter = ISO8601DateFormatter()
+
     private static func timestamp() -> String {
-        ISO8601DateFormatter().string(from: .now)
+        timestamp(from: .now)
     }
 
     private static func timestamp(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        timestampLock.withLock {
+            isoTimestampFormatter.string(from: date)
+        }
     }
 
     private static func dayString(from date: Date) -> String {
@@ -2677,8 +2708,10 @@ extension PositionRepository {
         for position in current { templates[position.id.uuidString] = position }
         let ids = Set(all.flatMap { $0.accountIDs })
         for record in all {
-            let effective = record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }
-                ?? PositionClosureMath.date(record.tradeDate)!
+            guard let effective = record.effectiveAt.flatMap({ ISO8601DateFormatter().date(from: $0) })
+                ?? PositionClosureMath.date(record.tradeDate) else {
+                throw PositionTradeError.invalidInput
+            }
             try requireAfterReconciliation(accountIDs: ids, date: effective)
         }
         guard !(try fetchPositionClosures()).contains(where: { closure in
@@ -2908,15 +2941,14 @@ extension PositionRepository {
         try stepDone(statement)
     }
 
-    private func snapshotCostIsKnown(day: String, records: [RecordedReconciliation]? = nil) throws -> Bool {
-        let records = try records ?? reconciliationInputs()
-        guard !records.isEmpty else { return true }
-        let statement = try prepare("SELECT asset_id FROM asset_price_snapshots WHERE snapshot_date = ?")
+    private func fetchSnapshotAssetIDsByDay() throws -> [String: Set<String>] {
+        let statement = try prepare("SELECT snapshot_date, asset_id FROM asset_price_snapshots")
         defer { sqlite3_finalize(statement) }
-        try bind(day, to: 1, in: statement)
-        var ids = Set<String>()
-        while sqlite3_step(statement) == SQLITE_ROW { ids.insert(text(at: 0, in: statement)) }
-        return RecordedReconciliation.costKnown(records, assetIDs: ids, through: day)
+        var map: [String: Set<String>] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            map[text(at: 0, in: statement), default: []].insert(text(at: 1, in: statement))
+        }
+        return map
     }
 
     private func reconciliationInputs() throws -> [RecordedReconciliation] {

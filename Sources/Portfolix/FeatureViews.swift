@@ -228,7 +228,7 @@ struct PositionsView: View {
 
             TableColumn(
                 localizedText("成本价", "Unit Cost", language: store.appLanguage),
-                value: \.averageCost
+                value: \.averageCostCNY
             ) { position in
                 Text(position.costIsKnown ? formatUnitCost(position.averageCost, currency: position.quoteCurrency) : "—")
                     .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
@@ -238,7 +238,7 @@ struct PositionsView: View {
 
             TableColumn(
                 localizedText("总成本", "Total Cost", language: store.appLanguage),
-                value: \.totalCost
+                value: \.totalCostCNY
             ) { position in
                 Text(position.costIsKnown ? formatMoney(position.totalCost, currency: position.quoteCurrency) : "—")
                     .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
@@ -897,11 +897,6 @@ private struct AIReportChatSurface: View {
     private var usesConnectedMode: Bool {
         selectedAnalysisMode == .connected
     }
-
-    private var hasLLMKey: Bool {
-        llmReadiness == .ready
-    }
-
 }
 
 private struct AIReportChatHeader: View {
@@ -2044,6 +2039,7 @@ private struct AIReportChatComposer: View {
     let sendFollowUp: (String) -> Void
     @State private var draftBuffer = AIReportComposerDraftBuffer()
     @State private var hasDraftText = false
+    @State private var voiceUpdateRevision = 0
     @State private var isSubmitting = false
     @StateObject private var voiceRecorder = HoldingVoiceRecorder()
     @FocusState private var isComposerFocused: Bool
@@ -2180,7 +2176,8 @@ private struct AIReportChatComposer: View {
     }
 
     private var draftTextBinding: Binding<String> {
-        Binding(
+        let _ = voiceUpdateRevision
+        return Binding(
             get: { draftBuffer.text },
             set: { value in
                 draftBuffer.replace(with: value)
@@ -2201,6 +2198,7 @@ private struct AIReportChatComposer: View {
             isComposerFocused = false
             draftBuffer.replace(with: value)
             hasDraftText = draftBuffer.hasContent
+            voiceUpdateRevision &+= 1
         }
     }
 
@@ -2344,156 +2342,6 @@ struct AIReportComposerActionButton: View {
     }
 }
 
-private struct AIReportStatusCard: View {
-    let status: AIAnalysisRunStatus
-    let hasPositions: Bool
-    let hasLLMKey: Bool
-    let usesConnectedMode: Bool
-    let report: AIAnalysisReport?
-    let run: AIAnalysisRun
-    let language: AppLanguage
-
-    var body: some View {
-        Panel(padding: PortfolixSpacing.md) {
-            if isRunningStatus {
-                statusContent(
-                    title: title,
-                    detail: runningDetail,
-                    icon: {
-                        AIReportAgentThinkingIcon()
-                    }
-                )
-            } else {
-                statusContent(
-                    title: title,
-                    detail: detail,
-                    icon: {
-                        StatusSymbolIcon(symbol: symbol, color: color, background: symbolBackground)
-                    }
-                )
-            }
-        }
-    }
-
-    private func statusContent<Icon: View>(title: String, detail: String, @ViewBuilder icon: () -> Icon) -> some View {
-        HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-            icon()
-
-            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                Text(title)
-                    .font(PortfolixTypography.subheading)
-                    .foregroundStyle(PortfolixTheme.text)
-                    .lineLimit(1)
-                Text(detail)
-                    .font(PortfolixTypography.caption)
-                    .foregroundStyle(PortfolixTheme.tertiary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: PortfolixSpacing.md)
-
-            if isRunningStatus {
-                CapsuleLabel(
-                    title: localizedText("Agent 工作中", "Agent Running", language: language),
-                    color: PortfolixTheme.brandText,
-                    symbol: "sparkles"
-                )
-            }
-        }
-        .frame(height: 64, alignment: .center)
-    }
-
-    private var isRunningStatus: Bool {
-        if case .running = status {
-            return true
-        }
-        return false
-    }
-
-    private var runningDetail: String {
-        guard case let .running(progress) = status else {
-            return status.title(language: language)
-        }
-        return progress.detail(language: language)
-    }
-
-    private var title: String {
-        if !hasPositions {
-            return localizedText("等待持仓数据", "Waiting for holdings", language: language)
-        }
-        if !hasLLMKey {
-            return localizedText("需要完成 API 配置", "API configuration required", language: language)
-        }
-        if case .running = status {
-            return status.title(language: language)
-        }
-        if case .failed = status {
-            return status.title(language: language)
-        }
-        if report != nil {
-            return localizedText("上次分析已生成", "Last Analysis Ready", language: language)
-        }
-        return status.title(language: language)
-    }
-
-    private var detail: String {
-        if !hasPositions {
-            return localizedText("添加持仓后即可生成标准分析", "Add holdings to generate a standard analysis", language: language)
-        }
-        if !hasLLMKey {
-            return localizedText("请在系统设置中配置并验证 DeepSeek API Key", "Configure and validate a DeepSeek API key in Settings", language: language)
-        }
-        if case .running = status {
-            return status.title(language: language)
-        }
-        if case .failed = status {
-            return localizedText("请检查 API 配置或稍后重试", "Check API settings or try again later", language: language)
-        }
-        if let report {
-            let modeText = report.sources.isEmpty ? localizedText("基础模式", "Basic", language: language) : localizedText("联网增强", "Connected", language: language)
-            let sourceText = report.sources.isEmpty ? localizedText("未使用外部检索", "No external search", language: language) : localizedText("\(report.sources.count) 个来源", "\(report.sources.count) sources", language: language)
-            let fallbackText = run.usedFallback ? localizedText(" · 已使用回退", " · fallback used", language: language) : ""
-            return "\(relativeText(report.generatedAt, language: language)) · \(modeText) · \(report.model) · \(sourceText)\(fallbackText)"
-        }
-        return usesConnectedMode
-            ? localizedText("使用本地持仓、风险偏好和联网检索生成增强报告", "Uses local holdings, risk profile, and web search for an enhanced report", language: language)
-            : localizedText("使用本地持仓、风险偏好和结构化行情生成标准报告", "Uses local holdings, risk profile, and structured market data for a standard report", language: language)
-    }
-
-    private var symbol: String {
-        if !hasPositions || !hasLLMKey {
-            return "exclamationmark.circle.fill"
-        }
-        if case .running = status {
-            return "sparkles"
-        }
-        if case .failed = status {
-            return "exclamationmark.triangle.fill"
-        }
-        return report == nil ? "sparkles" : "checkmark.circle.fill"
-    }
-
-    private var color: Color {
-        if !hasPositions || !hasLLMKey {
-            return PortfolixTheme.warnText
-        }
-        if case .failed = status {
-            return PortfolixTheme.lossText
-        }
-        return PortfolixTheme.gainText
-    }
-
-    private var symbolBackground: Color {
-        if !hasPositions || !hasLLMKey {
-            return PortfolixTheme.warnWash1
-        }
-        if case .failed = status {
-            return PortfolixTheme.lossWash1
-        }
-        return PortfolixTheme.gainWash1
-    }
-}
-
 private struct AIReportAgentThinkingIcon: View {
     let size: CGFloat
 
@@ -2525,201 +2373,6 @@ private struct StatusSymbolIcon: View {
     }
 }
 
-private struct AIReportEmptyCard: View {
-    let language: AppLanguage
-    let hasPositions: Bool
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(
-                    title: localizedText("尚无持仓分析", "No Analysis Yet", language: language),
-                    symbol: "doc.text.magnifyingglass"
-                )
-                Text(
-                    hasPositions
-                        ? localizedText("点击生成分析后，Agent 会结合持仓、风险偏好和行情数据生成报告", "Generate an analysis from holdings, risk profile, and market data", language: language)
-                        : localizedText("添加持仓后可生成分析", "Add holdings to generate an analysis", language: language)
-                )
-                .font(PortfolixTypography.body)
-                .foregroundStyle(PortfolixTheme.secondary)
-            }
-            .frame(minHeight: 160, alignment: .topLeading)
-        }
-    }
-}
-
-private struct AIReportSummaryCard: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
-                SectionHeader(
-                    title: localizedText("核心结论", "Core Takeaway", language: language),
-                    symbol: "target"
-                )
-
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 4)
-                } else if let report {
-                    Text(AIUserFacingTextSanitizer.sanitize(report.summary))
-                        .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.text)
-                        .lineLimit(8)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Text(AIUserFacingTextSanitizer.sanitize(report.healthScoreExplanation))
-                        .font(PortfolixTypography.body)
-                        .foregroundStyle(PortfolixTheme.secondary)
-                        .lineLimit(8)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    AIReportPlaceholder(text: localizedText("生成后显示今日结论与评分解释", "The summary and score explanation will appear here", language: language))
-                }
-            }
-            .frame(minHeight: 240, alignment: .topLeading)
-        }
-    }
-}
-
-private struct AIReportMetaCard: View {
-    let report: AIAnalysisReport
-    let run: AIAnalysisRun
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(
-                    title: localizedText("报告状态", "Report Status", language: language),
-                    symbol: "checkmark.shield"
-                )
-                AIReportMetaRow(title: localizedText("模型", "Model", language: language), value: report.model)
-                AIReportMetaRow(title: localizedText("风险档案", "Risk Profile", language: language), value: "v\(report.riskProfileVersion)")
-                AIReportMetaRow(title: localizedText("生成时间", "Generated", language: language), value: relativeText(report.generatedAt, language: language))
-                AIReportMetaRow(
-                    title: localizedText("检索来源", "Sources", language: language),
-                    value: report.sources.isEmpty ? localizedText("基础模式", "Basic", language: language) : "\(report.sources.count)"
-                )
-                if run.usedFallback {
-                    CapsuleLabel(
-                        title: localizedText("已使用安全回退", "Fallback Used", language: language),
-                        color: PortfolixTheme.warnText,
-                        symbol: "exclamationmark.triangle.fill"
-                    )
-                }
-            }
-            .frame(minHeight: 184, alignment: .topLeading)
-        }
-    }
-}
-
-private struct AIReportMetaRow: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(PortfolixTypography.caption)
-                .foregroundStyle(PortfolixTheme.tertiary)
-            Spacer()
-            Text(value)
-                .font(PortfolixTypography.captionEmphasis)
-                .foregroundStyle(PortfolixTheme.secondary)
-                .lineLimit(1)
-        }
-    }
-}
-
-private struct AIReportRebalanceCard: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(
-                    title: localizedText("投资组合建议", "Portfolio Recommendations", language: language),
-                    symbol: "arrow.triangle.2.circlepath"
-                )
-                let actions = report?.rebalanceActions ?? []
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 4)
-                } else if report == nil {
-                    AIReportPlaceholder(text: localizedText("生成后显示投资组合优化建议", "Portfolio recommendations will appear here", language: language))
-                } else if actions.isEmpty {
-                    AIReportPlaceholder(text: localizedText("暂无明确投资组合建议", "No portfolio recommendations", language: language))
-                } else {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: PortfolixSpacing.md) {
-                        ForEach(actions.prefix(4)) { action in
-                            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                                HStack(spacing: PortfolixSpacing.sm) {
-                                    Image(systemName: symbol(for: action.action))
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(color(for: action.action))
-                                        .frame(width: 18)
-                                    Text(AIUserFacingTextSanitizer.sanitize(action.title))
-                                        .font(PortfolixTypography.subheading)
-                                        .foregroundStyle(PortfolixTheme.text)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                if let assetName = action.assetName, !assetName.isEmpty {
-                                    Text([assetName, action.symbol].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                                        .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.brandText)
-                                        .lineLimit(1)
-                                }
-                                Text(recommendationDetails(for: action))
-                                    .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.secondary)
-                                    .lineLimit(5)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(PortfolixSpacing.md)
-                            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 240, alignment: .topLeading)
-        }
-    }
-
-    private func symbol(for action: String) -> String {
-        switch action {
-        case "buy", "increase": "arrow.up.right.circle.fill"
-        case "sell", "exit": "xmark.circle.fill"
-        case "reduce": "arrow.down.right.circle.fill"
-        case "hold": "pause.circle.fill"
-        case "review_reduce": "arrow.down.right.circle.fill"
-        case "review_replenish": "plus.circle.fill"
-        case "rebalance": "arrow.triangle.2.circlepath.circle.fill"
-        case "maintain": "checkmark.circle.fill"
-        default: "eye.circle.fill"
-        }
-    }
-
-    private func color(for action: String) -> Color {
-        switch action {
-        case "buy", "increase": PortfolixTheme.gainText
-        case "sell", "exit": PortfolixTheme.lossText
-        case "reduce": PortfolixTheme.warnText
-        case "hold": PortfolixTheme.brandText
-        case "review_reduce": PortfolixTheme.warnText
-        case "review_replenish": PortfolixTheme.gainText
-        case "rebalance": PortfolixTheme.brandText
-        case "maintain": PortfolixTheme.gainText
-        default: PortfolixTheme.secondary
-        }
-    }
-}
-
 private func recommendationDetails(for action: AIRebalanceAction) -> String {
     let rationale = AIUserFacingTextSanitizer.sanitize(action.rationale)
     guard let rawRiskNote = action.riskNote, !rawRiskNote.isEmpty else {
@@ -2730,260 +2383,6 @@ private func recommendationDetails(for action: AIRebalanceAction) -> String {
     let punctuation = "。！？；.!?;"
     let separator = rationale.last.map { punctuation.contains($0) } == true ? " " : "；"
     return "\(rationale)\(separator)\(riskNote)"
-}
-
-private struct AIReportRiskList: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("风险因素", "Risk Factors", language: language), symbol: "exclamationmark.triangle")
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 5)
-                } else if report == nil {
-                    AIReportPlaceholder(text: localizedText("生成后显示需要关注的风险因素", "Risk factors will appear here", language: language))
-                } else if report?.riskItems.isEmpty ?? true {
-                    AIReportPlaceholder(text: localizedText("暂无明显风险项", "No prominent risk items", language: language))
-                } else {
-                    ForEach((report?.riskItems ?? []).prefix(6)) { item in
-                        AIReportBullet(
-                            title: item.title,
-                            body: item.impact,
-                            color: color(for: item.severity),
-                            symbol: item.severity == "high" ? "exclamationmark.octagon.fill" : "exclamationmark.circle.fill"
-                        )
-                    }
-                }
-            }
-            .frame(minHeight: 240, alignment: .topLeading)
-        }
-    }
-
-    private func color(for severity: String) -> Color {
-        switch severity {
-        case "high": PortfolixTheme.lossText
-        case "warning": PortfolixTheme.warnText
-        default: PortfolixTheme.brandText
-        }
-    }
-}
-
-private struct AIReportAssetAlerts: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("重点关注", "Watchlist", language: language), symbol: "scope")
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 5)
-                } else if report == nil {
-                    AIReportPlaceholder(text: localizedText("生成后显示重点资产与相关来源", "Key assets and embedded sources will appear here", language: language))
-                } else if report?.assetAlerts.isEmpty ?? true {
-                    AIReportPlaceholder(text: localizedText("暂无资产关注项", "No asset alerts", language: language))
-                } else {
-                    ForEach((report?.assetAlerts ?? []).prefix(6)) { alert in
-                        VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                            HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.sm) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(alert.assetName)
-                                        .font(PortfolixTypography.subheading)
-                                        .foregroundStyle(PortfolixTheme.text)
-                                        .lineLimit(1)
-                                    Text(alert.symbol)
-                                        .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.tertiary)
-                                        .lineLimit(1)
-                                }
-
-                                Spacer(minLength: PortfolixSpacing.md)
-
-                                riskBadge(for: alert)
-                            }
-                            Text(alert.reason)
-                                .font(PortfolixTypography.caption)
-                                .foregroundStyle(PortfolixTheme.secondary)
-                                .lineLimit(3)
-                        }
-                        .padding(PortfolixSpacing.md)
-                        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-                    }
-                }
-            }
-            .frame(minHeight: 240, alignment: .topLeading)
-        }
-    }
-
-    private func riskBadge(for alert: AIAssetAlert) -> some View {
-        let risk = riskLevel(for: alert)
-        return CapsuleLabel(title: risk.title, color: risk.color, symbol: risk.symbol)
-    }
-
-    private func riskLevel(for alert: AIAssetAlert) -> (title: String, color: Color, symbol: String) {
-        let text = "\(alert.title) \(alert.reason)".lowercased()
-        let highRiskHints = ["高风险", "剧烈", "回撤", "监管", "亏损", "集中", "超限", "high", "drawdown", "regulatory", "concentration"]
-        let isHigh = highRiskHints.contains { text.localizedCaseInsensitiveContains($0) }
-        if isHigh {
-            return (
-                localizedText("高风险", "High Risk", language: language),
-                PortfolixTheme.lossText,
-                "exclamationmark.triangle.fill"
-            )
-        }
-        return (
-            localizedText("中风险", "Medium Risk", language: language),
-            PortfolixTheme.warnText,
-            "exclamationmark.circle.fill"
-        )
-    }
-}
-
-private struct AIReportQuestionCard: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("可复核问题", "Questions", language: language), symbol: "questionmark.circle")
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 4)
-                } else if report == nil {
-                    AIReportPlaceholder(text: localizedText("生成后显示适合你复核的问题", "Review questions will appear here", language: language))
-                } else {
-                    let questions = report?.questionsToConsider ?? []
-                    if questions.isEmpty {
-                        AIReportPlaceholder(text: localizedText("暂无需要额外复核的问题", "No review questions for now", language: language))
-                    } else {
-                        ForEach(Array(questions.prefix(5).enumerated()), id: \.offset) { _, question in
-                            AIReportBullet(title: question, body: nil, color: PortfolixTheme.brandText, symbol: "checkmark.circle.fill")
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 196, alignment: .topLeading)
-        }
-    }
-}
-
-private struct AIReportLimitationsCard: View {
-    let report: AIAnalysisReport?
-    let isLoading: Bool
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("限制说明", "Limitations", language: language), symbol: "shield.lefthalf.filled")
-                if isLoading {
-                    AIReportLoadingBlock(lineCount: 4)
-                } else if report == nil {
-                    AIReportPlaceholder(text: localizedText("生成后显示本次分析的边界与假设", "Analysis boundaries and assumptions will appear here", language: language))
-                } else {
-                    let limitations = report?.limitations ?? []
-                    if limitations.isEmpty {
-                        AIReportPlaceholder(text: localizedText("暂无额外限制说明", "No extra limitations", language: language))
-                    } else {
-                        ForEach(Array(limitations.prefix(5).enumerated()), id: \.offset) { _, limitation in
-                            AIReportBullet(title: limitation, body: nil, color: PortfolixTheme.secondary, symbol: "info.circle.fill")
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 196, alignment: .topLeading)
-        }
-    }
-}
-
-private struct AIReportSourceLinks: View {
-    let sources: [AIReportSource]
-
-    var body: some View {
-        if !sources.isEmpty {
-            HStack(spacing: PortfolixSpacing.xs) {
-                ForEach(sources) { source in
-                    if let url = URL(string: source.url) {
-                        Link(destination: url) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "link")
-                                    .font(.system(size: 9, weight: .semibold))
-                                Text(source.domain)
-                                    .lineLimit(1)
-                            }
-                            .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.brandText)
-                            .padding(.horizontal, PortfolixSpacing.sm)
-                            .padding(.vertical, 4)
-                            .background(PortfolixTheme.brandWash, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct AIReportDataQualityCard: View {
-    let report: AIAnalysisReport
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("数据质量", "Data Quality", language: language), symbol: "waveform.path.ecg")
-                ForEach(Array(report.dataQualityNotes.prefix(5).enumerated()), id: \.offset) { _, note in
-                    AIReportBullet(title: note, body: nil, color: PortfolixTheme.gainText, symbol: "info.circle.fill")
-                }
-            }
-        }
-    }
-}
-
-private struct AIReportSourcesCard: View {
-    let report: AIAnalysisReport
-    let language: AppLanguage
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                SectionHeader(title: localizedText("引用来源", "Sources", language: language), symbol: "link")
-                if report.sources.isEmpty {
-                    AIReportPlaceholder(text: localizedText("本次报告未包含外部来源", "No external sources in this report", language: language))
-                } else {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: PortfolixSpacing.md) {
-                        ForEach(report.sources.prefix(12)) { source in
-                            VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                                HStack(spacing: PortfolixSpacing.sm) {
-                                    Text(source.domain)
-                                        .font(PortfolixTypography.captionEmphasis)
-                                        .foregroundStyle(PortfolixTheme.text)
-                                        .lineLimit(1)
-                                    CapsuleLabel(title: source.credibility.title(language: language), color: PortfolixTheme.brandText)
-                                }
-                                Text(source.title)
-                                    .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.secondary)
-                                    .lineLimit(2)
-                                Text(source.assetName)
-                                    .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.tertiary)
-                                    .lineLimit(1)
-                            }
-                            .padding(PortfolixSpacing.md)
-                            .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous))
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 struct AIReportDisclaimer: View {
@@ -3042,46 +2441,6 @@ private struct AIReportBullet: View {
             }
         }
     }
-}
-
-private struct AIReportPlaceholder: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(PortfolixTypography.body)
-            .foregroundStyle(PortfolixTheme.tertiary)
-            .frame(maxWidth: .infinity, minHeight: 80, alignment: .center)
-    }
-}
-
-private struct AIReportLoadingBlock: View {
-    let lineCount: Int
-
-    var body: some View {
-        VStack(spacing: PortfolixSpacing.sm) {
-            AIReportAgentThinkingIcon(size: 78)
-        }
-        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
-        .accessibilityLabel("Generating analysis")
-    }
-}
-
-private func relativeText(_ date: Date, language: AppLanguage) -> String {
-    let seconds = max(0, Int(Date().timeIntervalSince(date)))
-    if seconds < 60 {
-        return localizedText("刚刚", "Just now", language: language)
-    }
-    let minutes = seconds / 60
-    if minutes < 60 {
-        return language == .english ? "\(minutes)m ago" : "\(minutes) 分钟前"
-    }
-    let hours = minutes / 60
-    if hours < 24 {
-        return language == .english ? "\(hours)h ago" : "\(hours) 小时前"
-    }
-    let days = hours / 24
-    return language == .english ? "\(days)d ago" : "\(days) 天前"
 }
 
 private func chatTimestampText(_ date: Date, language _: AppLanguage) -> String {
@@ -3721,6 +3080,7 @@ private func percentText(_ value: Double) -> String {
 
 struct SettingsView: View {
     @Environment(PortfolioStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var configurationSheet: SettingsConfigurationSheet?
     @State private var preparedDataImport: PreparedPortfolixDataImport?
     @State private var isImportConfirmationPresented = false
@@ -3948,12 +3308,19 @@ struct SettingsView: View {
         } message: { preparedImport in
             Text(importConfirmationMessage(preparedImport.summary))
         }
-        .alert(item: $dataTransferNotice) { notice in
-            Alert(
-                title: Text(notice.title),
-                message: Text(notice.message),
-                dismissButton: .default(Text(settingsText("完成", "Done")))
-            )
+        .alert(
+            dataTransferNotice?.title ?? "",
+            isPresented: Binding(
+                get: { dataTransferNotice != nil },
+                set: { if !$0 { dataTransferNotice = nil } }
+            ),
+            presenting: dataTransferNotice
+        ) { _ in
+            Button(settingsText("完成", "Done"), role: .cancel) {
+                dataTransferNotice = nil
+            }
+        } message: { notice in
+            Text(notice.message)
         }
     }
 
@@ -4030,7 +3397,7 @@ struct SettingsView: View {
         exportStatusResetTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                 exportStatus = .idle
             }
         }
@@ -4044,7 +3411,7 @@ struct SettingsView: View {
         importStatusResetTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                 importStatus = .idle
             }
         }
@@ -4244,6 +3611,7 @@ private enum DataTransferInlineStatus: Equatable {
 }
 
 private struct DataTransferInlineStatusView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let status: DataTransferInlineStatus
 
     var body: some View {
@@ -4270,7 +3638,7 @@ private struct DataTransferInlineStatusView: View {
         }
         .lineLimit(1)
         .frame(width: 120, height: 20, alignment: .trailing)
-        .animation(.easeOut(duration: 0.15), value: status)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: status)
         .accessibilityHidden(status == .idle)
     }
 }

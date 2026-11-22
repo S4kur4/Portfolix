@@ -467,7 +467,7 @@ private struct HeroValueTrendPlot: View {
                     yEnd: .value("Value", point.value)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(PortfolixTheme.controlSelectionFill)
+                .foregroundStyle(PortfolixTheme.brandWashStrong)
             }
 
             if let highlightedSnapshotID,
@@ -487,7 +487,10 @@ private struct HeroValueTrendPlot: View {
                     spacing: PortfolixSpacing.xs
                 ) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(point.snapshot.date.formatted(.dateTime.month().day()))
+                        Text(point.snapshot.date.formatted(
+                            Date.FormatStyle(locale: Locale(identifier: store.appLanguage == .english ? "en_US" : "zh_CN"))
+                                .month().day()
+                        ))
                             .foregroundStyle(PortfolixTheme.tertiary)
                         Text(formatMoney(Decimal(point.value), currency: store.displayCurrency))
                             .foregroundStyle(PortfolixTheme.text)
@@ -1257,12 +1260,6 @@ private struct PerformanceRiskCard: View {
         return percentageText(rate)
     }
 
-    private func currentDrawdownText(_ valueCNY: Double) -> String {
-        valueCNY == 0
-            ? formatMoney(0, currency: store.displayCurrency, maximumFractionDigits: 0)
-            : formatSignedMoney(Decimal(valueCNY * displayRate), currency: store.displayCurrency, maximumFractionDigits: 0)
-    }
-
     private func moneyText(_ valueCNY: Double) -> String {
         valueCNY == 0
             ? formatMoney(0, currency: store.displayCurrency, maximumFractionDigits: 0)
@@ -1304,14 +1301,14 @@ private struct PerformanceRiskCard: View {
         if usesMonthLabels {
             return store.appLanguage == .english
                 ? Self.englishMonthFormatter.string(from: date)
-                : date.formatted(.dateTime.month())
+                : date.formatted(Date.FormatStyle(locale: Locale(identifier: "zh_CN")).month())
         }
         return Self.shortDateFormatter.string(from: date)
     }
 
     private func axisMoneyLabel(_ value: Double) -> String {
         let symbol = store.displayCurrency.symbol
-        let sign = value < 0 ? "-" : "+"
+        let sign = value < 0 ? "-" : (value > 0 ? "+" : "")
         let magnitude = abs(value)
         if magnitude < 1_000 {
             return String(format: "%@%@%.0f", sign, symbol, magnitude)
@@ -1325,7 +1322,7 @@ private struct PerformanceRiskCard: View {
     }
 
     private func accessibilitySummary(_ summary: PerformanceRiskSummary) -> String {
-        var parts = [String(format: "%@ %@", localizedText("当前回撤", "Current drawdown", language: store.appLanguage), currentDrawdownText(summary.currentDrawdownCNY))]
+        var parts = [String(format: "%@ %@", localizedText("当前回撤", "Current drawdown", language: store.appLanguage), moneyText(summary.currentDrawdownCNY))]
         if summary.maxDrawdownDate != nil {
             parts.append(String(format: "%@ %@", localizedText("最大回撤", "Max drawdown", language: store.appLanguage), moneyText(summary.maxDrawdownCNY)))
         }
@@ -1433,6 +1430,8 @@ private struct AssetMixBarCard: View {
 }
 
 private struct AssetMixSegmentBar: View {
+    @Environment(PortfolioStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let items: [PositionShareItem]
     @Binding var highlightedItemID: PositionShareItem.ID?
 
@@ -1459,9 +1458,9 @@ private struct AssetMixSegmentBar: View {
                 updateHighlightedItem(for: phase, rectangles: rectangles)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: highlightedItemID)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: highlightedItemID)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Asset mix")
+        .accessibilityLabel(localizedText("持仓占比", "Asset mix", language: store.appLanguage))
     }
 
     private func updateHighlightedItem(for phase: HoverPhase, rectangles: [CGRect]) {
@@ -1476,6 +1475,7 @@ private struct AssetMixSegmentBar: View {
 }
 
 private struct AssetMixLegendItem: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: PositionShareItem
     let highlightedItemID: PositionShareItem.ID?
 
@@ -1497,7 +1497,7 @@ private struct AssetMixLegendItem: View {
         .font(PortfolixTypography.caption)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(highlightedItemID == nil || highlightedItemID == item.id ? 1 : 0.42)
-        .animation(.easeOut(duration: 0.16), value: highlightedItemID)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: highlightedItemID)
     }
 }
 
@@ -1814,6 +1814,7 @@ private struct PositionHeaderRow: View {
 }
 
 private struct SortablePositionHeader: View {
+    @Environment(PortfolioStore.self) private var store
     let title: String
     let field: PrimaryPositionSortField
     @Binding var selectedField: PrimaryPositionSortField
@@ -1848,8 +1849,8 @@ private struct SortablePositionHeader: View {
 
     private var accessibilitySortValue: String {
         switch direction {
-        case .ascending: "Ascending"
-        case .descending: "Descending"
+        case .ascending: localizedText("升序", "Ascending", language: store.appLanguage)
+        case .descending: localizedText("降序", "Descending", language: store.appLanguage)
         }
     }
 }
@@ -1980,18 +1981,11 @@ private struct CompactPositionRow: View {
         let name = position.name
         let category = position.category.title(language: store.appLanguage)
         let rate = position.costIsKnown ? formatPercent(position.profitRate) : "—"
-        return "\(name) \(category)，市值 \(marketValueText)，占比 \(weightText)，收益率 \(rate)，今日收益 \(todayProfitText)"
-    }
-}
-
-private extension View {
-    func positionColumn(alignment: Alignment = .leading) -> some View {
-        frame(maxWidth: .infinity, alignment: alignment)
-    }
-
-    func positionMetricColumn(width: CGFloat) -> some View {
-        frame(maxWidth: width, alignment: .trailing)
-            .frame(maxWidth: .infinity, alignment: .center)
+        return localizedText(
+            "\(name) \(category)，市值 \(marketValueText)，占比 \(weightText)，收益率 \(rate)，今日收益 \(todayProfitText)",
+            "\(name) \(category), market value \(marketValueText), weight \(weightText), return \(rate), today \(todayProfitText)",
+            language: store.appLanguage
+        )
     }
 }
 
@@ -2001,10 +1995,6 @@ private struct PositionSparkline: View {
 
     private var points: [(offset: Int, value: Double)] {
         values.enumerated().map { (offset: $0.offset, value: $0.element) }
-    }
-
-    private var color: Color {
-        PortfolixTheme.performanceColor(for: trendDelta, scheme: store.performanceColorScheme)
     }
 
     /// Keep the area visible at 28 pt and use the active performance color scheme.
@@ -2276,7 +2266,7 @@ private struct DailyProfitMonthCard: View {
 
             Button {
                 guard !isCurrentMonth else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                     selectedMonth = currentMonth
                     hoveredDate = nil
                 }
@@ -2532,11 +2522,6 @@ private struct DailyProfitMonthCard: View {
         .accessibilityLabel(chartAccessibilityLabel)
     }
 
-    private var chipColors: (positive: Color, negative: Color) {
-        (PortfolixTheme.performanceColor(for: Decimal(1), scheme: store.performanceColorScheme),
-         PortfolixTheme.performanceColor(for: Decimal(-1), scheme: store.performanceColorScheme))
-    }
-
     @ViewBuilder
     private func calendarCell(for date: Date, height: CGFloat) -> some View {
         let point = pointsByDay[date]
@@ -2674,7 +2659,7 @@ private struct DailyProfitMonthCard: View {
 
     private func moveMonth(by offset: Int) {
         guard let newMonth = calendar.date(byAdding: .month, value: offset, to: selectedMonth) else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             selectedMonth = newMonth
             hoveredDate = nil
         }
@@ -2754,7 +2739,8 @@ private struct DailyProfitMonthCard: View {
 
     /// Reuse the pale gain and loss fills from Returns & Drawdown.
     private func profitBarColor(_ amount: Decimal) -> Color {
-        let isPositive = amount >= 0
+        if amount == 0 { return PortfolixTheme.neutralWash }
+        let isPositive = amount > 0
         switch (isPositive, store.performanceColorScheme) {
         case (true, .redUpGreenDown), (false, .greenUpRedDown):
             return PortfolixTheme.lossAreaWash

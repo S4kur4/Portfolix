@@ -95,8 +95,11 @@ struct RootView: View {
                 .id(presentation.id)
                 .environment(store)
         }
-        .alert("运行提示", isPresented: persistenceErrorAlertPresented) {
-            Button("好", role: .cancel) {
+        .alert(
+            localizedText("运行提示", "Notice", language: store.appLanguage),
+            isPresented: persistenceErrorAlertPresented
+        ) {
+            Button(localizedText("好", "OK", language: store.appLanguage), role: .cancel) {
                 store.persistenceErrorMessage = nil
             }
         } message: {

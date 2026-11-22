@@ -44,7 +44,9 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieAcceptPolicy = .never
             configuration.httpShouldSetCookies = false
-            self.session = URLSession(configuration: configuration)
+            configuration.urlCredentialStorage = nil
+            configuration.urlCache = nil
+            self.session = URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
         }
     }
 
@@ -234,21 +236,24 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
         )
     }
 
-    private static func collectSourceObjects(in value: Any, into result: inout [[String: Any]]) {
+    private static let maximumJSONRecursionDepth = 12
+
+    private static func collectSourceObjects(in value: Any, into result: inout [[String: Any]], depth: Int = 0) {
+        guard depth < maximumJSONRecursionDepth else { return }
         if let dictionary = value as? [String: Any] {
             if dictionary["url"] is String { result.append(dictionary) }
-            for child in dictionary.values { collectSourceObjects(in: child, into: &result) }
+            for child in dictionary.values { collectSourceObjects(in: child, into: &result, depth: depth + 1) }
             return
         }
         if let array = value as? [Any] {
-            for child in array { collectSourceObjects(in: child, into: &result) }
+            for child in array { collectSourceObjects(in: child, into: &result, depth: depth + 1) }
             return
         }
         if let string = value as? String,
            string.utf8.count <= maximumResponseBytes,
            let data = string.data(using: .utf8),
            let decoded = try? JSONSerialization.jsonObject(with: data) {
-            collectSourceObjects(in: decoded, into: &result)
+            collectSourceObjects(in: decoded, into: &result, depth: depth + 1)
         }
     }
 

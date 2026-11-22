@@ -10,9 +10,9 @@ enum AIContextProjection {
       "that ", "continue",
     ]
     if hints.contains(where: { question.localizedCaseInsensitiveContains($0) })
-      || positions.contains { position in
+      || positions.contains(where: { position in
         [position.name, position.symbol].contains { matchesIdentity($0, in: question) }
-      }
+      })
     {
       return true
     }

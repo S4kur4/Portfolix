@@ -142,12 +142,23 @@ final class SearchProviderClient: WebSearching, @unchecked Sendable {
 
 final class TavilyClient: WebSearching, @unchecked Sendable {
     static let shared = TavilyClient()
+    static let maximumResponseBytes = 2_000_000
 
     private let endpoint = URL(string: "https://api.tavily.com/search")!
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        self.session = session ?? Self.makeDefaultSession()
+    }
+
+    static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForResource = 45
+        return URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
     }
 
     func search(
@@ -206,6 +217,9 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw TavilyClientError.invalidResponse
             }
+            guard data.count <= Self.maximumResponseBytes else {
+                throw TavilyClientError.invalidResponse
+            }
             switch httpResponse.statusCode {
             case 200:
                 let response = try JSONDecoder().decode(TavilySearchResponse.self, from: data)
@@ -245,7 +259,7 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
         let sources = response.results.prefix(8).compactMap { result -> AssetResearchSource? in
             let url = result.url.trimmingCharacters(in: .whitespacesAndNewlines)
             guard
-                let components = URLComponents(string: url),
+                let components = try? LLMBaseURLValidator.validatedComponents(from: url),
                 components.scheme?.lowercased() == "https",
                 components.host != nil,
                 !containsInstructionLikeContent("\(result.title) \(result.content)"),
@@ -281,7 +295,7 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
         let sources = response.results.prefix(10).compactMap { result -> AssetResearchSource? in
             let url = result.url.trimmingCharacters(in: .whitespacesAndNewlines)
             guard
-                let components = URLComponents(string: url),
+                let components = try? LLMBaseURLValidator.validatedComponents(from: url),
                 components.scheme?.lowercased() == "https",
                 components.host != nil,
                 !containsInstructionLikeContent("\(result.title) \(result.content)"),
@@ -410,12 +424,13 @@ enum BochaAIClientError: LocalizedError, Equatable {
 
 final class BochaAIClient: WebSearching, @unchecked Sendable {
     static let shared = BochaAIClient()
+    static let maximumResponseBytes = 2_000_000
 
     static let endpoint = URL(string: "https://api.bochaai.com/v1/web-search")!
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        self.session = session ?? TavilyClient.makeDefaultSession()
     }
 
     func search(
@@ -432,6 +447,9 @@ final class BochaAIClient: WebSearching, @unchecked Sendable {
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
+                throw BochaAIClientError.invalidResponse
+            }
+            guard data.count <= Self.maximumResponseBytes else {
                 throw BochaAIClientError.invalidResponse
             }
             switch httpResponse.statusCode {
@@ -562,5 +580,17 @@ struct TavilySearchResult: Decodable {
         case url
         case content
         case publishedDate = "published_date"
+    }
+}
+
+final class WebSearchRedirectBlockingDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

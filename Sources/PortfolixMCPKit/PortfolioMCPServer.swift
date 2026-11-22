@@ -156,13 +156,18 @@ public final class PortfolioMCPServer {
             guard let json = $0["payload_json"] else { throw MCPFailure.invalidData }
             return try JSONDecoder().decode(RecordedReconciliation.self, from: Data(json.utf8))
         }
-        result["history_complete"] = reconciliations.isEmpty ? "no_known_reconciliation_gaps" : "incomplete_before_checkpoints"
-        func maskCost(_ row: [String: String], asset: Bool = false) throws -> [String: String] {
+        let hasActiveReconciliations = reconciliations.contains { $0.reversedAt == nil }
+        result["history_complete"] = hasActiveReconciliations ? "incomplete_before_checkpoints" : "no_known_reconciliation_gaps"
+        func maskCost(_ row: [String: String], asset: Bool = false, snapshotAssetIDsByDay: [String: Set<String>]? = nil) throws -> [String: String] {
             var row = row
             let ids: Set<String>?
             if asset || reconciliations.isEmpty { ids = nil }
             else if let day = row["snapshot_date"] {
-                ids = Set(try database.query("SELECT asset_id FROM asset_price_snapshots WHERE snapshot_date = ?", [day]).compactMap { $0["asset_id"] })
+                if let snapshotAssetIDsByDay {
+                    ids = snapshotAssetIDsByDay[day] ?? []
+                } else {
+                    ids = Set(try database.query("SELECT asset_id FROM asset_price_snapshots WHERE snapshot_date = ?", [day]).compactMap { $0["asset_id"] })
+                }
             } else { ids = Set(try database.query("SELECT asset_id FROM positions").compactMap { $0["asset_id"] }) }
             let known = RecordedReconciliation.costKnown(reconciliations, assetID: asset ? row["asset_id"] : nil, assetIDs: ids, through: row["snapshot_date"] ?? "9999-12-31")
             row["cost_status"] = known ? "known" : "unknown"
@@ -238,7 +243,20 @@ public final class PortfolioMCPServer {
         result["end_date"] = end
         if name == "get_portfolio_history" {
             result["currency"] = "CNY"
-            result["snapshots"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date", [start, end], limit: 366).map { try maskCost($0) }
+            var snapshotAssetIDsByDay: [String: Set<String>]? = nil
+            if !reconciliations.isEmpty {
+                var map: [String: Set<String>] = [:]
+                try database.forEachRow(
+                    "SELECT snapshot_date, asset_id FROM asset_price_snapshots WHERE snapshot_date BETWEEN ? AND ?",
+                    [start, end]
+                ) { row in
+                    if let day = row["snapshot_date"], let assetID = row["asset_id"] {
+                        map[day, default: []].insert(assetID)
+                    }
+                }
+                snapshotAssetIDsByDay = map
+            }
+            result["snapshots"] = try database.query("SELECT snapshot_date, total_value_cny, total_cost_cny, total_profit_cny, profit_rate, updated_at FROM portfolio_snapshots WHERE snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date", [start, end], limit: 366).map { try maskCost($0, snapshotAssetIDsByDay: snapshotAssetIDsByDay) }
         } else if name == "get_asset_price_history" {
             guard let asset = arguments["asset_id"] as? String, let id = UUID(uuidString: asset) else { throw MCPFailure.invalidArguments }
             result["snapshots"] = try database.query("""

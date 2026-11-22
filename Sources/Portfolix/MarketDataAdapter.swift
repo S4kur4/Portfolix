@@ -1,4 +1,5 @@
 import Foundation
+import PortfolixCore
 
 struct AssetLookupCandidate: Identifiable, Hashable, Sendable {
     let name: String
@@ -594,8 +595,7 @@ actor NativeMarketDataAdapter: AssetMarketDataProviding {
     }
 
     private static func normalizedUSSymbol(_ value: String) -> String {
-        let symbol = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        return symbol.contains(".") ? String(symbol.split(separator: ".").last ?? Substring(symbol)) : symbol
+        USSymbolNormalizer.normalize(value)
     }
 
     private static func displaySymbol(_ value: String, category: AssetCategory) -> String {
@@ -933,6 +933,10 @@ private enum EastmoneyFlexibleNumber: Decodable {
         let container = try decoder.singleValueContainer()
         if let intValue = try? container.decode(Int.self) {
             self = .decimal(Decimal(intValue))
+            return
+        }
+        if let decimalValue = try? container.decode(Decimal.self), !decimalValue.isNaN {
+            self = .decimal(decimalValue)
             return
         }
         if let doubleValue = try? container.decode(Double.self), doubleValue.isFinite {

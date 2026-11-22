@@ -227,7 +227,7 @@ struct ThemeTests {
     func tonalStatusTextHasSufficientContrast(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         appearance.performAsCurrentDrawingAppearance {
-            let panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)!
+            let surface = NSColor(PortfolixTheme.surface).usingColorSpace(.sRGB)!
             let pairs: [(Color, Color)] = [
                 (PortfolixTheme.gainText, PortfolixTheme.gainWash1),
                 (PortfolixTheme.lossText, PortfolixTheme.lossWash1),
@@ -235,11 +235,11 @@ struct ThemeTests {
                 (PortfolixTheme.text, PortfolixTheme.surface),
             ]
             for (text, fill) in pairs {
-                let background = blend(NSColor(fill).usingColorSpace(.sRGB)!, over: panel, alpha: 1)
+                let background = blend(NSColor(fill).usingColorSpace(.sRGB)!, over: surface, alpha: 1)
                 #expect(contrast(NSColor(text).usingColorSpace(.sRGB)!, background) >= 4.5)
             }
             #expect(NSColor(PortfolixTheme.performanceStatusText(for: 0)).usingColorSpace(.sRGB)
-                == NSColor(PortfolixTheme.secondaryText).usingColorSpace(.sRGB))
+                == NSColor(PortfolixTheme.secondary).usingColorSpace(.sRGB))
         }
     }
 
@@ -249,18 +249,18 @@ struct ThemeTests {
         appearance.performAsCurrentDrawingAppearance {
             func resolved(_ color: Color) -> NSColor? { NSColor(color).usingColorSpace(.sRGB) }
             for scheme in PerformanceColorScheme.allCases {
-                let gain = scheme == .greenUpRedDown ? PortfolixTheme.mint : PortfolixTheme.danger
-                let loss = scheme == .greenUpRedDown ? PortfolixTheme.danger : PortfolixTheme.mint
-                let gainText = scheme == .greenUpRedDown ? PortfolixTheme.positiveStatusText : PortfolixTheme.negativeStatusText
-                let lossText = scheme == .greenUpRedDown ? PortfolixTheme.negativeStatusText : PortfolixTheme.positiveStatusText
+                let gain = scheme == .greenUpRedDown ? PortfolixTheme.gainFill : PortfolixTheme.lossFill
+                let loss = scheme == .greenUpRedDown ? PortfolixTheme.lossFill : PortfolixTheme.gainFill
+                let gainText = scheme == .greenUpRedDown ? PortfolixTheme.gainText : PortfolixTheme.lossText
+                let lossText = scheme == .greenUpRedDown ? PortfolixTheme.lossText : PortfolixTheme.gainText
                 #expect(resolved(PortfolixTheme.performanceColor(for: Decimal(1), scheme: scheme)) == resolved(gain))
                 #expect(resolved(PortfolixTheme.performanceColor(for: Double(1), scheme: scheme)) == resolved(gain))
                 #expect(resolved(PortfolixTheme.performanceColor(for: Decimal(-1), scheme: scheme)) == resolved(loss))
                 #expect(resolved(PortfolixTheme.performanceColor(for: Double(-1), scheme: scheme)) == resolved(loss))
                 #expect(resolved(PortfolixTheme.performanceStatusText(for: 1, scheme: scheme)) == resolved(gainText))
                 #expect(resolved(PortfolixTheme.performanceStatusText(for: -1, scheme: scheme)) == resolved(lossText))
-                #expect(resolved(PortfolixTheme.performanceColor(for: Decimal(0), scheme: scheme)) == resolved(PortfolixTheme.secondaryText))
-                #expect(resolved(PortfolixTheme.performanceColor(for: Double(0), scheme: scheme)) == resolved(PortfolixTheme.secondaryText))
+                #expect(resolved(PortfolixTheme.performanceColor(for: Decimal(0), scheme: scheme)) == resolved(PortfolixTheme.secondary))
+                #expect(resolved(PortfolixTheme.performanceColor(for: Double(0), scheme: scheme)) == resolved(PortfolixTheme.secondary))
                 #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: 1, scheme: scheme)) == resolved(PortfolixTheme.performanceWash(for: 1, scheme: scheme)))
                 #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: -1, scheme: scheme)) == resolved(PortfolixTheme.performanceWash(for: -1, scheme: scheme)))
                 #expect(resolved(PortfolixTheme.dailyProfitTileFill(for: nil, scheme: scheme)) == resolved(PortfolixTheme.neutralWash))
@@ -349,8 +349,8 @@ struct ThemeTests {
     func nativeControlsShareTheExistingAccent(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         appearance.performAsCurrentDrawingAppearance {
-            #expect(NSColor(PortfolixTheme.controlAccent).usingColorSpace(.sRGB)
-                == NSColor(PortfolixTheme.violet).usingColorSpace(.sRGB))
+            #expect(NSColor(PortfolixTheme.brandFocus).usingColorSpace(.sRGB)
+                == NSColor(PortfolixTheme.brandChart).usingColorSpace(.sRGB))
         }
     }
 
@@ -467,7 +467,7 @@ struct ThemeTests {
         var panel: NSColor?
         var canvas: NSColor?
         appearance.performAsCurrentDrawingAppearance {
-            panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)
+            panel = NSColor(PortfolixTheme.surface).usingColorSpace(.sRGB)
             canvas = NSColor(PortfolixTheme.canvas).usingColorSpace(.sRGB)
         }
         let surface = try #require(panel)
@@ -481,8 +481,8 @@ struct ThemeTests {
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
     func largeSurfacesUseOpaqueNeutralGrays(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
-        let colors = [PortfolixTheme.canvas, PortfolixTheme.sidebar, PortfolixTheme.panel,
-                      PortfolixTheme.panelElevated, PortfolixTheme.panelSoft]
+        let colors = [PortfolixTheme.canvas, PortfolixTheme.surface,
+                      PortfolixTheme.raised, PortfolixTheme.soft]
         appearance.performAsCurrentDrawingAppearance {
             for surface in colors {
                 let color = NSColor(surface).usingColorSpace(.sRGB)!
@@ -491,7 +491,7 @@ struct ThemeTests {
                 #expect(color.alphaComponent == 1)
             }
             let canvas = NSColor(PortfolixTheme.canvas).usingColorSpace(.sRGB)!
-            let panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)!
+            let panel = NSColor(PortfolixTheme.surface).usingColorSpace(.sRGB)!
             let dark = appearanceName == .darkAqua
             #expect(canvas == NSColor(hex: dark ? 0x0A090D : 0xEFEDF2).usingColorSpace(.sRGB))
             #expect(panel == NSColor(hex: dark ? 0x121016 : 0xF7F5FA).usingColorSpace(.sRGB))
@@ -524,8 +524,8 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: appearanceName))
         var environment = EnvironmentValues()
         let styles = [
-            PositionTableForeground(color: PortfolixTheme.primaryText),
-            PositionTableForeground(color: PortfolixTheme.secondaryText, selectedOpacity: 0.74),
+            PositionTableForeground(color: PortfolixTheme.text),
+            PositionTableForeground(color: PortfolixTheme.secondary, selectedOpacity: 0.74),
             PositionTableForeground(color: PortfolixTheme.performanceColor(for: Decimal(-1))),
             PositionTableForeground(color: PortfolixTheme.performanceColor(for: Decimal(0))),
             PositionTableForeground(color: PortfolixTheme.performanceColor(for: Decimal(1))),
@@ -579,24 +579,22 @@ struct ThemeTests {
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
     func sidebarUsesTheSameBaseColorAsCards(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
-        var tint: NSColor?
-        var panel: NSColor?
+        var resolved: NSColor?
         appearance.performAsCurrentDrawingAppearance {
-            tint = NSColor(PortfolixTheme.sidebar).usingColorSpace(.sRGB)
-            panel = NSColor(PortfolixTheme.panel).usingColorSpace(.sRGB)
+            resolved = NSColor(PortfolixTheme.surface).usingColorSpace(.sRGB)
         }
-        let color = try #require(tint)
-        let background = try #require(panel)
-        #expect(color == background)
+        let color = try #require(resolved)
+        let dark = appearanceName == .darkAqua
+        #expect(color == NSColor(hex: dark ? 0x121016 : 0xF7F5FA).usingColorSpace(.sRGB))
     }
 
     @Test
     func lightPrimaryButtonsUseBrandSolidAndInk() throws {
         let appearance = try #require(NSAppearance(named: .aqua))
         appearance.performAsCurrentDrawingAppearance {
-            #expect(NSColor(PortfolixTheme.primaryButtonTint).usingColorSpace(.sRGB)
+            #expect(NSColor(PortfolixTheme.brandSolid).usingColorSpace(.sRGB)
                 == NSColor(hex: 0x654BC8).usingColorSpace(.sRGB))
-            #expect(NSColor(PortfolixTheme.primaryButtonText).usingColorSpace(.sRGB)
+            #expect(NSColor(PortfolixTheme.brandSolidInk).usingColorSpace(.sRGB)
                 == NSColor(hex: 0xFFFFFF).usingColorSpace(.sRGB))
         }
     }
@@ -605,9 +603,9 @@ struct ThemeTests {
     func darkPrimaryButtonsUseBrandSolidAndInk() throws {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
-            #expect(NSColor(PortfolixTheme.primaryButtonTint).usingColorSpace(.sRGB)
+            #expect(NSColor(PortfolixTheme.brandSolid).usingColorSpace(.sRGB)
                 == NSColor(hex: 0xB7A5FF).usingColorSpace(.sRGB))
-            #expect(NSColor(PortfolixTheme.primaryButtonText).usingColorSpace(.sRGB)
+            #expect(NSColor(PortfolixTheme.brandSolidInk).usingColorSpace(.sRGB)
                 == NSColor(hex: 0x1A1428).usingColorSpace(.sRGB))
         }
     }
@@ -626,8 +624,8 @@ struct ThemeTests {
                     + 0.7152 * linear(color.greenComponent)
                     + 0.0722 * linear(color.blueComponent)
             }
-            let foreground = luminance(PortfolixTheme.primaryButtonText)
-            let background = luminance(PortfolixTheme.primaryButtonTint)
+            let foreground = luminance(PortfolixTheme.brandSolidInk)
+            let background = luminance(PortfolixTheme.brandSolid)
             contrast = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
         }
         #expect(contrast >= 4.5)
@@ -757,7 +755,7 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: appearanceName))
         var color: NSColor?
         appearance.performAsCurrentDrawingAppearance {
-            color = NSColor(PortfolixTheme.controlSelectionFill).usingColorSpace(.sRGB)
+            color = NSColor(PortfolixTheme.brandWashStrong).usingColorSpace(.sRGB)
         }
         let resolved = try #require(color)
         #expect(resolved.blueComponent > resolved.redComponent)

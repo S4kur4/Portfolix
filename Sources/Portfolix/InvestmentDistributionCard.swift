@@ -9,19 +9,25 @@ struct InvestmentCloudCard: View {
     var body: some View {
         @Bindable var store = store
 
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            Panel {
-                VStack(alignment: .leading, spacing: 0) {
-                    InvestmentCloudHeader(
-                        mode: $store.investmentCloudMode, language: store.appLanguage,
-                        helpText: store.investmentDistributionHelpText,
-                        isUpdating: mode == .distribution && store.isUpdatingInvestmentDistribution
-                    )
-                    content(asOf: context.date)
-                        .padding(.top, PortfolixSpacing.sm)
+        Panel {
+            VStack(alignment: .leading, spacing: 0) {
+                InvestmentCloudHeader(
+                    mode: $store.investmentCloudMode, language: store.appLanguage,
+                    helpText: store.investmentDistributionHelpText,
+                    isUpdating: mode == .distribution && store.isUpdatingInvestmentDistribution
+                )
+                Group {
+                    if mode == .dailyProfit {
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            content(asOf: context.date)
+                        }
+                    } else {
+                        content(asOf: .now)
+                    }
                 }
-                .frame(height: contentHeight, alignment: .topLeading)
+                .padding(.top, PortfolixSpacing.sm)
             }
+            .frame(height: contentHeight, alignment: .topLeading)
         }
         .task(id: mode == .distribution ? store.investmentDistributionRefreshID : "daily_profit") {
             if mode == .distribution { store.refreshInvestmentDistributionIfNeeded() }
@@ -488,13 +494,21 @@ struct InvestmentCloudTreemap: View {
 
     func amountLabelText(_ item: InvestmentCloudItem, rect: CGRect) -> String {
         let full = amountText(item)
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         if (full as NSString).size(withAttributes: [.font: font]).width <= rect.width - 16 { return full }
-        let number = (item.amountCNY * currency.rateFromCNY).doubleValue.formatted(
+        let converted = (item.amountCNY * currency.rateFromCNY).doubleValue
+        let number = abs(converted).formatted(
             .number.notation(.compactName).precision(.fractionLength(0...2))
                 .locale(Locale(identifier: language == .chinese ? "zh_CN" : "en_US"))
         )
-        let sign = item.mode == .dailyProfit && item.amountCNY > 0 ? "+" : ""
+        let sign: String
+        if converted < 0 {
+            sign = "-"
+        } else if item.mode == .dailyProfit && item.amountCNY > 0 {
+            sign = "+"
+        } else {
+            sign = ""
+        }
         return "\(sign)\(currency.symbol)\(number)"
     }
 

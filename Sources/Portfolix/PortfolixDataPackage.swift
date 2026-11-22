@@ -343,6 +343,12 @@ enum PortfolixDataPackageService {
     }
 
     static func prepareImport(from sourceURL: URL) throws -> PreparedPortfolixDataImport {
+        let scopedAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if scopedAccess {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
         let resourceValues = try sourceURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         guard resourceValues.isRegularFile == true else {
             throw PortfolixDataPackageError.invalidPackage("请选择有效的数据包文件")
@@ -351,12 +357,6 @@ enum PortfolixDataPackageService {
             throw PortfolixDataPackageError.fileTooLarge
         }
 
-        let scopedAccess = sourceURL.startAccessingSecurityScopedResource()
-        defer {
-            if scopedAccess {
-                sourceURL.stopAccessingSecurityScopedResource()
-            }
-        }
         let archiveData = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
         guard archiveData.count <= maximumFileSize else {
             throw PortfolixDataPackageError.fileTooLarge

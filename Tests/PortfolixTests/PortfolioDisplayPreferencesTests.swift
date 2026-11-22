@@ -23,8 +23,6 @@ struct PortfolioDisplayPreferencesTests {
         store.dailyProfitDisplayMode = .chart
         store.primaryPositionSortField = .profitRate
         store.primaryPositionSortDirection = .ascending
-        store.trendMetric = .profitRate
-        store.trendRange = .year
         store.performanceRiskRange = .quarter
         store.displayCurrency = .usd
         store.appearanceMode = .dark
@@ -44,8 +42,6 @@ struct PortfolioDisplayPreferencesTests {
         #expect(restored.dailyProfitDisplayMode == .chart)
         #expect(restored.primaryPositionSortField == .profitRate)
         #expect(restored.primaryPositionSortDirection == .ascending)
-        #expect(restored.trendMetric == .profitRate)
-        #expect(restored.trendRange == .year)
         #expect(restored.performanceRiskRange == .quarter)
         #expect(restored.displayCurrency == .usd)
         #expect(restored.appearanceMode == .dark)
@@ -76,14 +72,6 @@ struct PortfolioDisplayPreferencesTests {
         for scheme in PerformanceColorScheme.allCases {
             store.performanceColorScheme = scheme
             #expect(PortfolioStore(positionRepository: repository).performanceColorScheme == scheme)
-        }
-        for metric in TrendMetric.allCases {
-            store.trendMetric = metric
-            #expect(PortfolioStore(positionRepository: repository).trendMetric == metric)
-        }
-        for range in TrendRange.allCases {
-            store.trendRange = range
-            #expect(PortfolioStore(positionRepository: repository).trendRange == range)
         }
         for range in PerformanceRiskRange.allCases {
             store.performanceRiskRange = range
@@ -121,8 +109,6 @@ struct PortfolioDisplayPreferencesTests {
         #expect(store.dailyProfitDisplayMode == .calendar)
         #expect(store.primaryPositionSortField == .marketValue)
         #expect(store.primaryPositionSortDirection == .descending)
-        #expect(store.trendMetric == .profitValue)
-        #expect(store.trendRange == .month)
         #expect(store.performanceRiskRange == .month)
         #expect(store.displayCurrency == .cny)
         #expect(store.appearanceMode == .system)

@@ -172,7 +172,7 @@ enum AIPortfolioDataToolExecutor {
       "status": "ok", "as_of": asOf, "source": "local_portfolix_records", "read_only": true,
     ]
     let knownCost = positions.allSatisfy(\.costIsKnown)
-    result["history_complete"] = snapshot.reconciliations.isEmpty
+    result["history_complete"] = !snapshot.reconciliations.contains { !$0.isReversed }
     switch request.tool {
     case .summary:
       let value = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }

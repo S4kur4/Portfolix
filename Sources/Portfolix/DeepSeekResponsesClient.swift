@@ -94,8 +94,17 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
     private let session: URLSession
     private let maximumResponseBytes = 8 * 1024 * 1024
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpShouldSetCookies = false
+            configuration.httpCookieAcceptPolicy = .never
+            configuration.urlCredentialStorage = nil
+            configuration.urlCache = nil
+            self.session = URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
+        }
     }
 
     func completeJSON(

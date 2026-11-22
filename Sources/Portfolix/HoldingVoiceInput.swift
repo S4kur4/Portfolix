@@ -75,6 +75,7 @@ final class HoldingVoiceRecorder: ObservableObject {
     @Published var errorMessage: String?
     private var monitor: Any?
     private var resignObserver: NSObjectProtocol?
+    private var activeShortcut: VoiceInputShortcut?
     private var engine: AVAudioEngine?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognition: SFSpeechRecognitionTask?
@@ -105,7 +106,18 @@ final class HoldingVoiceRecorder: ObservableObject {
         self.numeric = numeric
         self.english = english
         self.commit = commit
-        guard monitor == nil else { return }
+        if resignObserver != nil, activeShortcut == shortcut {
+            return
+        }
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+        if let resignObserver {
+            NotificationCenter.default.removeObserver(resignObserver)
+            self.resignObserver = nil
+        }
+        activeShortcut = shortcut
 
         switch shortcut {
         case .functionModifier:
@@ -139,6 +151,7 @@ final class HoldingVoiceRecorder: ObservableObject {
     func blur() {
         cancel()
         commit = nil
+        activeShortcut = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
@@ -284,6 +297,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         do {
             engine.prepare()
             try engine.start()
+            isFinishing = false
             prepareWaveformSampling()
             isRecording = true
             scheduleRecordingTimeout(id: id)

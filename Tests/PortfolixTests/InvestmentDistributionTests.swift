@@ -442,7 +442,7 @@ struct InvestmentDistributionTests {
         let content = InvestmentCloudTreemap(items: items, currency: .cny, language: .chinese)
             .frame(width: 380, height: 236)
             .padding(16)
-            .background(PortfolixTheme.panel)
+            .background(PortfolixTheme.surface)
             .environment(\.colorScheme, scheme)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2
@@ -538,7 +538,7 @@ struct InvestmentDistributionTests {
             )
             .frame(width: width)
             .padding(16)
-            .background(PortfolixTheme.panel)
+            .background(PortfolixTheme.surface)
             let renderer = ImageRenderer(content: content)
             renderer.scale = 2
             let image = try #require(renderer.cgImage)
@@ -630,7 +630,7 @@ struct InvestmentDistributionTests {
         #expect(view.amountLabelText(items[1], rect: rect).contains("-"))
         #expect(!view.shouldShowHover(item: items[0], rect: rect))
         let content = view.frame(width: 300, height: 236).padding(16)
-            .background(PortfolixTheme.panel).environment(\.colorScheme, scheme)
+            .background(PortfolixTheme.surface).environment(\.colorScheme, scheme)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2
         let image = try #require(renderer.cgImage)

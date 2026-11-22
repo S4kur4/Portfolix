@@ -18,11 +18,17 @@ struct PortfolixDateTimePicker: View {
         return result
     }
 
-    private var dateText: String {
+    @MainActor
+    private static let sharedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy/MM/dd"
+        return formatter
+    }()
+
+    private var dateText: String {
+        let formatter = Self.sharedDateFormatter
+        formatter.timeZone = timeZone
         return formatter.string(from: selection)
     }
 

@@ -115,38 +115,8 @@ enum PortfolixTheme {
     static let lossAreaWash = adaptive(light: 0xE58A96, dark: 0x7C3F4A)
     static let gainAreaWash = adaptive(light: 0xA8CBC3, dark: 0x3E615D)
 
-    // MARK: Legacy token aliases
-    // Keep existing callers compiling during migration. Use semantic tokens in new code.
-    static let sidebar = surface
-    static let panel = surface
-    static let panelElevated = raised
-    static let panelSoft = soft
-    static let selectionFill = brandWash
-    static let selectionText = brandWashText
-    static let controlSelectionFill = brandWashStrong
-    static let primaryText = text
-    static let secondaryText = secondary
-    static let tertiaryText = tertiary
-    static let disabledText = disabled
-    static let glassControlText = text
-    static let lilac = brandText
-    static let violet = brandFocus
-    static let blue = classStockFill
-    static let rose = classOtherFill
-    static let amber = warnFill
-    static let mint = gainFill
-    static let danger = lossFill
-    static let positiveStatusText = gainText
-    static let negativeStatusText = lossText
-    static let warningStatusText = warnText
-    static let controlAccent = brandFocus
-    static let primaryButtonTint = brandSolid
-    static let primaryButtonText = brandSolidInk
+    // MARK: Glass button shadow
     static let buttonShadow = Color.black.opacity(0.12)
-    static let userMessageText = brandBubbleInk
-    static let userMessageGradient = brandBubbleGradient
-    static let userMessageGradientColors: [Color] = [brandBubbleStart, brandBubbleEnd]
-    static let purpleGradient = brandGradient
 
     // MARK: Performance color mapping (Fill for graphics, Text for compact labels)
     static func performanceColor(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
@@ -295,9 +265,6 @@ enum PortfolixLayout {
     static let chatComposerHorizontalInset: CGFloat = PortfolixSpacing.lg
     static let controlSpacing: CGFloat = PortfolixSpacing.sm
     static let controlSelectionInset: CGFloat = 2
-    static let distributionContentHeight: CGFloat = 180
-    static let reportSummaryContentHeight: CGFloat = 144
-    static let riskProfileSummaryContentHeight: CGFloat = 104
 }
 
 /// Shared type roles keep text sizes and weights consistent across views.
@@ -494,7 +461,7 @@ private struct PortfolixGlassControlSurface: ViewModifier {
                             ButtonGlassBackground(tint: nil)
                         } else {
                             shape.fill(.regularMaterial)
-                                .overlay { shape.fill(PortfolixTheme.panelSoft.opacity(0.48)) }
+                                .overlay { shape.fill(PortfolixTheme.soft.opacity(0.48)) }
                         }
                     }
                     .clipShape(shape)
@@ -502,7 +469,7 @@ private struct PortfolixGlassControlSurface: ViewModifier {
                     .allowsHitTesting(false)
                 }
             } else {
-                label.portfolixGlass(in: shape, fallbackTint: PortfolixTheme.panelSoft,
+                label.portfolixGlass(in: shape, fallbackTint: PortfolixTheme.soft,
                     fallbackOpacity: 0.48, interactive: true)
             }
         }
@@ -895,39 +862,6 @@ struct RelativeTimeText: View {
     }
 }
 
-struct StatusBadge: View {
-    let freshness: Freshness
-    var isSelected = false
-
-    private var badgeForeground: Color {
-        if isSelected { return PortfolixTheme.brandWashText }
-        switch freshness {
-        case .updated: return PortfolixTheme.secondary
-        case .stale: return PortfolixTheme.warnText
-        case .manual: return PortfolixTheme.secondary
-        }
-    }
-
-    private var badgeBackground: Color {
-        if isSelected { return PortfolixTheme.brandWash }
-        switch freshness {
-        case .stale: return PortfolixTheme.warnWash1
-        default: return PortfolixTheme.neutralWash
-        }
-    }
-
-    var body: some View {
-        Label(freshness.rawValue, systemImage: freshness.symbol)
-            .font(PortfolixTypography.captionEmphasis)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(badgeForeground)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(badgeBackground, in: Capsule())
-    }
-}
-
 struct CapsuleLabel: View {
     let title: String
     let color: Color
@@ -1014,11 +948,11 @@ private struct InteractiveButtonLabel: View {
             .background {
                 Group {
                     if #available(macOS 26.0, *) {
-                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.primaryButtonTint : nil, cornerRadius: cornerRadius)
+                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.brandSolid : nil, cornerRadius: cornerRadius)
                             .overlay {
                                 if isPrimary && isEnabled {
                                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                        .fill(PortfolixTheme.primaryButtonTint.opacity(0.45))
+                                        .fill(PortfolixTheme.brandSolid.opacity(0.45))
                                 }
                             }
                     } else {
@@ -1027,8 +961,8 @@ private struct InteractiveButtonLabel: View {
                             .overlay {
                                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                                     .fill(isPrimary && isEnabled
-                                        ? PortfolixTheme.primaryButtonTint.opacity(0.88)
-                                        : PortfolixTheme.panelSoft.opacity(0.48))
+                                        ? PortfolixTheme.brandSolid.opacity(0.88)
+                                        : PortfolixTheme.soft.opacity(0.48))
                             }
                     }
                 }
@@ -1047,7 +981,44 @@ private struct InteractiveButtonLabel: View {
     private var foregroundColor: Color {
         if !isEnabled { return PortfolixTheme.disabled }
         if configuration.role == .destructive { return PortfolixTheme.lossFill }
-        return isPrimary ? PortfolixTheme.primaryButtonText : PortfolixTheme.text
+        return isPrimary ? PortfolixTheme.brandSolidInk : PortfolixTheme.text
+    }
+}
+
+private enum PortfolixNumberFormatters {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var decimalFormatters: [String: NumberFormatter] = [:]
+    private static let percentFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    static func decimal(_ value: Decimal, minFraction: Int, maxFraction: Int) -> String {
+        let key = "\(minFraction)-\(maxFraction)"
+        return lock.withLock {
+            let formatter: NumberFormatter
+            if let cached = decimalFormatters[key] {
+                formatter = cached
+            } else {
+                let created = NumberFormatter()
+                created.numberStyle = .decimal
+                created.minimumFractionDigits = minFraction
+                created.maximumFractionDigits = maxFraction
+                created.groupingSeparator = ","
+                decimalFormatters[key] = created
+                formatter = created
+            }
+            return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00"
+        }
+    }
+
+    static func percent(_ value: Decimal) -> String {
+        lock.withLock {
+            percentFormatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00"
+        }
     }
 }
 
@@ -1059,12 +1030,9 @@ func formatUnitCost(_ value: Decimal, currency: DisplayCurrency) -> String {
     if value != 0, abs(value) < Decimal(string: "0.00000001")! {
         return formatMoney(value, currency: currency)
     }
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .decimal
-    formatter.minimumFractionDigits = 2
-    formatter.maximumFractionDigits = abs(value) < 0.01 ? 8 : 6
-    formatter.groupingSeparator = ","
-    return "\(currency.symbol)\(formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00")"
+    let maxDigits = abs(value) < 0.01 ? 8 : 6
+    let formatted = PortfolixNumberFormatters.decimal(value, minFraction: 2, maxFraction: maxDigits)
+    return "\(currency.symbol)\(formatted)"
 }
 
 func formatHeroMoney(_ value: Decimal, currency: DisplayCurrency, maximumFractionDigits: Int = 2) -> String {
@@ -1087,12 +1055,10 @@ private func formattedMoney(
     let usesAdaptivePrecision = maximumFractionDigits == 2
         && absoluteValue > 0
         && absoluteValue < 0.01
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .decimal
-    formatter.maximumFractionDigits = usesAdaptivePrecision ? 8 : maximumFractionDigits
-    formatter.minimumFractionDigits = usesAdaptivePrecision ? 2 : maximumFractionDigits
-    formatter.groupingSeparator = ","
-    return "\(currency.symbol)\(separator)\(formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00")"
+    let minDigits = usesAdaptivePrecision ? 2 : maximumFractionDigits
+    let maxDigits = usesAdaptivePrecision ? 8 : maximumFractionDigits
+    let formatted = PortfolixNumberFormatters.decimal(value, minFraction: minDigits, maxFraction: maxDigits)
+    return "\(currency.symbol)\(separator)\(formatted)"
 }
 
 func formatSignedMoney(_ value: Decimal, currency: DisplayCurrency, maximumFractionDigits: Int = 2) -> String {
@@ -1102,9 +1068,5 @@ func formatSignedMoney(_ value: Decimal, currency: DisplayCurrency, maximumFract
 
 func formatPercent(_ value: Decimal) -> String {
     let prefix = value >= 0 ? "+" : ""
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .decimal
-    formatter.minimumFractionDigits = 2
-    formatter.maximumFractionDigits = 2
-    return "\(prefix)\(formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0.00")%"
+    return "\(prefix)\(PortfolixNumberFormatters.percent(value))%"
 }

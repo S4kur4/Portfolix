@@ -188,7 +188,9 @@ struct PositionTradeDetailSheet: View {
             }.portfolixSheetForm()
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
-                Button(text("撤销记录", "Reverse Record")) { confirmsReversal = true }.buttonStyle(QuietButtonStyle())
+                Button(text("撤销记录", "Reverse Record")) { confirmsReversal = true }
+                    .buttonStyle(QuietButtonStyle())
+                    .disabled(!PositionTransactionRow(record).canReverse())
                 Button(text("完成", "Done")) { dismiss() }.buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.cancelAction)
             }
         }.frame(width: 580, height: 620)

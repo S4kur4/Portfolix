@@ -1023,7 +1023,7 @@ struct AIAnalysisAgent: Sendable {
         let query = asksForLastSession
             ? "昨晚 美股 三大指数 收盘 行情 纳斯达克 标普500 道琼斯 财经新闻"
             : "最新 美股市场 新闻 三大指数 纳斯达克 标普500 道琼斯 科技股"
-        return String(query.prefix(180))
+        return String(query.prefix(128))
     }
 
     private static func followUpSearchCandidates(
@@ -1124,7 +1124,7 @@ struct AIAnalysisAgent: Sendable {
         let cleaned = query
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(cleaned.prefix(180))
+        return String(cleaned.prefix(128))
     }
 
     fileprivate func makeToolPlan(
@@ -1403,20 +1403,24 @@ struct AIAnalysisAgent: Sendable {
                 let ref = "position_\(position.id.uuidString)"
                 let performance = context.positionPerformance[position.id]
                     ?? unavailablePerformance(for: position, generatedAt: generatedAt)
+                let costIsKnown = position.costIsKnown
                 return AIPositionContext(
                     positionRef: ref,
                     displayLabel: position.name,
                     symbol: position.symbol,
                     assetType: position.category.aiCode,
                     quoteCurrency: position.quoteCurrency.rawValue,
+                    costStatus: costIsKnown ? "known" : "unknown",
                     quantity: decimalString(position.quantity),
-                    averageCost: decimalString(position.averageCost),
+                    averageCost: costIsKnown ? decimalString(position.averageCost) : nil,
                     latestPrice: decimalString(position.latestPrice),
-                    totalCostQuote: decimalString(position.totalCost),
+                    totalCostQuote: costIsKnown ? decimalString(position.totalCost) : nil,
                     marketValueCNY: decimalString(position.marketValueCNY),
-                    unrealizedProfitQuote: decimalString((position.latestPrice - position.averageCost) * position.quantity),
+                    unrealizedProfitQuote: costIsKnown
+                        ? decimalString((position.latestPrice - position.averageCost) * position.quantity)
+                        : nil,
                     allocationPct: allocationPercent(position.marketValueCNY.doubleValue, totalValue: totalValue),
-                    unrealizedProfitRatePct: position.profitRate.doubleValue,
+                    unrealizedProfitRatePct: costIsKnown ? position.profitRate.doubleValue : nil,
                     oneWeek: performance.oneWeek,
                     oneMonth: performance.oneMonth,
                     isStale: position.freshness == .stale,
@@ -1425,6 +1429,7 @@ struct AIAnalysisAgent: Sendable {
                     source: position.source
                 )
             }
+        let allCostsKnown = positions.allSatisfy(\.costIsKnown)
         let riskFlags = riskFlags(from: evaluation, positions: positionContexts)
         return AIAnalysisInput(
             trigger: trigger.rawValue,
@@ -1436,8 +1441,10 @@ struct AIAnalysisAgent: Sendable {
                 displayCurrency: context.displayCurrency.rawValue,
                 generatedAt: ISO8601DateFormatter().string(from: generatedAt),
                 totalValueText: formatMoney(context.convertedTotalValue, currency: context.displayCurrency),
-                holdingReturnText: formatSignedMoney(context.convertedTotalProfit, currency: context.displayCurrency),
-                holdingReturnRateText: formatPercent(context.totalProfitRate)
+                holdingReturnText: allCostsKnown
+                    ? formatSignedMoney(context.convertedTotalProfit, currency: context.displayCurrency)
+                    : "—",
+                holdingReturnRateText: allCostsKnown ? formatPercent(context.totalProfitRate) : "—"
             ),
             privacyMode: "include_asset_labels",
             riskProfileContext: AIRiskProfileContext(
@@ -2079,7 +2086,7 @@ struct AIAnalysisAgent: Sendable {
             "usstock", "u.s.stock", "usmarket", "stockmarket", "nasdaq", "s&p500", "sp500", "dowjones",
         ].contains { normalizedContext.contains(normalizedIdentityText($0)) }
         guard isUSMarketQuery else {
-            return String(query.prefix(180))
+            return String(query.prefix(128))
         }
 
         let asksForLastSession = ["昨晚", "昨日", "昨天", "收盘", "lastnight", "yesterday", "close"].contains {
@@ -2105,7 +2112,7 @@ struct AIAnalysisAgent: Sendable {
         }
         appendIfMissing("Nasdaq S&P 500 Dow Jones", hints: ["Nasdaq", "S&P 500", "SP500", "Dow Jones"])
         appendIfMissing("Reuters CNBC MarketWatch", hints: ["Reuters", "CNBC", "MarketWatch"])
-        return String(optimized.prefix(180))
+        return String(optimized.prefix(128))
     }
 
     static func decodeInvestmentProfilePayload(_ raw: String) -> LLMInvestmentProfilePayload? {
@@ -3034,6 +3041,9 @@ enum AIUserFacingTextSanitizer {
         ("insufficient_history", "历史数据不足", "insufficient historical data"),
         ("status = available", "已有可用历史数据", "historical data is available"),
         ("tavily_search", "联网搜索", "online search"),
+        ("deepseek_search", "联网搜索", "online search"),
+        ("bocha_search", "联网搜索", "online search"),
+        ("parallel_search", "联网搜索", "online search"),
         ("exa_search", "联网搜索", "online search"),
         ("anysearch_search", "联网搜索", "online search"),
         ("web_search", "联网搜索", "online search"),
@@ -3083,8 +3093,12 @@ enum AIUserFacingTextSanitizer {
         }
         for replacement in replacements {
             let escaped = NSRegularExpression.escapedPattern(for: replacement.0)
-            // Short provider names must not replace ordinary words such as “example”.
-            let pattern = ["Exa", "AnySearch"].contains(replacement.0)
+            // Enforce ASCII word boundaries on identifier/word terms so ordinary English words
+            // such as "example", "unparalleled", "harnessing", or "schematic" remain intact.
+            let needsWordBoundary = replacement.0.unicodeScalars.allSatisfy {
+                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_")
+            }
+            let pattern = needsWordBoundary
                 ? "(?<![A-Za-z0-9_])\(escaped)(?![A-Za-z0-9_])" : escaped
             replaceMatches(pattern,
                 with: resolvedLanguage == .english ? replacement.2 : replacement.1)
@@ -3217,12 +3231,30 @@ enum AIAnalysisSchemaValidator {
             if let profitRate = position.unrealizedProfitRatePct, !profitRate.isFinite {
                 throw AIAnalysisAgentError.invalidReport
             }
-            let decimalFields = [
-                position.quantity, position.averageCost, position.latestPrice,
-                position.totalCostQuote, position.marketValueCNY, position.unrealizedProfitQuote,
-            ]
-            guard decimalFields.allSatisfy({ Decimal(string: $0) != nil }) else {
+            guard ["known", "unknown"].contains(position.costStatus) else {
                 throw AIAnalysisAgentError.invalidReport
+            }
+            let requiredDecimalFields = [
+                position.quantity, position.latestPrice, position.marketValueCNY,
+            ]
+            guard requiredDecimalFields.allSatisfy({ Decimal(string: $0) != nil }) else {
+                throw AIAnalysisAgentError.invalidReport
+            }
+            if position.costStatus == "known" {
+                let costFields = [
+                    position.averageCost, position.totalCostQuote, position.unrealizedProfitQuote,
+                ]
+                guard costFields.allSatisfy({ $0.flatMap { Decimal(string: $0) } != nil }) else {
+                    throw AIAnalysisAgentError.invalidReport
+                }
+            } else {
+                guard position.averageCost == nil,
+                      position.totalCostQuote == nil,
+                      position.unrealizedProfitQuote == nil,
+                      position.unrealizedProfitRatePct == nil
+                else {
+                    throw AIAnalysisAgentError.invalidReport
+                }
             }
             for window in [position.oneWeek, position.oneMonth] {
                 guard

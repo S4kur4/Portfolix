@@ -162,10 +162,16 @@ struct RiskQuestionnaireSheet: View {
     }
 
     private func thresholdValue(selection: String, customValue: String, fallback: Double) -> Double {
-        guard selection == "自定义" else {
-            return Double(selection.replacingOccurrences(of: "%", with: "")) ?? fallback
+        let raw: Double
+        if selection == "自定义" {
+            let trimmed = customValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "%", with: "")
+            raw = Double(trimmed) ?? fallback
+        } else {
+            raw = Double(selection.replacingOccurrences(of: "%", with: "")) ?? fallback
         }
-        return Double(customValue) ?? fallback
+        guard raw.isFinite else { return fallback }
+        return min(max(raw, 0), 100)
     }
 
     private func syncCurrentThresholds() {
@@ -173,6 +179,15 @@ struct RiskQuestionnaireSheet: View {
         let cryptoOptions = ["0%", "5%", "10%", "15%", "20%"]
         let foreignOptions = ["10%", "30%", "50%", "70%"]
         let liquidityOptions = ["0%", "5%", "10%", "20%"]
+
+        switch store.riskLevel {
+        case "保守稳健":
+            volatilityResponse = "优先降低波动"
+        case "积极成长":
+            volatilityResponse = "可接受较大波动"
+        default:
+            volatilityResponse = "观察并复核"
+        }
 
         (singlePosition, customSinglePosition) = thresholdSelection(for: store.positionLimit, options: singleOptions)
         (crypto, customCrypto) = thresholdSelection(for: store.cryptoLimit, options: cryptoOptions)

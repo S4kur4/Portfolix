@@ -89,7 +89,11 @@ enum AIFollowUpResponseParser {
         let beginsWithLink = leadingMarkdownLink.firstMatch(
             in: text, range: NSRange(location: 0, length: (text as NSString).length)
         ) != nil
-        guard beginsWithLink || !["{", "[", "\"", "```json"].contains(where: { text.lowercased().hasPrefix($0) }) else {
+        let beginsWithJSONKeyOrString = text.hasPrefix("\"") && (
+            text.range(of: #"^"(?:answer|limitations)"\s*:"#, options: .regularExpression) != nil
+            || (try? JSONDecoder().decode(String.self, from: Data(text.utf8))) != nil
+        )
+        guard beginsWithLink || (!["{", "[", "```json"].contains(where: { text.lowercased().hasPrefix($0) }) && !beginsWithJSONKeyOrString) else {
             return .invalid(readablePrefix: nil)
         }
         return .value(LLMFollowUpPayload(answer: text, limitations: []))

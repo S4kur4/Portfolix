@@ -11,7 +11,13 @@ struct PortfolixPriceUpdater {
     )
 
     static func main() async {
-        let updater = BackgroundPriceUpdater()
+        let updater: BackgroundPriceUpdater
+        do {
+            updater = try BackgroundPriceUpdater()
+        } catch {
+            logger.error("Unable to open portfolio database: \(error.localizedDescription, privacy: .public)")
+            return
+        }
         let runOnceOnly = CommandLine.arguments.contains("--once")
         logger.info("Background price updater started")
         if runOnceOnly {
@@ -71,17 +77,42 @@ private final class BackgroundPriceUpdater {
     private let database: OpaquePointer
     private let databaseURL: URL
     private let maximumResponseBytes = 512 * 1024
+    private let session: URLSession
 
-    init(databaseURL: URL = BackgroundPriceUpdater.defaultDatabaseURL()) {
+    init(databaseURL: URL = BackgroundPriceUpdater.defaultDatabaseURL()) throws {
         self.databaseURL = databaseURL
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        self.session = URLSession(configuration: configuration)
+
         var handle: OpaquePointer?
-        sqlite3_open_v2(databaseURL.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
-        database = handle!
+        let status = sqlite3_open_v2(
+            databaseURL.path,
+            &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        guard status == SQLITE_OK, let handle else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "无法打开数据库"
+            if let handle {
+                sqlite3_close(handle)
+            }
+            throw UpdaterError.requestFailed(message)
+        }
+        database = handle
         sqlite3_busy_timeout(database, 5_000)
-        try? migrateSupportTables()
+        try execute("PRAGMA foreign_keys = ON;")
+        try execute("PRAGMA journal_mode = WAL;")
+        try execute("PRAGMA synchronous = NORMAL;")
+        try migrateSupportTables()
+        applyDatabaseFilePermissions()
     }
 
     deinit {
+        session.invalidateAndCancel()
         sqlite3_close(database)
     }
 
@@ -113,7 +144,7 @@ private final class BackgroundPriceUpdater {
         }
 
         if !positions.isEmpty {
-            try replaceDailySnapshots(positions: updated)
+            try replaceDailySnapshots()
         }
         return UpdateRunSummary(
             eligibleCount: eligibleCount,
@@ -324,10 +355,10 @@ private final class BackgroundPriceUpdater {
                     symbol: text(at: 3, in: statement),
                     category: text(at: 4, in: statement),
                     currency: text(at: 5, in: statement),
-                    quantity: Double(text(at: 6, in: statement)) ?? 0,
-                    totalCost: Double(text(at: 7, in: statement)) ?? 0,
-                    averageCost: Double(text(at: 8, in: statement)) ?? 0,
-                    latestPrice: Double(text(at: 9, in: statement)) ?? 0,
+                    quantity: Decimal(string: text(at: 6, in: statement)) ?? 0,
+                    totalCost: Decimal(string: text(at: 7, in: statement)) ?? 0,
+                    averageCost: Decimal(string: text(at: 8, in: statement)) ?? 0,
+                    latestPrice: Decimal(string: text(at: 9, in: statement)) ?? 0,
                     source: text(at: 10, in: statement),
                     quoteTime: text(at: 11, in: statement),
                     fetchedAt: text(at: 12, in: statement),
@@ -345,7 +376,7 @@ private final class BackgroundPriceUpdater {
         let existingTrend = (try? JSONDecoder().decode([Double].self, from: Data(position.weeklyTrendJSON.utf8))) ?? []
         let trend = DailyPriceTrend.merging(
             existing: existingTrend,
-            latestPrice: position.latestPrice,
+            latestPrice: NSDecimalNumber(decimal: position.latestPrice).doubleValue,
             previousFetchedAt: previousFetchedAt,
             fetchedAt: fetchedAt
         )
@@ -358,7 +389,7 @@ private final class BackgroundPriceUpdater {
             """
         )
         defer { sqlite3_finalize(statement) }
-        try bind(Self.numberString(position.latestPrice), to: 1, in: statement)
+        try bind(Self.decimalString(position.latestPrice), to: 1, in: statement)
         try bind(position.source, to: 2, in: statement)
         try bind(position.quoteTime, to: 3, in: statement)
         try bind(Self.timestamp(from: fetchedAt), to: 4, in: statement)
@@ -373,15 +404,18 @@ private final class BackgroundPriceUpdater {
         return persisted
     }
 
-    private func replaceDailySnapshots(positions _: [StoredPosition]) throws {
-        let day = Self.dayString()
+    private func replaceDailySnapshots(now: Date = .now) throws {
+        let day = Self.dayString(from: now)
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -365, to: now) ?? now
+        let cutoffDay = Self.dayString(from: cutoffDate)
         try execute("BEGIN IMMEDIATE TRANSACTION")
+        defer { applyDatabaseFilePermissions() }
         do {
             let positions = try fetchPositions()
-            let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY }
-            let totalCost = positions.reduce(0.0) { $0 + $1.totalCostCNY }
+            let totalValue = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
+            let totalCost = positions.reduce(Decimal.zero) { $0 + $1.totalCostCNY }
             let profit = totalValue - totalCost
-            let profitRate = totalCost == 0 ? 0 : profit / totalCost * 100
+            let profitRate = totalCost == 0 ? Decimal.zero : profit / totalCost * 100
             let statement = try prepare(
                 """
                 INSERT INTO portfolio_snapshots (
@@ -397,11 +431,11 @@ private final class BackgroundPriceUpdater {
             )
             defer { sqlite3_finalize(statement) }
             try bind(day, to: 1, in: statement)
-            try bind(Self.numberString(totalValue), to: 2, in: statement)
-            try bind(Self.numberString(totalCost), to: 3, in: statement)
-            try bind(Self.numberString(profit), to: 4, in: statement)
-            try bind(Self.numberString(profitRate), to: 5, in: statement)
-            try bind(Self.timestamp(), to: 6, in: statement)
+            try bind(Self.decimalString(totalValue), to: 2, in: statement)
+            try bind(Self.decimalString(totalCost), to: 3, in: statement)
+            try bind(Self.decimalString(profit), to: 4, in: statement)
+            try bind(Self.decimalString(profitRate), to: 5, in: statement)
+            try bind(Self.timestamp(from: now), to: 6, in: statement)
             try stepDone(statement)
 
             for position in positions {
@@ -435,18 +469,25 @@ private final class BackgroundPriceUpdater {
                 try bind(position.symbol, to: 5, in: assetStatement)
                 try bind(position.category, to: 6, in: assetStatement)
                 try bind(position.currency, to: 7, in: assetStatement)
-                try bind(Self.numberString(position.quantity), to: 8, in: assetStatement)
-                try bind(Self.numberString(position.averageCost), to: 9, in: assetStatement)
-                try bind(Self.numberString(position.latestPrice), to: 10, in: assetStatement)
-                try bind(Self.numberString(position.marketValueCNY), to: 11, in: assetStatement)
+                try bind(Self.decimalString(position.quantity), to: 8, in: assetStatement)
+                try bind(Self.decimalString(position.averageCost), to: 9, in: assetStatement)
+                try bind(Self.decimalString(position.latestPrice), to: 10, in: assetStatement)
+                try bind(Self.decimalString(position.marketValueCNY), to: 11, in: assetStatement)
                 try bind(position.source, to: 12, in: assetStatement)
                 try bind(position.quoteTime, to: 13, in: assetStatement)
                 try bind(position.freshness, to: 14, in: assetStatement)
-                try bind(Self.timestamp(), to: 15, in: assetStatement)
+                try bind(Self.timestamp(from: now), to: 15, in: assetStatement)
                 try stepDone(assetStatement)
             }
-            try execute("DELETE FROM portfolio_snapshots WHERE snapshot_date < date('now', '-365 day')")
-            try execute("DELETE FROM asset_price_snapshots WHERE snapshot_date < date('now', '-365 day')")
+            let prunePortfolio = try prepare("DELETE FROM portfolio_snapshots WHERE snapshot_date < ?")
+            defer { sqlite3_finalize(prunePortfolio) }
+            try bind(cutoffDay, to: 1, in: prunePortfolio)
+            try stepDone(prunePortfolio)
+
+            let pruneAssets = try prepare("DELETE FROM asset_price_snapshots WHERE snapshot_date < ?")
+            defer { sqlite3_finalize(pruneAssets) }
+            try bind(cutoffDay, to: 1, in: pruneAssets)
+            try stepDone(pruneAssets)
             try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
@@ -454,27 +495,26 @@ private final class BackgroundPriceUpdater {
         }
     }
 
-    private func resolveOKXQuote(symbol: String) async throws -> (price: Double, quoteTime: String?) {
+    private func resolveOKXQuote(symbol: String) async throws -> (price: Decimal, quoteTime: String?) {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "www.okx.com"
         components.path = "/api/v5/market/ticker"
         components.queryItems = [URLQueryItem(name: "instId", value: symbol.replacingOccurrences(of: "/", with: "-"))]
         guard let url = components.url else { throw UpdaterError.invalidResponse }
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode ?? 0 < 300 else { throw UpdaterError.requestFailed("OKX 请求失败") }
+        let data = try await request(url: url, failureMessage: "OKX 请求失败")
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let dataArray = object?["data"] as? [[String: Any]]
         guard
             let last = dataArray?.first?["last"] as? String,
-            let price = Double(last),
+            let price = Decimal(string: last.trimmingCharacters(in: .whitespacesAndNewlines)),
             price > 0
         else { throw UpdaterError.invalidResponse }
         let quoteTime = (dataArray?.first?["ts"] as? String).flatMap(Self.quoteTime(fromMilliseconds:))
         return (price, quoteTime)
     }
 
-    private func resolveNativeQuote(for position: StoredPosition) async throws -> (price: Double, quoteTime: String?, source: String) {
+    private func resolveNativeQuote(for position: StoredPosition) async throws -> (price: Decimal, quoteTime: String?, source: String) {
         if position.category == "公募基金" {
             if Self.isExchangeTradedFundSymbol(position.symbol),
                let quote = try? await resolveEastmoneyQuote(symbol: position.symbol, category: "A 股")
@@ -486,7 +526,7 @@ private final class BackgroundPriceUpdater {
         return try await resolveEastmoneyQuote(symbol: position.symbol, category: position.category)
     }
 
-    private func resolveEastmoneyQuote(symbol: String, category: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+    private func resolveEastmoneyQuote(symbol: String, category: String) async throws -> (price: Decimal, quoteTime: String?, source: String) {
         guard let secid = Self.eastmoneySECID(symbol: symbol, category: category) else {
             throw UpdaterError.requestFailed("该资产暂不支持自动行情")
         }
@@ -503,18 +543,19 @@ private final class BackgroundPriceUpdater {
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let quote = object?["data"] as? [String: Any]
         guard
-            let rawPrice = Self.numberValue(quote?["f43"]),
+            let rawPrice = Self.decimalValue(quote?["f43"]),
             rawPrice > 0
         else { throw UpdaterError.invalidResponse }
         let precision = Int(Self.numberValue(quote?["f59"]) ?? 2)
         guard (0 ... 6).contains(precision) else { throw UpdaterError.invalidResponse }
-        let price = rawPrice / pow(10.0, Double(precision))
+        let scale = pow(Decimal(10), precision)
+        let price = rawPrice / scale
         guard price > 0 else { throw UpdaterError.invalidResponse }
         let quoteTime = Self.numberValue(quote?["f86"]).flatMap(Self.quoteTime(fromSeconds:))
         return (price, quoteTime, "东方财富")
     }
 
-    private func resolveFundQuote(symbol: String, fallbackName: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+    private func resolveFundQuote(symbol: String, fallbackName: String) async throws -> (price: Decimal, quoteTime: String?, source: String) {
         if let quote = try? await resolveFundLatestNetValueQuote(symbol: symbol, fallbackName: fallbackName) {
             return quote
         }
@@ -532,13 +573,13 @@ private final class BackgroundPriceUpdater {
         let object = try JSONSerialization.jsonObject(with: Data(jsonText.utf8)) as? [String: Any]
         guard
             let priceText = object?["dwjz"] as? String,
-            let price = Double(priceText),
+            let price = Decimal(string: priceText.trimmingCharacters(in: .whitespacesAndNewlines)),
             price > 0
         else { throw UpdaterError.invalidResponse }
         return (price, object?["jzrq"] as? String, "东方财富")
     }
 
-    private func resolveFundLatestNetValueQuote(symbol: String, fallbackName _: String) async throws -> (price: Double, quoteTime: String?, source: String) {
+    private func resolveFundLatestNetValueQuote(symbol: String, fallbackName _: String) async throws -> (price: Decimal, quoteTime: String?, source: String) {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "api.fund.eastmoney.com"
@@ -566,7 +607,7 @@ private final class BackgroundPriceUpdater {
         let payload = object?["Data"] as? [String: Any]
         let rows = payload?["LSJZList"] as? [[String: Any]] ?? []
         for row in rows {
-            guard let price = Self.numberValue(row["DWJZ"]), price > 0 else { continue }
+            guard let price = Self.decimalValue(row["DWJZ"]), price > 0 else { continue }
             return (price, row["FSRQ"] as? String, "东方财富")
         }
         throw UpdaterError.invalidResponse
@@ -580,7 +621,7 @@ private final class BackgroundPriceUpdater {
         for (field, value) in headers {
             request.setValue(value, forHTTPHeaderField: field)
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard data.count <= maximumResponseBytes else {
             throw UpdaterError.requestFailed("行情数据返回内容超出限制")
         }
@@ -629,13 +670,29 @@ private final class BackgroundPriceUpdater {
     }
 
     private static func normalizedUSSymbol(_ value: String) -> String {
-        let symbol = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        return symbol.contains(".") ? String(symbol.split(separator: ".").last ?? Substring(symbol)) : symbol
+        USSymbolNormalizer.normalize(value)
     }
 
     private static func leadingZeroTrimmed(_ value: String) -> String {
         let trimmed = value.drop { $0 == "0" }
         return trimmed.isEmpty ? "0" : String(trimmed)
+    }
+
+    private static func decimalValue(_ value: Any?) -> Decimal? {
+        switch value {
+        case let value as Decimal:
+            return value.isNaN ? nil : value
+        case let value as Int:
+            return Decimal(value)
+        case let value as String:
+            return Decimal(string: value.trimmingCharacters(in: .whitespacesAndNewlines))
+        case let value as NSNumber:
+            if CFGetTypeID(value) == CFBooleanGetTypeID() { return nil }
+            let decimal = value.decimalValue
+            return decimal.isNaN ? nil : decimal
+        default:
+            return nil
+        }
     }
 
     private static func numberValue(_ value: Any?) -> Double? {
@@ -731,10 +788,28 @@ private final class BackgroundPriceUpdater {
         return String(cString: pointer)
     }
 
-    private static func defaultDatabaseURL() -> URL {
-        if let overridePath = ProcessInfo.processInfo.environment["PORTFOLIX_DATABASE_PATH"] {
-            return URL(fileURLWithPath: overridePath)
+    private func applyDatabaseFilePermissions() {
+        let fileManager = FileManager.default
+        let paths = [
+            databaseURL.path,
+            "\(databaseURL.path)-wal",
+            "\(databaseURL.path)-shm",
+        ]
+        for path in paths where fileManager.fileExists(atPath: path) {
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         }
+    }
+
+    private static func defaultDatabaseURL() -> URL {
+#if DEBUG
+        if let overridePath = ProcessInfo.processInfo.environment["PORTFOLIX_DATABASE_PATH"] {
+            let overrideURL = URL(fileURLWithPath: overridePath).standardizedFileURL
+            let temporaryDirectoryURL = FileManager.default.temporaryDirectory.standardizedFileURL
+            if overrideURL.path.hasPrefix(temporaryDirectoryURL.path + "/") {
+                return overrideURL
+            }
+        }
+#endif
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? FileManager.default.homeDirectoryForCurrentUser
         return baseURL
@@ -752,8 +827,8 @@ private final class BackgroundPriceUpdater {
         return normalizedIdentifier.isEmpty ? fallback : normalizedIdentifier
     }
 
-    private static func numberString(_ value: Double) -> String {
-        String(format: "%.8f", value)
+    private static func decimalString(_ value: Decimal) -> String {
+        NSDecimalNumber(decimal: value).stringValue
     }
 
     private static func timestamp() -> String {
@@ -764,8 +839,8 @@ private final class BackgroundPriceUpdater {
         ISO8601DateFormatter().string(from: date)
     }
 
-    private static func dayString() -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+    private static func dayString(from date: Date = .now) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 1970, components.month ?? 1, components.day ?? 1)
     }
 
@@ -816,31 +891,26 @@ private struct StoredPosition {
     let symbol: String
     let category: String
     let currency: String
-    let quantity: Double
-    let totalCost: Double
-    let averageCost: Double
-    var latestPrice: Double
+    let quantity: Decimal
+    let totalCost: Decimal
+    let averageCost: Decimal
+    var latestPrice: Decimal
     var source: String
     var quoteTime: String
     var fetchedAt: String
     var freshness: String
     var weeklyTrendJSON: String
 
-    var marketValueCNY: Double {
+    var marketValueCNY: Decimal {
         quantity * latestPrice / rateFromCNY
     }
 
-    var totalCostCNY: Double {
+    var totalCostCNY: Decimal {
         totalCost / rateFromCNY
     }
 
-    private var rateFromCNY: Double {
-        switch currency {
-        case "HKD": 1.153431425
-        case "USD": 0.147215543
-        case "USDT": 0.147289188
-        default: 1
-        }
+    private var rateFromCNY: Decimal {
+        CurrencyExchangeRate.rateFromCNY(for: currency)
     }
 }
 

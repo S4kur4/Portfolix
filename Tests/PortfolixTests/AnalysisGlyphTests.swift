@@ -8,9 +8,9 @@ struct AnalysisGlyphTests {
     @Test(arguments: [ColorScheme.light, .dark])
     func glyphIsOpticallyCenteredAtDisplayScales(scheme: ColorScheme) throws {
         for scale: CGFloat in [1, 2, 3, 4] {
-            let renderer = ImageRenderer(content: PortfolixAnalysisGlyph().foregroundStyle(PortfolixTheme.primaryButtonText)
-                .frame(width: 32, height: 32).background(PortfolixTheme.primaryButtonTint, in: Circle())
-                .padding(4).background(PortfolixTheme.panel).environment(\.colorScheme, scheme))
+            let renderer = ImageRenderer(content: PortfolixAnalysisGlyph().foregroundStyle(PortfolixTheme.brandSolidInk)
+                .frame(width: 32, height: 32).background(PortfolixTheme.brandSolid, in: Circle())
+                .padding(4).background(PortfolixTheme.surface).environment(\.colorScheme, scheme))
             renderer.scale = scale
             let metrics = try inkMetrics(try #require(renderer.cgImage), scale: scale)
             #expect(abs(metrics.center.x - 20) < 0.3)
@@ -84,11 +84,11 @@ struct AnalysisGlyphTests {
     @Test(arguments: [ColorScheme.light, .dark])
     func staticGlyphRendersWithoutChangingBetweenFrames(scheme: ColorScheme) throws {
         let content = PortfolixAnalysisGlyph()
-            .foregroundStyle(PortfolixTheme.primaryButtonText)
+            .foregroundStyle(PortfolixTheme.brandSolidInk)
             .frame(width: 32, height: 32)
-            .background(PortfolixTheme.primaryButtonTint, in: Circle())
+            .background(PortfolixTheme.brandSolid, in: Circle())
             .padding(4)
-            .background(PortfolixTheme.panel)
+            .background(PortfolixTheme.surface)
             .environment(\.colorScheme, scheme)
         let first = ImageRenderer(content: content)
         first.scale = 3

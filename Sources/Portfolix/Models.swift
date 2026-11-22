@@ -72,12 +72,7 @@ enum DisplayCurrency: String, CaseIterable, Identifiable, Sendable {
     }
 
     var rateFromCNY: Decimal {
-        switch self {
-        case .cny: 1
-        case .hkd: 1.153431425
-        case .usd: 0.147215543
-        case .usdt: 0.147289188
-        }
+        CurrencyExchangeRate.rateFromCNY(for: rawValue)
     }
 
 
@@ -173,55 +168,6 @@ enum AutomaticPriceUpdateFrequency: String, CaseIterable, Identifiable {
             now: now,
             calendar: calendar
         )
-    }
-}
-
-enum TrendMetric: String, CaseIterable, Identifiable {
-    case profitValue = "持仓收益"
-    case profitRate = "持仓收益率"
-
-    var id: String { rawValue }
-
-    func title(language: AppLanguage) -> String {
-        if language == .english {
-            switch self {
-            case .profitValue: "Holding Return"
-            case .profitRate: "Return Rate"
-            }
-        } else {
-            rawValue
-        }
-    }
-}
-
-enum TrendRange: String, CaseIterable, Identifiable {
-    case day = "1日"
-    case week = "1周"
-    case month = "1月"
-    case year = "1年"
-
-    var id: String { rawValue }
-
-    func title(language: AppLanguage) -> String {
-        if language == .english {
-            switch self {
-            case .day: "1D"
-            case .week: "1W"
-            case .month: "1M"
-            case .year: "1Y"
-            }
-        } else {
-            rawValue
-        }
-    }
-
-    var days: Int {
-        switch self {
-        case .day: 1
-        case .week: 6
-        case .month: 29
-        case .year: 364
-        }
     }
 }
 
@@ -345,6 +291,14 @@ struct Position: Identifiable, Sendable {
         self.freshness = freshness
         self.dailyPriceBaseline = dailyPriceBaseline
         self.costIsKnown = costIsKnown
+    }
+
+    var averageCostCNY: Decimal {
+        averageCost / quoteCurrency.rateFromCNY
+    }
+
+    var totalCostCNY: Decimal {
+        totalCost / quoteCurrency.rateFromCNY
     }
 
     var relativeUpdateText: String {
@@ -752,15 +706,6 @@ final class PortfolioStore {
     var primaryPositionSortDirection: PrimaryPositionSortDirection = .descending {
         didSet { persistDisplayPreference(primaryPositionSortDirection, for: .primaryPositionSortDirection) }
     }
-    var trendMetric: TrendMetric = .profitValue {
-        didSet { persistDisplayPreference(trendMetric, for: .trendMetric) }
-    }
-    var trendRange: TrendRange = .month {
-        didSet {
-            persistDisplayPreference(trendRange, for: .trendRange)
-            rebuildVisibleSnapshots()
-        }
-    }
     var performanceRiskRange: PerformanceRiskRange = .month {
         didSet { persistDisplayPreference(performanceRiskRange, for: .performanceRiskRange) }
     }
@@ -890,9 +835,7 @@ final class PortfolioStore {
     var positions: [Position] {
         didSet { derivedMetrics = PortfolioDerivedMetrics(positions: positions) }
     }
-    var snapshotHistory: [PortfolioSnapshot] {
-        didSet { rebuildVisibleSnapshots() }
-    }
+    var snapshotHistory: [PortfolioSnapshot]
     var dailyProfitHistory: [DailyProfitPoint]
     private(set) var positionClosures: [PositionClosureRecord] = []
     private(set) var positionTrades: [PositionTradeRecord] = []
@@ -902,7 +845,6 @@ final class PortfolioStore {
     private var tradeProfitByDate: [String: [String: Decimal]] = [:]
     @ObservationIgnored private var positionClosureRevision = 0
     private var derivedMetrics = PortfolioDerivedMetrics.empty
-    private var visibleSnapshotCache: [PortfolioSnapshot] = []
     private let positionRepository: PositionRepository?
     private let analyticsWorker: PortfolioAnalyticsWorker?
     private let credentialStore: ProviderCredentialStoring
@@ -1081,8 +1023,6 @@ final class PortfolioStore {
         displayCurrency = PortfolioDisplayPreferenceKey.displayCurrency.load(from: activeRepository, default: DisplayCurrency.cny)
         appearanceMode = PortfolioDisplayPreferenceKey.appearanceMode.load(from: activeRepository, default: AppearanceMode.system)
         performanceColorScheme = PortfolioDisplayPreferenceKey.performanceColorScheme.load(from: activeRepository, default: PerformanceColorScheme.greenUpRedDown)
-        trendMetric = PortfolioDisplayPreferenceKey.trendMetric.load(from: activeRepository, default: TrendMetric.profitValue)
-        trendRange = PortfolioDisplayPreferenceKey.trendRange.load(from: activeRepository, default: TrendRange.month)
         performanceRiskRange = PortfolioDisplayPreferenceKey.performanceRiskRange.load(from: activeRepository, default: PerformanceRiskRange.month)
         investmentCloudMode = PortfolioDisplayPreferenceKey.investmentCloudMode.load(from: activeRepository, default: InvestmentCloudMode.defaultMode)
         dailyProfitDisplayMode = PortfolioDisplayPreferenceKey.dailyProfitDisplayMode.load(from: activeRepository, default: DailyProfitDisplayMode.calendar)
@@ -1090,7 +1030,6 @@ final class PortfolioStore {
         primaryPositionSortDirection = PortfolioDisplayPreferenceKey.primaryPositionSortDirection.load(from: activeRepository, default: PrimaryPositionSortDirection.descending)
         analyticsWorker = activeRepository.map { PortfolioAnalyticsWorker(databaseURL: $0.storageURL) }
         derivedMetrics = PortfolioDerivedMetrics(positions: positions)
-        rebuildVisibleSnapshots()
         mcpReadAccessEnabled = (try? activeRepository?.appSetting(for: MCPAccess.settingKey)) == "true"
         loadRiskProfileSettings(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport())
@@ -1123,7 +1062,6 @@ final class PortfolioStore {
         let currentDay = Calendar.current.startOfDay(for: now)
         if lastAIAnalysisRetentionPruneDay != currentDay {
             pruneAIAnalysisChatHistory(now: now)
-            rebuildVisibleSnapshots(now: now)
         }
         if backgroundUpdatesEnabled {
             synchronizePersistedMarketDataIfNeeded()
@@ -1226,20 +1164,6 @@ final class PortfolioStore {
             $0.name.localizedCaseInsensitiveContains(searchText)
                 || $0.symbol.localizedCaseInsensitiveContains(searchText)
         }
-    }
-
-    var visibleSnapshots: [PortfolioSnapshot] {
-        visibleSnapshotCache
-    }
-
-    private func rebuildVisibleSnapshots(now: Date = .now) {
-        let calendar = Calendar.current
-        guard let cutoffDate = calendar.date(byAdding: .day, value: -trendRange.days, to: now) else {
-            visibleSnapshotCache = snapshotHistory
-            return
-        }
-        let cutoff = calendar.startOfDay(for: cutoffDate)
-        visibleSnapshotCache = snapshotHistory.filter { $0.date >= cutoff }
     }
 
     var riskConstraintEvaluation: RiskConstraintEvaluation {
@@ -3331,6 +3255,7 @@ final class PortfolioStore {
             category: resolved.category,
             quoteCurrency: resolved.quoteCurrency,
             quantity: current.quantity,
+            totalCost: current.totalCost,
             averageCost: current.averageCost,
             latestPrice: latestPrice,
             marketValueCNY: marketValueCNY,
@@ -3340,7 +3265,8 @@ final class PortfolioStore {
             quoteTime: resolved.quoteTime ?? "刚刚",
             fetchedAt: fetchedAt,
             freshness: .updated,
-            dailyPriceBaseline: current.dailyPriceBaseline
+            dailyPriceBaseline: current.dailyPriceBaseline,
+            costIsKnown: current.costIsKnown
         )
     }
 
