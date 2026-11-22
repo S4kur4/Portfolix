@@ -108,6 +108,7 @@ struct MCPConnectionSheet: View {
         }
         .frame(width: sheetWidth)
         .fixedSize(horizontal: false, vertical: true)
+        .environment(\.portfolixFormGlass, true)
         .background { PortfolixSheetBackground() }
         .onExitCommand { dismiss() }
     }

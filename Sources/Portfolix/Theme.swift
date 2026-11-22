@@ -479,7 +479,6 @@ extension EnvironmentValues {
 private struct PortfolixGlassControlSurface: ViewModifier {
     let height: CGFloat
     @Environment(\.portfolixFormGlass) private var isInForm
-    @Environment(\.colorScheme) private var colorScheme
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
@@ -488,7 +487,7 @@ private struct PortfolixGlassControlSurface: ViewModifier {
     func body(content: Content) -> some View {
         let label = content.frame(height: height).foregroundStyle(PortfolixTheme.text)
         Group {
-            if isInForm && colorScheme == .light {
+            if isInForm {
                 label.background {
                     Group {
                         if #available(macOS 26.0, *) {
