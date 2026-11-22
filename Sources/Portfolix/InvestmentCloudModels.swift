@@ -29,7 +29,7 @@ struct InvestmentCloudItem: Identifiable {
     let mode: InvestmentCloudMode
     let isAggregated: Bool
     let aggregatedCount: Int
-    /// 资产大类（投资分布按域归类；每日盈亏按持仓类别）。
+    /// Distribution uses the investment domain. Daily P&L uses the holding category.
     let assetClass: AssetClass
 
     init(distribution: InvestmentDistributionItem) {
@@ -64,7 +64,7 @@ struct InvestmentCloudItem: Identifiable {
     }
 
     init(aggregating items: [InvestmentCloudItem]) {
-        let count = items.count
+        let count = items.reduce(0) { $0 + ($1.isAggregated ? $1.aggregatedCount : 1) }
         id = "aggregated_other"
         titleChinese = "其他 \(count) 项"
         titleEnglish = count == 1 ? "1 other" : "\(count) others"
@@ -81,7 +81,7 @@ struct InvestmentCloudItem: Identifiable {
         assetClass = .other
     }
 
-    /// 将投资分布域映射到 5 个资产大类（规范 v1.2）。
+    /// Map an investment domain to one of the five asset classes.
     static func resolvedAssetClass(forDomainID id: String) -> AssetClass {
         let lowered = id.lowercased()
         if lowered.contains("cash") { return .cash }
@@ -125,35 +125,44 @@ enum InvestmentCloudEngine {
         maximumItems: Int = 12,
         weight: (InvestmentCloudItem) -> Double
     ) -> [InvestmentCloudItem] {
-        let base = items.filter {
-            let value = weight($0)
-            return value.isFinite && value > 0
+        let base = items.compactMap { item -> (item: InvestmentCloudItem, weight: Double)? in
+            let value = weight(item)
+            guard value.isFinite, value > 0 else { return nil }
+            return (item, value)
         }
-        guard !base.isEmpty else { return [] }
-        let total = base.reduce(0.0) { $0 + weight($1) }
-        guard total > 0 else { return [] }
+        let total = base.reduce(0.0) { $0 + $1.weight }
+        guard total.isFinite, total > 0 else { return [] }
         let share = min(max(minimumShare, 0), 0.5)
         let threshold = total * share
 
-        var result = base.filter { weight($0) >= threshold }
-        let small = base.filter { weight($0) < threshold }
-        if result.isEmpty {
-            result = base
-        } else if !small.isEmpty {
-            result.append(InvestmentCloudItem(aggregating: small))
+        var visible = base.filter { $0.weight >= threshold }
+        let small = base.filter { $0.weight < threshold }.map(\.item)
+        let itemsToGroup: [InvestmentCloudItem]
+        if visible.isEmpty {
+            visible = base
+            itemsToGroup = []
+        } else {
+            itemsToGroup = small
         }
-        result.sort {
-            weight($0) == weight($1) ? $0.id < $1.id : weight($0) > weight($1)
+        visible.sort {
+            $0.weight == $1.weight ? $0.item.id < $1.item.id : $0.weight > $1.weight
         }
 
         let cap = max(maximumItems, 2)
-        if result.count > cap {
-            let kept = Array(result.prefix(cap - 1))
-            let rest = Array(result.dropFirst(cap - 1))
-            var merged = kept
-            merged.append(InvestmentCloudItem(aggregating: rest))
-            result = merged
+        let countWithGroup = visible.count + (itemsToGroup.isEmpty ? 0 : 1)
+        if countWithGroup > cap {
+            let keptCount = cap - 1
+            let kept = visible.prefix(keptCount).map(\.item)
+            let overflow = visible.dropFirst(keptCount).map(\.item)
+            return kept + [InvestmentCloudItem(aggregating: itemsToGroup + overflow)]
         }
-        return result
+        guard !itemsToGroup.isEmpty else { return visible.map(\.item) }
+        let group = InvestmentCloudItem(aggregating: itemsToGroup)
+        let groupWeight = weight(group)
+        let index = visible.firstIndex {
+            groupWeight > $0.weight || (groupWeight == $0.weight && group.id < $0.item.id)
+        } ?? visible.endIndex
+        visible.insert((group, groupWeight), at: index)
+        return visible.map(\.item)
     }
 }

@@ -46,6 +46,20 @@ struct InvestmentCloudDisplayItemsTests {
         #expect(prepared.last?.amountCNY == 3000)
     }
 
+    @Test func combinesSmallAndOverflowTilesWithoutDuplicateIDs() {
+        let large = (0..<6).map { item("large-\($0)", percentage: 12, amount: 12) }
+        let small = (0..<14).map { item("small-\($0)", percentage: 2, amount: 2) }
+        let prepared = InvestmentCloudEngine.displayItems(
+            large + small, minimumShare: 0.04, maximumItems: 4
+        ) { $0.distributionPercentage ?? 0 }
+
+        #expect(prepared.count == 4)
+        #expect(Set(prepared.map(\.id)).count == prepared.count)
+        #expect(prepared.last?.aggregatedCount == 17)
+        #expect(prepared.last?.amountCNY == 64)
+        #expect(prepared.reduce(Decimal(0)) { $0 + $1.amountCNY } == 100)
+    }
+
     @Test func dropsItemsWithoutPositiveDisplayWeight() {
         let items = [
             item("zero", percentage: 0, amount: 0),

@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 enum PortfolixTheme {
-    // MARK: 基础中性色（设计规范 v1.2 · 2026-11-21）
-    // 中性色负责结构；大面积表面只用 canvas / surface / raised，不使用纯黑或纯白。
+    // MARK: Neutral colors
+    // Use canvas, surface, or raised for large surfaces. Avoid pure black and white.
     static let canvas = adaptive(light: 0xEFEDF2, dark: 0x0A090D)
     static let surface = adaptive(light: 0xF7F5FA, dark: 0x121016)
     static let raised = adaptive(light: 0xFDFCFF, dark: 0x1A1720)
@@ -16,7 +16,7 @@ enum PortfolixTheme {
     static let disabled = adaptive(light: 0xA9A2B4, dark: 0x5B5468)
     static let inverse = adaptive(light: 0xF7F5FA, dark: 0x121016)
 
-    // MARK: 品牌紫（事件色：品牌 / 交互 / 选中 / 焦点 / 单系列数据）
+    // MARK: Brand colors for identity, interaction, selection, focus, and single-series data
     static let brandText = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
     static let brandSolid = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
     static let brandSolidHover = adaptive(light: 0x513AB6, dark: 0xC2BAFC)
@@ -52,7 +52,7 @@ enum PortfolixTheme {
         endPoint: .bottomTrailing
     )
 
-    // MARK: 语义色（涨跌 / 风险）
+    // MARK: Semantic colors for performance and risk
     static let gainFill = adaptive(light: 0x287D70, dark: 0x76C7B7)
     static let gainText = adaptive(light: 0x20675C, dark: 0x76C7B7)
     static let gainOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
@@ -65,7 +65,7 @@ enum PortfolixTheme {
     static let lossSolidHover = adaptive(light: 0x9E3947, dark: 0xE89AA4)
     static let lossSolidPressed = adaptive(light: 0x7A2B35, dark: 0xF0B0B8)
 
-    // 不透明语义 wash（W1 最浅 → W4 最深），用于徽标底、图表弱填充与日历热力。
+    // Opaque semantic washes from lightest (W1) to strongest (W4) for badges, charts, and calendar cells.
     static let gainWash1 = adaptive(light: 0xE2E9EC, dark: 0x202A2D)
     static let gainWash2 = adaptive(light: 0xD2DFE1, dark: 0x2A3C3D)
     static let gainWash3 = adaptive(light: 0xC1D6D6, dark: 0x344E4D)
@@ -80,7 +80,7 @@ enum PortfolixTheme {
     static let warnWash4 = adaptive(light: 0xD8C5AF, dark: 0x69533A)
     static let neutralWash = adaptive(light: 0xEBE8EE, dark: 0x222027)
 
-    // MARK: 资产大类色 A+ 紫晶（规范 v1.2，2026-11-21 更新：12% 品牌紫混合；同一大类在全 App 使用同一组颜色）
+    // MARK: A+ asset class colors with a 12% brand purple blend, shared across the app
     static let classStockFill = adaptive(light: 0x6D85F7, dark: 0x7089FF)
     static let classStockMark = adaptive(light: 0x5F74D9, dark: 0x7089FF)
     static let classFundFill = adaptive(light: 0xAF71E4, dark: 0xB373E9)
@@ -94,7 +94,7 @@ enum PortfolixTheme {
     static let classOnFill = Color(hex: 0x121016)
     static let classMarkInk = adaptive(light: 0xFFFFFF, dark: 0x121016)
 
-    // MARK: 资产大类大面积色阶（P1-A 试验：55% A+ fill + 45% 中性色，降低大色块彩度；小标记仍用 classMark）
+    // MARK: Muted asset class colors with 55% A+ fill and 45% neutral
     static let classStockArea = adaptive(light: 0x7C86D0, dark: 0x535EA7)
     static let classFundArea = adaptive(light: 0xA17BC6, dark: 0x78529B)
     static let classCryptoArea = adaptive(light: 0xB179A5, dark: 0x915581)
@@ -102,8 +102,8 @@ enum PortfolixTheme {
     static let classOtherArea = adaptive(light: 0x978897, dark: 0x796975)
     static let classOnArea = adaptive(light: 0x121016, dark: 0xF5F3F8)
 
-    // MARK: 资产大类淡彩大色块（P1-A 试验：约 35% A+ fill 与 surface 混合，颜色浓度接近语义 W3；
-    // 小标记继续用 classMark/classArea，保证小面积可辨认）
+    // MARK: Pale asset class fills with roughly 35% A+ fill over surface
+    // Small markers use classMark or classArea for legibility.
     static let classStockPale = adaptive(light: 0xC8CFFC, dark: 0x333A68)
     static let classFundPale = adaptive(light: 0xDFC8F4, dark: 0x4A3360)
     static let classCryptoPale = adaptive(light: 0xEFC9E4, dark: 0x5A344F)
@@ -111,12 +111,12 @@ enum PortfolixTheme {
     static let classOtherPale = adaptive(light: 0xE0D6DC, dark: 0x4B4148)
     static let classOnPale = adaptive(light: 0x121016, dark: 0xF5F3F8)
 
-    // MARK: 收益/回撤 0 轴淡彩面积（P1-A 试验：比 W4 更明确可辨的红/绿，仍为面积填充，不加折线）
+    // MARK: Distinct gain and loss area fills for charts without a line
     static let lossAreaWash = adaptive(light: 0xE58A96, dark: 0x7C3F4A)
     static let gainAreaWash = adaptive(light: 0xA8CBC3, dark: 0x3E615D)
 
-    // MARK: 旧 token 兼容别名（迁移完成后删除）
-    // 仅用于迁移期编译；新代码禁止使用以下名称。
+    // MARK: Legacy token aliases
+    // Keep existing callers compiling during migration. Use semantic tokens in new code.
     static let sidebar = surface
     static let panel = surface
     static let panelElevated = raised
@@ -148,7 +148,7 @@ enum PortfolixTheme {
     static let userMessageGradientColors: [Color] = [brandBubbleStart, brandBubbleEnd]
     static let purpleGradient = brandGradient
 
-    // MARK: 涨跌映射（图形用 *Fill，紧凑文字用 *Text）
+    // MARK: Performance color mapping (Fill for graphics, Text for compact labels)
     static func performanceColor(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
         if value > 0 { return scheme == .greenUpRedDown ? gainFill : lossFill }
         if value < 0 { return scheme == .greenUpRedDown ? lossFill : gainFill }
@@ -178,7 +178,7 @@ enum PortfolixTheme {
         return performanceWash(for: amount, scheme: scheme)
     }
 
-    // MARK: 资产大类映射
+    // MARK: Asset class color mapping
     static func classFill(_ assetClass: AssetClass) -> Color {
         switch assetClass {
         case .stock: return classStockFill
@@ -227,7 +227,7 @@ enum PortfolixTheme {
     }
 }
 
-/// 资产大类（设计规范 v1.2 的 5 类）：股票（A/B/HK/US）、基金、加密、现金、其他。
+/// Asset classes shared across markets and views.
 enum AssetClass: String, CaseIterable, Identifiable, Sendable {
     case stock
     case fund
@@ -300,51 +300,51 @@ enum PortfolixLayout {
     static let riskProfileSummaryContentHeight: CGFloat = 104
 }
 
-/// 文字系统（2026-11-21 增补）。所有界面文字只能使用本角色表中的字号与字重；
-/// 同类文案必须使用同一角色，不得按页面临时改变字号或字重。图标（SF Symbol）字号独立，不受本表约束。
+/// Shared type roles keep text sizes and weights consistent across views.
+/// Size SF Symbols independently.
 enum PortfolixTypography {
-    // MARK: 展示级数值（圆体，仅用于统计值）
-    /// 组合总值：资产总览组合价值卡。
+    // MARK: Rounded display numbers for metrics
+    /// Portfolio total in the Overview value card.
     static let portfolioHeroValue = Font.system(size: 56, weight: .medium, design: .rounded)
-    /// 主统计值：页面级大数字（每屏最多一个）。
+    /// Primary statistic, at most one per screen.
     static let heroValue = Font.system(size: 36, weight: .light, design: .rounded)
-    /// 次主统计值：与 `heroValue` 并排时的次级大数字。
+    /// Secondary statistic shown alongside `heroValue`.
     static let heroValueCompact = Font.system(size: 32, weight: .light, design: .rounded)
-    /// 卡片主统计值：每张卡最多一个（当前回撤、风险等级、风险承受度）。
+    /// Primary card statistic, at most one per card.
     static let secondaryValue = Font.system(size: 24, weight: .medium, design: .rounded)
 
-    // MARK: 标题
-    /// 页面标题（PageHeader）：27pt Semibold。
+    // MARK: Headings
+    /// PageHeader title, 27 pt semibold.
     static let pageTitle = Font.system(size: 27, weight: .semibold)
-    /// 弹窗标题（SheetHeader）：19pt Semibold。
+    /// SheetHeader title, 19 pt semibold.
     static let sheetTitle = Font.system(size: 19, weight: .semibold)
-    /// 卡片/区块标题（SectionHeader）：15pt Semibold。
+    /// SectionHeader title, 15 pt semibold.
     static let sectionTitle = Font.system(size: 15, weight: .semibold)
-    /// 卡片摘要值：15pt Semibold，用于摘要行中的关键数字（总市值、本月累计等）。
+    /// Key figures in card summaries, 15 pt semibold.
     static let headlineValue = Font.system(size: 15, weight: .semibold)
-    /// 报告/表单内小标题：13pt Semibold。
+    /// Report and form subheadings, 13 pt semibold.
     static let subheading = Font.system(size: 13, weight: .semibold)
 
-    // MARK: 正文与标签
-    /// 正文、表格内容、表单输入：13pt Regular。
+    // MARK: Body text and labels
+    /// Body text, table cells, and form inputs, 13 pt regular.
     static let body = Font.system(size: 13)
-    /// 强调正文、派生值（收益率、日期细节）：13pt Medium。
+    /// Emphasized body text and derived values, 13 pt medium.
     static let bodyEmphasis = Font.system(size: 13, weight: .medium)
-    /// 标签、次级说明：12pt Regular。
+    /// Labels and secondary descriptions, 12 pt regular.
     static let label = Font.system(size: 12)
-    /// 强调标签、状态徽标：12pt Medium。
+    /// Emphasized labels and status badges, 12 pt medium.
     static let labelEmphasis = Font.system(size: 12, weight: .medium)
-    /// 控件文字（按钮、分段、菜单、链接）：12pt Medium。
+    /// Control and link labels, 12 pt medium.
     static let control = Font.system(size: 12, weight: .medium)
-    /// 辅助信息、时间、meta 计数：11pt Regular。
+    /// Supporting text, times, and counts, 11 pt regular.
     static let caption = Font.system(size: 11)
-    /// 强调辅助信息：11pt Medium。
+    /// Emphasized supporting text, 11 pt medium.
     static let captionEmphasis = Font.system(size: 11, weight: .medium)
-    /// 微型文字（tooltip、紧凑徽标）：10pt Medium，仅限局部使用。
+    /// Tooltip and compact badge text, 10 pt medium.
     static let micro = Font.system(size: 10, weight: .medium)
-    /// 侧栏导航标签：15pt Medium（仅侧栏使用）。
+    /// Sidebar navigation labels, 15 pt medium.
     static let sidebarLabel = Font.system(size: 15, weight: .medium)
-    /// 图表坐标轴、图例、日历日期：9pt Medium。
+    /// Chart axes, legends, and calendar dates, 9 pt medium.
     static let chartAxis = Font.system(size: 9, weight: .medium)
 }
 
@@ -802,8 +802,8 @@ struct SectionHeader<Trailing: View>: View {
     }
 }
 
-/// 图表 hover 数据框与带问号的帮助提示共用同一套提示框外观：
-/// raised 底 + borderStrong 1pt 描边 + compact 圆角 + 8/5 内边距，浅色与深色一致。
+/// Shared surface for chart readouts and help tooltips in both appearances.
+/// Uses a raised fill, 1 pt borderStrong stroke, compact radius, and 8 by 5 pt padding.
 struct PortfolixTooltipSurfaceStyle: ViewModifier {
     func body(content: Content) -> some View {
         content

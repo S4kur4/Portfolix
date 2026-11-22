@@ -790,7 +790,7 @@ final class PositionRepository {
             """
             SELECT snapshot_date, total_value_cny, profit_rate
             FROM portfolio_snapshots
-            ORDER BY snapshot_date ASC
+            ORDER BY snapshot_date DESC
             LIMIT ?
             """
         )
@@ -816,6 +816,7 @@ final class PositionRepository {
                 )
             )
         }
+        snapshots.reverse()
         return snapshots
     }
 

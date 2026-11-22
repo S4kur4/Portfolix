@@ -19,7 +19,7 @@ public enum SpokenNumber {
         if parts[0].allSatisfy({ digits[$0] != nil }) {
             integer = parts[0].compactMap { digits[$0] }.joined()
         } else {
-            // Explicit units only: "一百二" is deliberately not interpreted as 102 or 120.
+            // Require explicit units. Reject shorthand such as “one hundred two,” which could mean 102 or 120.
             let units: [Character: Int64] = ["十":10, "百":100, "千":1_000, "万":10_000, "亿":100_000_000]
             var total: Int64 = 0
             var section: Int64 = 0

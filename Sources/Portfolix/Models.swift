@@ -252,10 +252,10 @@ enum AssetCategory: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 资产大类标记色：圆点、图例、头像等小面积元素。
+    /// Asset class color for markers, legends, and other small elements.
     var color: Color { assetClass.mark }
 
-    /// 资产大类实色块：云图、堆叠条等大面积元素。
+    /// Solid asset class fill for larger areas.
     var fillColor: Color { assetClass.fill }
 }
 
@@ -352,7 +352,7 @@ struct Position: Identifiable, Sendable {
     }
 
     func relativeUpdateText(now: Date, language: AppLanguage = .chinese) -> String {
-        guard let date = Self.isoDate(from: fetchedAt) else {
+        guard let date = fetchedDate else {
             return quoteTime
         }
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -371,9 +371,11 @@ struct Position: Identifiable, Sendable {
         return language == .english ? "\(days)d ago" : "\(days) 天前更新"
     }
 
-    /// 精简的相对时间（省略“更新”后缀），用于空间紧张的位置，如仪表盘组合价值卡。
+    var fetchedDate: Date? { Self.isoDate(from: fetchedAt) }
+
+    /// Compact relative time for narrow areas such as the portfolio value card.
     func shortRelativeUpdateText(now: Date, language: AppLanguage = .chinese) -> String {
-        guard let date = Self.isoDate(from: fetchedAt) else {
+        guard let date = fetchedDate else {
             return quoteTime
         }
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -1542,7 +1544,7 @@ final class PortfolioStore {
             + positionTrades.filter { !$0.isReversed }.reduce(0) { $0 + ($1.realizedProfit ?? 0) / $1.rate }
     }
 
-    /// 已实现收益对应的累计投入成本（清仓记录按记录时成本、卖出按分摊成本，均折算为 CNY）。
+    /// Realized cost in CNY from the recorded closure cost and allocated sale cost.
     var realizedCostCNY: Decimal {
         activePositionClosures.reduce(0) { total, record in
             let cost = PositionClosureMath.decimal(record.holding.totalCost) ?? 0
@@ -1552,13 +1554,13 @@ final class PortfolioStore {
         }
     }
 
-    /// 已实现收益 = 未撤销清仓 + 未撤销卖出的已实现收益；任一相关成本未知时不展示该指标。
+    /// Realized P&L is available when all active closures and sales have a known cost basis.
     var realizedProfitIsAvailable: Bool {
         activePositionClosures.allSatisfy { $0.holding.costKnown != false }
             && positionTrades.filter { !$0.isReversed && $0.side == .sell }.allSatisfy { $0.asset.costKnown != false }
     }
 
-    /// 已实现收益率 = 已实现收益 / 已实现部分对应的成本。
+    /// Realized P&L as a percentage of the realized cost basis.
     var realizedProfitRate: Decimal {
         guard realizedCostCNY != 0 else { return 0 }
         return realizedProfitCNY / realizedCostCNY * 100

@@ -75,6 +75,24 @@ struct PrimaryPositionOrderingTests {
     }
 
     @Test
+    func calculatesDailyProfitOncePerVisibleHoldingAndKeepsTieOrder() {
+        let positions = (1...12).map {
+            makePosition(name: "Asset \($0)", marketValue: Decimal($0), profitRate: 0)
+        }
+        var calls: [Position.ID] = []
+
+        let visible = PrimaryPositionOrdering.visiblePositions(
+            from: positions, limit: .top5, sortField: .todayProfit, direction: .ascending
+        ) { position in
+            calls.append(position.id)
+            return 1
+        }
+
+        #expect(calls == positions.suffix(5).reversed().map(\.id))
+        #expect(visible.map(\.id) == calls)
+    }
+
+    @Test
     func detailTableSortsByTotalCostMarketValueAndReturnRate() {
         let first = makePosition(name: "First", marketValue: 300, profitRate: -5, totalCost: 100)
         let second = makePosition(name: "Second", marketValue: 100, profitRate: 15, totalCost: 300)

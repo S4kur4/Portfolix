@@ -1060,6 +1060,22 @@ struct PositionRepositoryTests {
     }
 
     @Test
+    func boundedPortfolioHistoryIncludesNewestSnapshotsInChronologicalOrder() throws {
+        let (_, databaseURL) = makeDatabaseURLs()
+        let repository = try PositionRepository(databaseURL: databaseURL)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        for daysAgo in (0...2).reversed() {
+            let date = try #require(calendar.date(byAdding: .day, value: -daysAgo, to: today))
+            let position = makePosition(quantity: 1, averageCost: 1, latestPrice: Decimal(3 - daysAgo))
+            try repository.replaceDailySnapshots(positions: [position], snapshotDate: date)
+        }
+
+        let snapshots = try repository.fetchPortfolioSnapshots(limitDays: 2)
+        #expect(snapshots.map(\.totalValueCNY) == [2, 3])
+    }
+
+    @Test
     func repositoryBuildsDailyProfitFromUnitValueChangesWithoutTreatingQuantityAsProfit() throws {
         let (_, databaseURL) = makeDatabaseURLs()
         let repository = try PositionRepository(databaseURL: databaseURL)

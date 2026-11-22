@@ -71,8 +71,9 @@ private struct GoldenRatioRowLayout: Layout {
             return .zero
         }
 
-        let fallbackSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        let proposedWidth = proposal.width ?? fallbackSizes.reduce(spacing) { $0 + $1.width }
+        let proposedWidth = proposal.width ?? subviews.reduce(spacing) {
+            $0 + $1.sizeThatFits(.unspecified).width
+        }
         let widths = columnWidths(totalWidth: proposedWidth)
         let leadingSize = subviews[0].sizeThatFits(ProposedViewSize(width: widths.leading, height: proposal.height))
         let trailingSize = subviews[1].sizeThatFits(ProposedViewSize(width: widths.trailing, height: proposal.height))
@@ -124,7 +125,7 @@ private struct DashboardHeader: View {
 }
 
 private enum PortfolioHeroCardLayout {
-    /// Header 中币种选择器与底部走势图的共同宽度，保证两者左缘对齐。
+    /// The currency picker and mini chart share a width to align their leading edges.
     static let trailingControlWidth: CGFloat = 230
     static let trendChartHeight: CGFloat = 96
 }
@@ -230,7 +231,10 @@ private struct PortfolioHeroCard: View {
     }
 
     private func updateSummary(now: Date) -> String {
-        guard let latestPosition = store.positions.max(by: { fetchedDate(for: $0) < fetchedDate(for: $1) }) else {
+        let latestPosition = store.positions.lazy
+            .map { (position: $0, date: $0.fetchedDate ?? .distantPast) }
+            .max { $0.date < $1.date }?.position
+        guard let latestPosition else {
             return localizedText("尚未添加持仓", "No holdings yet", language: store.appLanguage)
         }
         return latestPosition.shortRelativeUpdateText(now: now, language: store.appLanguage)
@@ -259,19 +263,17 @@ private struct PortfolioHeroCard: View {
     private func valueColor(for value: Decimal) -> Color {
         PortfolixTheme.performanceColor(for: value, scheme: store.performanceColorScheme)
     }
-
-    private func fetchedDate(for position: Position) -> Date {
-        Self.isoFormatter.date(from: position.fetchedAt) ?? .distantPast
-    }
-
-    private static let isoFormatter = ISO8601DateFormatter()
 }
 
 private struct HeroMetricsGrid: View {
     @Environment(PortfolioStore.self) private var store
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let thirtyDayChange = thirtyDayChange
+        let changeColor = PortfolixTheme.performanceColor(
+            for: thirtyDayChange?.amountCNY ?? 0, scheme: store.performanceColorScheme
+        )
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: PortfolixSpacing.lg) {
                 HeroMetricCell(
                     label: localizedText("已实现收益", "Realized Profit", language: store.appLanguage),
@@ -282,10 +284,10 @@ private struct HeroMetricsGrid: View {
                 )
                 HeroMetricCell(
                     label: localizedText("近 30 天", "Last 30 Days", language: store.appLanguage),
-                    value: thirtyDayChangeText,
-                    rate: thirtyDayChangeRateText,
-                    valueColor: thirtyDayChangeColor,
-                    rateColor: thirtyDayChangeColor
+                    value: thirtyDayChange.map { moneyText($0.amountCNY) } ?? "—",
+                    rate: thirtyDayChange.map { formatPercent($0.rate) },
+                    valueColor: changeColor,
+                    rateColor: changeColor
                 )
             }
 
@@ -310,7 +312,7 @@ private struct HeroMetricsGrid: View {
         }
     }
 
-    /// 已实现收益 = 未撤销清仓 + 未撤销卖出；随显示币种换算，成本未知时显示 —。
+    /// Show realized P&L in the display currency when the cost basis is known.
     private var realizedReturnText: String {
         guard store.realizedProfitIsAvailable else { return "—" }
 
@@ -330,13 +332,13 @@ private struct HeroMetricsGrid: View {
     }
 
     private var thirtyDayChange: (amountCNY: Decimal, rate: Decimal)? {
-        let history = store.snapshotHistory.sorted { $0.date < $1.date }
-        guard let latest = history.last else { return nil }
-
+        let history = store.snapshotHistory
         let calendar = Calendar.current
         guard let cutoff = calendar.date(byAdding: .day, value: -30, to: calendar.startOfDay(for: .now)),
-              let baseline = history.last(where: { $0.date <= cutoff }),
-              baseline.date < latest.date
+              let latest = history.max(by: { $0.date < $1.date }),
+              let baseline = history.lazy.filter({ $0.date <= cutoff }).max(by: { $0.date < $1.date }),
+              baseline.date < latest.date,
+              latest.totalValueCNY.isFinite, baseline.totalValueCNY.isFinite
         else {
             return nil
         }
@@ -348,21 +350,11 @@ private struct HeroMetricsGrid: View {
         return (amount, rate)
     }
 
-    private var thirtyDayChangeText: String {
-        guard let change = thirtyDayChange else { return "—" }
-        let converted = store.converted(change.amountCNY)
-        return change.amountCNY == 0
+    private func moneyText(_ amountCNY: Decimal) -> String {
+        let converted = store.converted(amountCNY)
+        return amountCNY == 0
             ? formatMoney(converted, currency: store.displayCurrency)
             : formatSignedMoney(converted, currency: store.displayCurrency)
-    }
-
-    private var thirtyDayChangeRateText: String? {
-        guard let change = thirtyDayChange else { return nil }
-        return formatPercent(change.rate)
-    }
-
-    private var thirtyDayChangeColor: Color {
-        PortfolixTheme.performanceColor(for: thirtyDayChange?.amountCNY ?? 0, scheme: store.performanceColorScheme)
     }
 
     private var costBasisText: String {
@@ -424,9 +416,25 @@ private struct HeroValueTrendPoint: Identifiable {
 
 private struct HeroValueTrendChart: View {
     @Environment(PortfolioStore.self) private var store
-    @State private var highlightedSnapshotID: UUID?
+    var body: some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        let cutoff = calendar.date(byAdding: .day, value: -30, to: today) ?? today
+        let rate = store.displayCurrency.rateFromCNY.doubleValue
+        let points = store.snapshotHistory
+            .filter { $0.date >= cutoff && $0.totalValueCNY.isFinite }
+            .sorted { $0.date < $1.date }
+            .map { HeroValueTrendPoint(snapshot: $0, value: $0.totalValueCNY * rate) }
 
-    private let calendar = Calendar.current
+        HeroValueTrendPlot(points: points, calendar: calendar)
+    }
+}
+
+private struct HeroValueTrendPlot: View {
+    @Environment(PortfolioStore.self) private var store
+    @State private var highlightedSnapshotID: UUID?
+    let points: [HeroValueTrendPoint]
+    let calendar: Calendar
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
@@ -448,7 +456,10 @@ private struct HeroValueTrendChart: View {
     }
 
     private var chart: some View {
-        Chart {
+        let yDomain = yDomain
+        let xDomain = xDomain
+        let axisDates = xAxisDates
+        return Chart {
             ForEach(points) { point in
                 AreaMark(
                     x: .value("Date", point.snapshot.date),
@@ -472,7 +483,7 @@ private struct HeroValueTrendChart: View {
                 .symbolSize(30)
                 .foregroundStyle(PortfolixTheme.text)
                 .annotation(
-                    position: shouldPlaceAnnotationLeading(for: point) ? .topLeading : .topTrailing,
+                    position: shouldPlaceAnnotationLeading(for: point, in: xDomain) ? .topLeading : .topTrailing,
                     spacing: PortfolixSpacing.xs
                 ) {
                     VStack(alignment: .leading, spacing: 1) {
@@ -505,10 +516,10 @@ private struct HeroValueTrendChart: View {
         .chartXScale(domain: xDomain)
         .chartYScale(domain: yDomain)
         .chartXAxis {
-            AxisMarks(values: xAxisDates) { value in
+            AxisMarks(values: axisDates) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
                     .foregroundStyle(PortfolixTheme.border.opacity(0.8))
-                AxisValueLabel(anchor: xAxisLabelAnchor(for: value.as(Date.self))) {
+                AxisValueLabel(anchor: xAxisLabelAnchor(for: value.as(Date.self), dates: axisDates)) {
                     if let date = value.as(Date.self) {
                         Text(dayLabel(date))
                             .font(PortfolixTypography.chartAxis)
@@ -526,7 +537,7 @@ private struct HeroValueTrendChart: View {
                     .foregroundStyle(PortfolixTheme.border.opacity(0.8))
                 AxisValueLabel {
                     if let numeric = value.as(Double.self) {
-                        Text(axisValueLabel(numeric))
+                        Text(axisValueLabel(numeric, span: yDomain.upperBound - yDomain.lowerBound))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
                             .foregroundStyle(PortfolixTheme.tertiary)
@@ -551,20 +562,6 @@ private struct HeroValueTrendChart: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var points: [HeroValueTrendPoint] {
-        let rate = store.displayCurrency.rateFromCNY.doubleValue
-        return store.snapshotHistory
-            .filter { $0.date >= thirtyDayCutoff }
-            .sorted { $0.date < $1.date }
-            .map { snapshot in
-                HeroValueTrendPoint(snapshot: snapshot, value: snapshot.totalValueCNY * rate)
-            }
-    }
-
-    private var thirtyDayCutoff: Date {
-        calendar.date(byAdding: .day, value: -30, to: calendar.startOfDay(for: .now)) ?? .now
-    }
-
     private var xDomain: ClosedRange<Date> {
         guard let first = points.first?.snapshot.date, let last = points.last?.snapshot.date else {
             let now = Date()
@@ -586,7 +583,7 @@ private struct HeroValueTrendChart: View {
         }
 
         let padding = max((highest - lowest) * 0.2, max(abs(highest), 1) * 0.002)
-        let lower = max(0, lowest - padding)
+        let lower = lowest >= 0 ? max(0, lowest - padding) : lowest - padding
         return lower...(highest + padding)
     }
 
@@ -599,8 +596,8 @@ private struct HeroValueTrendChart: View {
         return [calendar.startOfDay(for: first), middle, calendar.startOfDay(for: last)]
     }
 
-    private func xAxisLabelAnchor(for date: Date?) -> UnitPoint {
-        guard let date, let first = xAxisDates.first, let last = xAxisDates.last else {
+    private func xAxisLabelAnchor(for date: Date?, dates: [Date]) -> UnitPoint {
+        guard let date, let first = dates.first, let last = dates.last else {
             return .top
         }
         if date == first { return .topLeading }
@@ -612,10 +609,9 @@ private struct HeroValueTrendChart: View {
         Self.monthDayFormatter.string(from: date)
     }
 
-    private func axisValueLabel(_ value: Double) -> String {
+    private func axisValueLabel(_ value: Double, span: Double) -> String {
         let magnitude = abs(value)
         if magnitude >= 1_000_000 {
-            let span = yDomain.upperBound - yDomain.lowerBound
             return String(format: span < 200_000 ? "%.2fM" : "%.1fM", value / 1_000_000)
         }
         if magnitude >= 1_000 {
@@ -624,14 +620,14 @@ private struct HeroValueTrendChart: View {
         return String(format: "%.0f", value)
     }
 
-    private func shouldPlaceAnnotationLeading(for point: HeroValueTrendPoint) -> Bool {
+    private func shouldPlaceAnnotationLeading(for point: HeroValueTrendPoint, in xDomain: ClosedRange<Date>) -> Bool {
         let span = max(xDomain.upperBound.timeIntervalSince(xDomain.lowerBound), 1)
         let progress = point.snapshot.date.timeIntervalSince(xDomain.lowerBound) / span
         return progress > 0.7
     }
 
     private var accessibilitySummary: String {
-        guard let first = points.first, let last = points.last else {
+        guard points.count >= 2, let first = points.first, let last = points.last else {
             return localizedText("暂无走势数据", "No trend data yet", language: store.appLanguage)
         }
 
@@ -651,12 +647,15 @@ private struct HeroValueTrendChart: View {
             let frame = geometry[plotFrame]
             let x = location.x - frame.origin.x
             guard frame.contains(location), let date: Date = proxy.value(atX: x) else {
-                highlightedSnapshotID = nil
+                if highlightedSnapshotID != nil { highlightedSnapshotID = nil }
                 return
             }
-            highlightedSnapshotID = points.min {
+            let nearest = points.min {
                 abs($0.snapshot.date.timeIntervalSince(date)) < abs($1.snapshot.date.timeIntervalSince(date))
             }?.snapshot.id
+            if highlightedSnapshotID != nearest {
+                highlightedSnapshotID = nearest
+            }
         case .ended:
             highlightedSnapshotID = nil
         }
@@ -668,11 +667,6 @@ private struct HeroValueTrendChart: View {
         formatter.dateFormat = "M/d"
         return formatter
     }()
-}
-
-private enum DashboardChartStyle {
-
-    static let dataLineWidth = PortfolixLayout.accentLineWidth
 }
 
 private struct PriceRefreshButton: View {
@@ -741,63 +735,6 @@ enum PerformanceRiskRange: String, CaseIterable, Identifiable {
             }
         }
     }
-}
-
-private struct PerformanceRiskPoint: Identifiable {
-    let date: Date
-    let drawdownCNY: Double
-    let profitCNY: Double
-    let profitRate: Double
-    let peakProfitRate: Double
-
-    var id: Date { date }
-}
-
-private struct ProfitAreaPoint: Identifiable {
-    let date: Date
-    let value: Double
-
-    var id: Date { date }
-}
-
-private struct ProfitAreaSeries: Identifiable {
-    let id: String
-    let isPositive: Bool
-    let points: [ProfitAreaPoint]
-}
-
-private struct PerformanceRiskSummary {
-    let currentDrawdownCNY: Double
-    let currentDrawdownRate: Double
-    let currentProfitCNY: Double
-    let currentProfitRate: Double
-    let maxDrawdownCNY: Double
-    let maxDrawdownDate: Date?
-    let maxDrawdownRate: Double?
-    let maxDrawdownPeakRate: Double?
-    let annualizedVolatility: Double?
-    let upDayRatio: Double?
-    let upDayCount: Int
-    let trackedDayCount: Int
-    let worstDayCNY: Double?
-    let worstDayDate: Date?
-
-    static let empty = PerformanceRiskSummary(
-        currentDrawdownCNY: 0,
-        currentDrawdownRate: 0,
-        currentProfitCNY: 0,
-        currentProfitRate: 0,
-        maxDrawdownCNY: 0,
-        maxDrawdownDate: nil,
-        maxDrawdownRate: nil,
-        maxDrawdownPeakRate: nil,
-        annualizedVolatility: nil,
-        upDayRatio: nil,
-        upDayCount: 0,
-        trackedDayCount: 0,
-        worstDayCNY: nil,
-        worstDayDate: nil
-    )
 }
 
 /// Shared hover date for the profit and drawdown charts. An observable reference keeps pointer
@@ -946,120 +883,16 @@ private struct PerformanceRiskCard: View {
         PortfolixTheme.performanceColor(for: Decimal(-1), scheme: store.performanceColorScheme)
     }
 
-    private var points: [PerformanceRiskPoint] {
-        let history = store.snapshotHistory
-            .filter(\.costIsKnown)
-            .sorted { $0.date < $1.date }
-        guard !history.isEmpty else { return [] }
-
-        let today = calendar.startOfDay(for: .now)
-
-        var snapshotByDay: [Date: PortfolioSnapshot] = [:]
-        for snapshot in history {
-            snapshotByDay[calendar.startOfDay(for: snapshot.date)] = snapshot
-        }
-        let sortedDays = snapshotByDay.keys.sorted()
-        let start: Date
-        if let days = store.performanceRiskRange.days {
-            start = calendar.date(byAdding: .day, value: -days, to: today) ?? today
-        } else {
-            start = sortedDays.first ?? today
-        }
-
-        var peakProfit: Double?
-        var peakRate: Double?
-        var result: [PerformanceRiskPoint] = []
-        for day in sortedDays {
-            guard let snapshot = snapshotByDay[day] else { continue }
-            let previousPeakProfit = peakProfit ?? snapshot.profitCNY
-            let previousPeakRate = peakRate ?? snapshot.profitRate
-            peakProfit = max(previousPeakProfit, snapshot.profitCNY)
-            peakRate = max(previousPeakRate, snapshot.profitRate)
-
-            guard day >= start, day <= today else { continue }
-            result.append(
-                PerformanceRiskPoint(
-                    date: day,
-                    drawdownCNY: snapshot.profitCNY - (peakProfit ?? snapshot.profitCNY),
-                    profitCNY: snapshot.profitCNY,
-                    profitRate: snapshot.profitRate,
-                    peakProfitRate: peakRate ?? snapshot.profitRate
-                )
-            )
-        }
-        return result
-    }
-
-    private var dailyProfitPoints: [DailyProfitPoint] {
-        let today = calendar.startOfDay(for: .now)
-        let start = store.performanceRiskRange.days
-            .flatMap { calendar.date(byAdding: .day, value: -$0, to: today) }
-            ?? Date.distantPast
-        return store.dailyProfitHistory
-            .filter { calendar.startOfDay(for: $0.date) >= start && calendar.startOfDay(for: $0.date) <= today }
-            .sorted { $0.date < $1.date }
-    }
-
-    private var dailyReturns: [Double] {
-        let dailyPoints = dailyProfitPoints
-        guard dailyPoints.count >= 2 else { return [] }
-
-        var valueByDay: [Date: Double] = [:]
-        for snapshot in store.snapshotHistory where snapshot.costIsKnown && snapshot.totalValueCNY > 0 {
-            valueByDay[calendar.startOfDay(for: snapshot.date)] = snapshot.totalValueCNY
-        }
-        let sortedDays = valueByDay.keys.sorted()
-        guard !sortedDays.isEmpty else { return [] }
-
-        var returns: [Double] = []
-        for point in dailyPoints {
-            let day = calendar.startOfDay(for: point.date)
-            guard let index = sortedDays.firstIndex(where: { $0 >= day }), index > 0,
-                  let previousValue = valueByDay[sortedDays[index - 1]], previousValue > 0
-            else {
-                continue
-            }
-            returns.append(point.amountCNY.doubleValue / previousValue)
-        }
-        return returns
-    }
-
-    private var summary: PerformanceRiskSummary {
-        let points = points
-        guard let latest = points.last else { return .empty }
-
-        let maxPoint = points.min { $0.drawdownCNY < $1.drawdownCNY }
-        let dailyPoints = dailyProfitPoints
-        let nonZeroDailyPoints = dailyPoints.filter { $0.amountCNY != 0 }
-        let upDays = nonZeroDailyPoints.filter { $0.amountCNY > 0 }.count
-        let worst = dailyPoints.min { $0.amountCNY < $1.amountCNY }
-
-        var volatility: Double?
-        if let deviation = standardDeviation(dailyReturns) {
-            volatility = deviation * (252.0).squareRoot() * 100
-        }
-
-        return PerformanceRiskSummary(
-            currentDrawdownCNY: latest.drawdownCNY,
-            currentDrawdownRate: latest.profitRate - latest.peakProfitRate,
-            currentProfitCNY: latest.profitCNY,
-            currentProfitRate: latest.profitRate,
-            maxDrawdownCNY: maxPoint?.drawdownCNY ?? 0,
-            maxDrawdownDate: maxPoint?.date,
-            maxDrawdownRate: maxPoint.map { $0.profitRate - $0.peakProfitRate },
-            maxDrawdownPeakRate: maxPoint?.peakProfitRate,
-            annualizedVolatility: volatility,
-            upDayRatio: nonZeroDailyPoints.isEmpty ? nil : Double(upDays) / Double(nonZeroDailyPoints.count) * 100,
-            upDayCount: upDays,
-            trackedDayCount: nonZeroDailyPoints.count,
-            worstDayCNY: worst?.amountCNY.doubleValue,
-            worstDayDate: worst.map { calendar.startOfDay(for: $0.date) }
-        )
-    }
-
     var body: some View {
         @Bindable var store = store
-        let summary = summary
+        let data = PerformanceRiskChartData(
+            snapshots: store.snapshotHistory,
+            dailyProfit: store.dailyProfitHistory,
+            range: store.performanceRiskRange,
+            calendar: calendar,
+            now: .now
+        )
+        let summary = data.summary
 
         Panel {
             VStack(alignment: .leading, spacing: 0) {
@@ -1107,13 +940,13 @@ private struct PerformanceRiskCard: View {
                 .padding(.top, PortfolixSpacing.md)
                 .accessibilityElement(children: .combine)
 
-                chartSection
+                chartSection(data)
                     .padding(.top, PortfolixSpacing.sm)
                     .frame(maxHeight: .infinity)
 
                 HStack(alignment: .top, spacing: PortfolixSpacing.lg) {
                     riskStatCell(
-                        title: maxDrawdownTitle(summary),
+                        title: localizedText("最大回撤", "Max Drawdown", language: store.appLanguage),
                         value: summary.maxDrawdownDate == nil ? "—" : moneyText(summary.maxDrawdownCNY),
                         detail: maxDrawdownDetail(summary),
                         color: summary.maxDrawdownDate == nil
@@ -1150,34 +983,41 @@ private struct PerformanceRiskCard: View {
     }
 
     @ViewBuilder
-    private var chartSection: some View {
+    private func chartSection(_ data: PerformanceRiskChartData) -> some View {
+        let points = data.points
         if points.count < 2 {
             DashboardEmptyState(title: localizedText("暂无收益与回撤数据", "No return or drawdown data yet", language: store.appLanguage))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            let samples = data.chartPoints
+            let domain = xDomain(points: points)
+            let accessibilityValue = accessibilitySummary(data.summary)
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                profitChart
+                profitChart(points: points, samples: samples, xDomain: domain, accessibilityValue: accessibilityValue)
                     .frame(maxHeight: .infinity)
                     .layoutPriority(1)
                     .zIndex(1)
 
-                drawdownChart
+                drawdownChart(points: points, samples: samples, xDomain: domain, accessibilityValue: accessibilityValue)
                     .frame(height: 46)
                     .zIndex(0)
             }
         }
     }
 
-    private var profitChart: some View {
-        Chart {
+    private func profitChart(
+        points: [PerformanceRiskPoint],
+        samples: [PerformanceRiskPoint],
+        xDomain: ClosedRange<Date>,
+        accessibilityValue: String
+    ) -> some View {
+        let series = ProfitAreaSeries.make(from: samples.map { ($0.date, $0.profitCNY * displayRate) })
+        return Chart {
             RuleMark(y: .value("零线", 0))
                 .foregroundStyle(PortfolixTheme.border)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
 
-            // 正负面积拆成互不重叠的连续段：每段只含同符号点，并在零交叉处
-            // 插入插值得到的 0 点。这样另一符号不会在 0 轴上留下零高度
-            // AreaMark 的抗锯齿边缘，交界处不会再出现红绿叠加。
-            ForEach(profitAreaSeries) { series in
+            ForEach(series) { series in
                 ForEach(series.points) { point in
                     AreaMark(
                         x: .value("日期", point.date),
@@ -1190,11 +1030,11 @@ private struct PerformanceRiskCard: View {
             }
         }
         .chartForegroundStyleScale(
-            domain: profitAreaStyleDomain,
-            range: profitAreaStyleRange
+            domain: series.map(\.id),
+            range: series.map { $0.isPositive ? profitPositiveAreaColor : profitNegativeAreaColor }
         )
         .chartLegend(.hidden)
-                .chartOverlay { proxy in
+        .chartOverlay { proxy in
             GeometryReader { geometry in
                 RiskChartHoverLayer(
                     tracker: hoverTracker,
@@ -1212,7 +1052,7 @@ private struct PerformanceRiskCard: View {
             }
         }
         .chartXScale(domain: xDomain)
-        .chartYScale(domain: profitYDomain)
+        .chartYScale(domain: profitYDomain(points: points))
         .chartXAxis(.hidden)
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
@@ -1232,16 +1072,23 @@ private struct PerformanceRiskCard: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(localizedText("浮盈走势", "Unrealized P&L trend", language: store.appLanguage))
-        .accessibilityValue(accessibilitySummary(summary))
+        .accessibilityValue(accessibilityValue)
     }
 
-    private var drawdownChart: some View {
-        Chart {
+    private func drawdownChart(
+        points: [PerformanceRiskPoint],
+        samples: [PerformanceRiskPoint],
+        xDomain: ClosedRange<Date>,
+        accessibilityValue: String
+    ) -> some View {
+        let yDomain = drawdownYDomain(points: points)
+        let axisDates = xAxisDates(in: xDomain)
+        return Chart {
             RuleMark(y: .value("零线", 0))
                 .foregroundStyle(PortfolixTheme.border)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
 
-            ForEach(chartPoints) { point in
+            ForEach(samples) { point in
                 AreaMark(
                     x: .value("日期", point.date),
                     yStart: .value("基线", 0),
@@ -1270,14 +1117,14 @@ private struct PerformanceRiskCard: View {
             }
         }
         .chartXScale(domain: xDomain)
-        .chartYScale(domain: drawdownYDomain)
+        .chartYScale(domain: yDomain)
         .chartXAxis {
-            AxisMarks(values: xAxisDates) { value in
+            AxisMarks(values: axisDates) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
                     .foregroundStyle(PortfolixTheme.border)
-                AxisValueLabel(anchor: value.as(Date.self) == xAxisDates.last ? .topTrailing : .top) {
+                AxisValueLabel(anchor: value.as(Date.self) == axisDates.last ? .topTrailing : .top) {
                     if let date = value.as(Date.self) {
-                        Text(axisDateLabel(date))
+                        Text(axisDateLabel(date, domain: xDomain))
                             .font(PortfolixTypography.chartAxis)
                             .monospacedDigit()
                             .foregroundStyle(PortfolixTheme.tertiary)
@@ -1288,7 +1135,7 @@ private struct PerformanceRiskCard: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: [drawdownYDomain.lowerBound, 0]) { value in
+            AxisMarks(position: .trailing, values: [yDomain.lowerBound, 0]) { value in
                 AxisValueLabel {
                     if let numeric = value.as(Double.self) {
                         Text(axisMoneyLabel(numeric))
@@ -1303,97 +1150,10 @@ private struct PerformanceRiskCard: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(localizedText("回撤走势", "Drawdown trend", language: store.appLanguage))
-        .accessibilityValue(accessibilitySummary(summary))
+        .accessibilityValue(accessibilityValue)
     }
 
     static let chartYAxisLabelWidth: CGFloat = 52
-
-    /// 浮盈面积分段：连续同符号点组成一段，两端补零交叉插值点，
-    /// 保证任意时刻只有一段面积覆盖 0 轴某一侧，交界处不出现颜色叠加。
-    private var profitAreaSeries: [ProfitAreaSeries] {
-        let samples: [(date: Date, value: Double)] = chartPoints.map {
-            ($0.date, $0.profitCNY * displayRate)
-        }
-        guard !samples.isEmpty else { return [] }
-
-        var series: [ProfitAreaSeries] = []
-        var index = 0
-        while index < samples.count {
-            let isPositive = samples[index].value >= 0
-            var runEnd = index
-            while runEnd + 1 < samples.count,
-                  (samples[runEnd + 1].value >= 0) == isPositive {
-                runEnd += 1
-            }
-
-            var points: [ProfitAreaPoint] = []
-            if index > 0 {
-                points.append(
-                    ProfitAreaPoint(
-                        date: zeroCrossingDate(samples[index - 1], samples[index]),
-                        value: 0
-                    )
-                )
-            }
-            for sampleIndex in index...runEnd {
-                points.append(
-                    ProfitAreaPoint(
-                        date: samples[sampleIndex].date,
-                        value: samples[sampleIndex].value
-                    )
-                )
-            }
-            if runEnd < samples.count - 1 {
-                points.append(
-                    ProfitAreaPoint(
-                        date: zeroCrossingDate(samples[runEnd], samples[runEnd + 1]),
-                        value: 0
-                    )
-                )
-            }
-
-            series.append(
-                ProfitAreaSeries(
-                    id: "\(isPositive ? "positive" : "negative")-\(series.count)",
-                    isPositive: isPositive,
-                    points: points
-                )
-            )
-            index = runEnd + 1
-        }
-        return series
-    }
-
-    private var profitAreaStyleDomain: [String] {
-        profitAreaSeries.map(\.id)
-    }
-
-    private var profitAreaStyleRange: [Color] {
-        profitAreaSeries.map { $0.isPositive ? profitPositiveAreaColor : profitNegativeAreaColor }
-    }
-
-    private func zeroCrossingDate(
-        _ start: (date: Date, value: Double),
-        _ end: (date: Date, value: Double)
-    ) -> Date {
-        let span = start.value - end.value
-        guard abs(span) > Double.ulpOfOne else { return end.date }
-        let fraction = min(max(start.value / span, 0), 1)
-        return start.date.addingTimeInterval(end.date.timeIntervalSince(start.date) * fraction)
-    }
-
-    private var chartPoints: [PerformanceRiskPoint] {
-        let maximumCount = 128
-        guard points.count > maximumCount else { return points }
-        var sampled: [PerformanceRiskPoint] = []
-        sampled.reserveCapacity(maximumCount)
-        let step = Double(points.count - 1) / Double(maximumCount - 1)
-        for index in 0..<maximumCount {
-            let source = Int((Double(index) * step).rounded())
-            sampled.append(points[min(source, points.count - 1)])
-        }
-        return sampled
-    }
 
     private var profitPositiveColor: Color {
         PortfolixTheme.performanceColor(for: Decimal(1), scheme: store.performanceColorScheme)
@@ -1407,9 +1167,7 @@ private struct PerformanceRiskCard: View {
         valueCNY >= 0 ? profitPositiveColor : profitNegativeColor
     }
 
-    /// 面积按 0 轴正负分段：红涨绿跌下 0 轴以上红/粉、以下绿；
-    /// 绿涨红跌时反向。零交叉处插入 0 点，两块面积自然相接；
-    /// 上下图都使用 W4（比 W3 更清晰的淡彩，不改变面积风格）。
+    /// Fill each side of the zero axis with the corresponding color in the active scheme.
     private var profitPositiveAreaColor: Color {
         switch store.performanceColorScheme {
         case .redUpGreenDown: return PortfolixTheme.lossAreaWash
@@ -1431,7 +1189,7 @@ private struct PerformanceRiskCard: View {
         }
     }
 
-    private var profitYDomain: ClosedRange<Double> {
+    private func profitYDomain(points: [PerformanceRiskPoint]) -> ClosedRange<Double> {
         let values = points.map { $0.profitCNY * displayRate }
         let minimum = min(values.min() ?? 0, 0)
         let maximum = max(values.max() ?? 0, 0)
@@ -1440,14 +1198,14 @@ private struct PerformanceRiskCard: View {
         return (minimum - padding) ... (maximum + padding)
     }
 
-    private var drawdownYDomain: ClosedRange<Double> {
+    private func drawdownYDomain(points: [PerformanceRiskPoint]) -> ClosedRange<Double> {
         let values = points.map { $0.drawdownCNY * displayRate }
         let minimum = min(values.min() ?? 0, 0)
         let padding = max(abs(minimum) * 0.14, 120)
         return (minimum - padding) ... (padding * 0.55)
     }
 
-    private var xDomain: ClosedRange<Date> {
+    private func xDomain(points: [PerformanceRiskPoint]) -> ClosedRange<Date> {
         let today = calendar.startOfDay(for: .now)
         guard let first = points.first, let last = points.last else {
             return today.addingTimeInterval(-86_400) ... today
@@ -1457,8 +1215,7 @@ private struct PerformanceRiskCard: View {
         return start ... max(start.addingTimeInterval(86_400), end)
     }
 
-    private var xAxisDates: [Date] {
-        let domain = xDomain
+    private func xAxisDates(in domain: ClosedRange<Date>) -> [Date] {
         let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
         let count: Int
         if store.performanceRiskRange == .all {
@@ -1475,12 +1232,6 @@ private struct PerformanceRiskCard: View {
             }
         }
         return dates
-    }
-
-    private func shouldPlaceTooltipLeading(for point: PerformanceRiskPoint) -> Bool {
-        let domain = xDomain
-        let span = max(domain.upperBound.timeIntervalSince(domain.lowerBound), 1)
-        return point.date.timeIntervalSince(domain.lowerBound) / span > 0.72
     }
 
     private func headlineTitle(_ summary: PerformanceRiskSummary) -> String {
@@ -1526,10 +1277,6 @@ private struct PerformanceRiskCard: View {
         value.isFinite ? String(format: "%+.2f%%", value) : nil
     }
 
-    private func maxDrawdownTitle(_ summary: PerformanceRiskSummary) -> String {
-        localizedText("最大回撤", "Max Drawdown", language: store.appLanguage)
-    }
-
     private func maxDrawdownDetail(_ summary: PerformanceRiskSummary) -> String? {
         var parts: [String] = []
         if let date = summary.maxDrawdownDate {
@@ -1545,12 +1292,12 @@ private struct PerformanceRiskCard: View {
         Self.shortDateFormatter.string(from: date)
     }
 
-    private func axisDateLabel(_ date: Date) -> String {
+    private func axisDateLabel(_ date: Date, domain: ClosedRange<Date>) -> String {
         let usesMonthLabels: Bool
         if store.performanceRiskRange == .year {
             usesMonthLabels = true
         } else if store.performanceRiskRange == .all {
-            usesMonthLabels = xDomain.upperBound.timeIntervalSince(xDomain.lowerBound) > 200 * 86_400
+            usesMonthLabels = domain.upperBound.timeIntervalSince(domain.lowerBound) > 200 * 86_400
         } else {
             usesMonthLabels = false
         }
@@ -1612,13 +1359,6 @@ private struct PerformanceRiskCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func standardDeviation(_ values: [Double]) -> Double? {
-        guard values.count >= 2 else { return nil }
-        let mean = values.reduce(0, +) / Double(values.count)
-        let variance = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(values.count)
-        return variance.squareRoot()
     }
 
     private static let shortDateFormatter: DateFormatter = {
@@ -1696,8 +1436,7 @@ private struct AssetMixSegmentBar: View {
     let items: [PositionShareItem]
     @Binding var highlightedItemID: PositionShareItem.ID?
 
-    /// P1-A：条带使用淡彩资产大类色（classArea），与云图的大色块同色阶；
-    /// 段间保留 2pt 间隙，图例沿用同一淡彩，避免“色块抢眼、图例另有一套色”。
+    /// Keep 2 pt between segments and use the same pale colors in the bar and legend.
     var body: some View {
         GeometryReader { proxy in
             let rectangles = PortfolioChartLayout.barSegments(weights: items.map(\.value), size: proxy.size)
@@ -1782,24 +1521,20 @@ private struct RecentPositionsCard: View {
     }
 
     private var primaryPositions: [Position] {
-        PrimaryPositionOrdering.visiblePositions(
+        let now = Date.now
+        return PrimaryPositionOrdering.visiblePositions(
             from: store.positions,
             limit: displayLimit,
             sortField: sortField,
             direction: sortDirection,
-            todayProfit: { store.todayProfitCNY(for: $0) }
+            todayProfit: { store.todayProfitCNY(for: $0, asOf: now) }
         )
     }
 
-    /// Measures the longest visible holding title so the asset column hugs its
-    /// content. The value never depends on the card width, which avoids the
-    /// resize feedback loop the numeric columns used to create.
-    private var assetColumnWidth: CGFloat {
-        PrimaryPositionColumnWidths.assetWidth(for: primaryPositions, language: store.appLanguage)
-    }
-
     var body: some View {
-        Panel {
+        let positions = primaryPositions
+        let assetColumnWidth = PrimaryPositionColumnWidths.assetWidth(for: positions, language: store.appLanguage)
+        return Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
                 SectionHeader(title: localizedText("主要持仓", "Top Holdings", language: store.appLanguage), symbol: "list.bullet.rectangle") {
                     PortfolixGlassGroup(spacing: PortfolixLayout.controlSpacing) {
@@ -1823,7 +1558,7 @@ private struct RecentPositionsCard: View {
                 }
                 .frame(minHeight: PortfolixLayout.cardHeaderHeight, alignment: .top)
 
-                if primaryPositions.isEmpty {
+                if positions.isEmpty {
                     DashboardEmptyState(title: localizedText("暂无持仓", "No holdings yet", language: store.appLanguage))
                         .frame(maxWidth: .infinity, minHeight: 82)
                 } else {
@@ -1835,7 +1570,7 @@ private struct RecentPositionsCard: View {
                     .padding(.top, PortfolixSpacing.xs)
 
                     VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                        ForEach(primaryPositions) { position in
+                        ForEach(positions) { position in
                             CompactPositionRow(assetWidth: assetColumnWidth, position: position) {
                                 openPosition(position)
                             }
@@ -1913,14 +1648,16 @@ enum PrimaryPositionOrdering {
             limited = rankedByMarketValue
         }
 
-        return limited.sorted { lhs, rhs in
-            let lhsValue = sortValue(for: lhs, field: sortField, todayProfit: todayProfit)
-            let rhsValue = sortValue(for: rhs, field: sortField, todayProfit: todayProfit)
-            if lhsValue == rhsValue {
-                return marketValueRank(lhs, rhs)
-            }
-            return direction == .ascending ? lhsValue < rhsValue : lhsValue > rhsValue
+        if sortField == .marketValue, direction == .descending {
+            return limited
         }
+        let keyedPositions = limited.map {
+            (position: $0, value: sortValue(for: $0, field: sortField, todayProfit: todayProfit))
+        }
+        // Swift's stable sort preserves the existing market-value rank for equal metrics.
+        return keyedPositions.sorted {
+            direction == .ascending ? $0.value < $1.value : $0.value > $1.value
+        }.map(\.position)
     }
 
     private static func sortValue(
@@ -2270,10 +2007,9 @@ private struct PositionSparkline: View {
         PortfolixTheme.performanceColor(for: trendDelta, scheme: store.performanceColorScheme)
     }
 
-    /// 表格内的小面积图与卡片大图使用同一套“淡彩面积”语言；这里用 W4 保证 28pt
-    /// 高度下仍能看出形状，方向仍按红涨绿跌/绿涨红跌映射。
+    /// Keep the area visible at 28 pt and use the active performance color scheme.
     private var paleAreaColor: Color {
-        // 全平走势不表达涨跌方向，使用与投资云图「其他」一致的灰色
+        // Flat trends use the same neutral wash as the investment map’s Other tile.
         if trendDelta == 0 { return PortfolixTheme.neutralWash }
         let isPositive = trendDelta >= 0
         switch store.performanceColorScheme {
@@ -2348,7 +2084,7 @@ extension PortfolioStore {
         return HoldingShareEngine.groups(positions: positions, language: appLanguage).map { group in
             let color: Color
             if group.id == "other_holdings" {
-                // 与投资云图聚合「其他」色块保持一致
+                // Match the investment map’s Other tile.
                 color = PortfolixTheme.neutralWash
             } else if let uuid = UUID(uuidString: group.id.replacingOccurrences(of: "holding_", with: "")),
                       let position = positionsByID[uuid] {
@@ -2393,61 +2129,59 @@ enum DailyProfitDisplayMode: String, CaseIterable, Identifiable {
 
 private struct DailyProfitCard: View {
     @Environment(PortfolioStore.self) private var store
+    var contentHeight: CGFloat = PortfolixLayout.dashboardTrendContentHeight
+    @State private var selectedMonth = Calendar.current.dateInterval(of: .month, for: .now)?.start ?? .now
+
+    var body: some View {
+        let calendar = Calendar.current
+        let history = store.dailyProfitHistory
+        let interval = calendar.dateInterval(of: .month, for: selectedMonth)
+            ?? DateInterval(start: selectedMonth, duration: 31 * 86_400)
+        let points = dailyProfitPointsInMonth(history, in: interval).sorted { $0.date < $1.date }
+        let earliestDate = history.lazy.map(\.date).min()
+        let earliestMonth = earliestDate.flatMap { calendar.dateInterval(of: .month, for: $0)?.start }
+
+        DailyProfitMonthCard(
+            selectedMonth: $selectedMonth,
+            contentHeight: contentHeight,
+            calendar: calendar,
+            monthInterval: interval,
+            points: points,
+            pointsByDay: Dictionary(
+                points.map { (calendar.startOfDay(for: $0.date), $0) },
+                uniquingKeysWith: { _, latest in latest }
+            ),
+            earliestRecordedMonth: earliestMonth
+        )
+    }
+}
+
+private struct DailyProfitMonthCard: View {
+    @Environment(PortfolioStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    var contentHeight: CGFloat = PortfolixLayout.dashboardTrendContentHeight
-    private var displayMode: DailyProfitDisplayMode { store.dailyProfitDisplayMode }
-    @State private var selectedMonth = Calendar.current.dateInterval(of: .month, for: .now)?.start ?? .now
+    @Binding var selectedMonth: Date
+    let contentHeight: CGFloat
+    let calendar: Calendar
+    let monthInterval: DateInterval
+    let points: [DailyProfitPoint]
+    let pointsByDay: [Date: DailyProfitPoint]
+    let earliestRecordedMonth: Date?
     @State private var hoveredDate: Date?
 
-    private let calendar = Calendar.current
-
-    private var monthInterval: DateInterval {
-        calendar.dateInterval(of: .month, for: selectedMonth)
-            ?? DateInterval(start: selectedMonth, duration: 31 * 86_400)
-    }
-
-    private var points: [DailyProfitPoint] {
-        dailyProfitPointsInMonth(store.dailyProfitHistory, in: monthInterval)
-            .sorted { $0.date < $1.date }
-    }
-
-    private var pointsByDay: [Date: DailyProfitPoint] {
-        Dictionary(points.map { (calendar.startOfDay(for: $0.date), $0) }, uniquingKeysWith: { _, latest in latest })
-    }
-
+    private var displayMode: DailyProfitDisplayMode { store.dailyProfitDisplayMode }
     private var highlightedDate: Date? { hoveredDate }
 
     private var highlightedPoint: DailyProfitPoint? {
-        guard let highlightedDate else { return nil }
-        return pointsByDay[calendar.startOfDay(for: highlightedDate)]
+        hoveredDate.flatMap { pointsByDay[calendar.startOfDay(for: $0)] }
     }
 
     private var monthlyProfitCNY: Decimal {
         points.reduce(0) { $0 + $1.amountCNY }
     }
 
-    private var profitableDayCount: Int {
-        points.filter { $0.amountCNY > 0 }.count
-    }
-
-    private var lossDayCount: Int {
-        points.filter { $0.amountCNY < 0 }.count
-    }
-
-    private var zeroDayCount: Int {
-        points.filter { $0.amountCNY == 0 }.count
-    }
-
     private var daysInMonth: Int {
         calendar.range(of: .day, in: .month, for: selectedMonth)?.count ?? 30
-    }
-
-    private var earliestMonth: Date {
-        guard let earliestDate = store.dailyProfitHistory.map(\.date).min() else {
-            return currentMonth
-        }
-        return calendar.dateInterval(of: .month, for: earliestDate)?.start ?? currentMonth
     }
 
     private var currentMonth: Date {
@@ -2459,7 +2193,7 @@ private struct DailyProfitCard: View {
     }
 
     private var canMoveBackward: Bool {
-        selectedMonth > earliestMonth
+        selectedMonth > (earliestRecordedMonth ?? currentMonth)
     }
 
     private var canMoveForward: Bool {
@@ -2638,6 +2372,9 @@ private struct DailyProfitCard: View {
     }
 
     private var countsText: String {
+        let profitableDayCount = points.count { $0.amountCNY > 0 }
+        let lossDayCount = points.count { $0.amountCNY < 0 }
+        let zeroDayCount = points.count - profitableDayCount - lossDayCount
         var chinese = "盈利 \(profitableDayCount) · 亏损 \(lossDayCount)"
         var english = "\(profitableDayCount) up · \(lossDayCount) down"
         if zeroDayCount > 0 {
@@ -2673,7 +2410,9 @@ private struct DailyProfitCard: View {
 
     private var calendarView: some View {
         GeometryReader { geometry in
-            let cellHeight = DailyProfitCalendarLayout.cellHeight(in: geometry.size.height, rows: calendarRowCount)
+            let slots = calendarSlots
+            let rows = max((slots.count + 6) / 7, 1)
+            let cellHeight = DailyProfitCalendarLayout.cellHeight(in: geometry.size.height, rows: rows)
 
             if points.isEmpty {
                 DashboardEmptyState(title: emptyStateTitle)
@@ -2691,7 +2430,7 @@ private struct DailyProfitCard: View {
                     }
 
                     LazyVGrid(columns: calendarColumns, spacing: PortfolixLayout.dataTileSpacing) {
-                        ForEach(calendarSlots) { slot in
+                        ForEach(slots) { slot in
                             if let date = slot.date {
                                 calendarCell(for: date, height: cellHeight)
                             } else {
@@ -2706,7 +2445,7 @@ private struct DailyProfitCard: View {
                 .onContinuousHover { phase in
                     switch phase {
                     case let .active(location):
-                        hoveredDate = date(at: location, cellHeight: cellHeight, in: geometry.size)
+                        updateHoveredDate(to: date(at: location, cellHeight: cellHeight, in: geometry.size, slots: slots))
                     case .ended:
                         hoveredDate = nil
                     }
@@ -2800,7 +2539,7 @@ private struct DailyProfitCard: View {
 
     @ViewBuilder
     private func calendarCell(for date: Date, height: CGFloat) -> some View {
-        let point = pointsByDay[calendar.startOfDay(for: date)]
+        let point = pointsByDay[date]
         let amount = point?.amountCNY
         let isToday = calendar.isDateInToday(date)
         let isHovered = hoveredDate.map { calendar.isDate($0, inSameDayAs: date) } == true
@@ -2881,12 +2620,6 @@ private struct DailyProfitCard: View {
         return slots
     }
 
-    /// Calendar rows for the selected month (5 or 6), used to size cells so
-    /// the grid always fills the card's available height without leftover space.
-    private var calendarRowCount: Int {
-        max((calendarSlots.count + 6) / 7, 1)
-    }
-
     private var monthTitle: String {
         let components = calendar.dateComponents([.year, .month], from: selectedMonth)
         let year = components.year ?? 0
@@ -2960,15 +2693,21 @@ private struct DailyProfitCard: View {
                 hoveredDate = nil
                 return
             }
-            hoveredDate = points.min {
+            updateHoveredDate(to: points.min {
                 abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
-            }?.date
+            }?.date)
         case .ended:
             hoveredDate = nil
         }
     }
 
-    private func date(at location: CGPoint, cellHeight: CGFloat, in size: CGSize) -> Date? {
+    private func updateHoveredDate(to date: Date?) {
+        if hoveredDate != date { hoveredDate = date }
+    }
+
+    private func date(
+        at location: CGPoint, cellHeight: CGFloat, in size: CGSize, slots: [DailyProfitCalendarSlot]
+    ) -> Date? {
         let spacing = PortfolixLayout.dataTileSpacing
         let cellWidth = (size.width - spacing * 6) / 7
         guard cellWidth > 0, cellHeight > 0 else { return nil }
@@ -2978,8 +2717,8 @@ private struct DailyProfitCard: View {
         let row = Int(y / (cellHeight + spacing))
         guard (0..<7).contains(column), row >= 0 else { return nil }
         let index = row * 7 + column
-        guard calendarSlots.indices.contains(index) else { return nil }
-        return calendarSlots[index].date
+        guard slots.indices.contains(index) else { return nil }
+        return slots[index].date
     }
 
     private func convertedAmount(_ amountCNY: Decimal) -> Double {
@@ -3013,7 +2752,7 @@ private struct DailyProfitCard: View {
         PortfolixTheme.performanceColor(for: amount, scheme: store.performanceColorScheme)
     }
 
-    /// 柱状图沿用收益面积图的淡彩块，与「收益与回撤」卡的视觉语言保持一致。
+    /// Reuse the pale gain and loss fills from Returns & Drawdown.
     private func profitBarColor(_ amount: Decimal) -> Color {
         let isPositive = amount >= 0
         switch (isPositive, store.performanceColorScheme) {

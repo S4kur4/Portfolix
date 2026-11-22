@@ -173,7 +173,7 @@ struct HoldingsIntegrationTests {
         try repo.insert(security)
         let store = PortfolioStore(positionRepository: repo, credentialStore: NoIntegrationCredentials())
 
-        // 卖出 4 份：净收入 4*110-5=435，分摊成本 4*80=320，已实现收益 115。
+        // Sell 4 units for net proceeds of 435, allocated cost of 320, and realized P&L of 115.
         try store.recordTrade(id: UUID(), side: .sell, position: security, quantity: 4, price: 110, fees: 5,
             tradeDate: .now, cashPositionID: cash.id)
 
@@ -183,7 +183,7 @@ struct HoldingsIntegrationTests {
         #expect(store.realizedCostCNY == 320)
         #expect(store.realizedProfitIsAvailable)
         #expect(store.realizedProfitRate == Decimal(115) / Decimal(320) * 100)
-        #expect(store.totalProfitCNY == 300) // 浮动部分不计入已实现收益：6*130-480
+        #expect(store.totalProfitCNY == 300) // Unrealized P&L on the remaining position: 6 * 130 - 480.
     }
 
     @Test @MainActor

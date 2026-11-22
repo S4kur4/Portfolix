@@ -179,8 +179,7 @@ struct InvestmentCloudMapView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: summaryAnimationTrigger)
     }
 
-    /// 摘要行切换动画触发值：悬停对象变化时触发，
-    /// 与盈亏日历保持一致（分支切换淡入淡出，数字用 numericText 滚动）。
+    /// Crossfade the summary when the highlighted tile changes, as in the P&L calendar.
     private var summaryAnimationTrigger: String {
         activeItem?.id ?? "default"
     }
@@ -398,10 +397,11 @@ struct InvestmentCloudTreemap: View {
                         .font(PortfolixTypography.captionEmphasis)
                         .lineLimit(2)
                     if item.mode == .dailyProfit {
-                        Text(amountLabelText(item, rect: rect))
+                        let amount = amountLabelText(item, rect: rect)
+                        Text(amount)
                             .font(PortfolixTypography.captionEmphasis)
                             .monospacedDigit()
-                            .portfolixNumericTransition(amountLabelText(item, rect: rect))
+                            .portfolixNumericTransition(amount)
                             .lineLimit(1)
                             .foregroundStyle(tileTextColor(for: item))
                     } else if let percentage = item.distributionPercentage {
@@ -433,8 +433,7 @@ struct InvestmentCloudTreemap: View {
         return item.assetClass.pale
     }
 
-    /// 分布模式的大色块使用大面积色阶（classArea），文字用配套的 classOnArea；
-    /// 聚合块底为中性 wash，仍用 text；每日盈亏模式保持中性底 + 语义数字。
+    /// Use the matching ink on pale distribution tiles and standard text on neutral tiles.
     private func tileTitleColor(for item: InvestmentCloudItem) -> Color {
         guard item.mode == .distribution, !item.isAggregated else { return PortfolixTheme.text }
         return PortfolixTheme.classOnPale
@@ -470,9 +469,10 @@ struct InvestmentCloudTreemap: View {
                 Text(String(format: "%.1f%%", percentage))
                     .portfolixNumericTransition(percentage)
             }
-            Text(amountText(item))
+            let amount = amountText(item)
+            Text(amount)
                 .monospacedDigit()
-                .portfolixNumericTransition(amountText(item))
+                .portfolixNumericTransition(amount)
                 .foregroundStyle(item.mode == .dailyProfit
                                  ? PortfolixTheme.performanceStatusText(for: item.amountCNY, scheme: performanceColorScheme)
                                  : PortfolixTheme.text)
