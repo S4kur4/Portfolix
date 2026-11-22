@@ -3,6 +3,39 @@
     <channel>
         <title>Portfolix</title>
         <item>
+            <title>0.1.14</title>
+            <pubDate>Sun, 22 Nov 2026 16:29:10 +0800</pubDate>
+            <link>https://github.com/S4kur4/Portfolix/releases</link>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>0.1.14</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Portfolix v0.1.14
+
+## 更新内容
+
+- 全面升级资产总览与视觉体系：采用统一的语义字号与淡彩资产大类配色，优化深浅色模式下的图表可读性、提示框样式与侧边栏选中指示。
+- 资产总览卡片体验焕新：组合价值卡展示已实现收益、现金合计与近 30 天走势；新增「收益波动」双区浮盈与回撤图、「投资云图」双模式市场地图，以及支持自然行数自适应与悬停详情的「盈亏日历」；主要持仓列表升级为 5 列自适应布局并支持点击跳转定位。
+- 统一弹窗与表单控件的深浅色玻璃材质（含 MCP 配置参考弹窗），并优化浅色/深色模式下智能分析助手消息气泡的辨识度。
+- 加固后台行情更新与数据精度：全链路估值与历史快照统一采用高精度 `Decimal`，优化含点号美股代码（如 `BRK.B`）识别、本地时区快照对齐与数据库文件权限。
+- 增强智能分析、联网搜索与 MCP 服务的安全性与准确性：统一无持久化网络会话、响应体积与重定向防护，修复未知成本展示、历史完整性校验与追问文本清洗边界问题。
+- 修复多项界面与交互细节：包括追问已有草稿时的语音录入刷新、风险问卷重开回填、云图负金额紧凑排版、混合币种成本排序、交易撤销状态校验，以及无障碍与减少动态效果适配。
+
+## What's New
+
+- Upgraded the dashboard and visual system with semantic typography, a refined pale 5-class asset palette, unified tooltip surfaces, and a clearer sidebar selection indicator in both light and dark modes.
+- Refreshed dashboard cards: Portfolio Value now shows realized profit, cash total, and a 30-day sparkline; added the dual-pane Returns & Drawdown chart, the dual-mode Investment Cloud treemap, an adaptive P&L Calendar with hover summaries, and a responsive 5-column Primary Positions list with click-to-jump navigation.
+- Unified glass control surfaces across sheets (including the MCP setup sheet) in light and dark modes, and improved AI assistant message bubble visibility.
+- Hardened background price updates and ledger precision with end-to-end `Decimal` valuation and snapshots, dot share-class US symbol normalization (e.g., `BRK.B`), local-timezone alignment, and stricter database file permissions.
+- Strengthened AI analysis, web search, and MCP reliability with ephemeral network sessions, redirect and payload limits, accurate unknown-cost and history-completeness handling, and cleaner response sanitization.
+- Fixed UI and interaction edge cases, including voice dictation updates with existing follow-up drafts, risk questionnaire reopening, compact negative treemap labels, mixed-currency cost sorting, trade reversal validation, and accessibility/Reduce Motion support.
+
+Build 27 · Apple Silicon · macOS 15+
+]]></description>
+            <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.14/Portfolix-0.1.14.dmg" length="8715638" type="application/octet-stream" sparkle:edSignature="YdhuF3Ki/f5Phs9ooH5OKOxeB7pPE44/6Qx1Jn38Dj9kXwmv5coO/qDu5hNO03Eh42nccrvFXBzJyaB/AFeoAA=="/>
+        </item>
+
+        <item>
             <title>0.1.13</title>
             <pubDate>Wed, 11 Nov 2026 21:07:56 +0800</pubDate>
             <link>https://github.com/S4kur4/Portfolix/releases</link>
@@ -58,5 +91,6 @@ Build 26 · Apple Silicon · macOS 15+
 Apple Silicon · macOS 15+
 ]]></description>
             <enclosure url="https://github.com/S4kur4/Portfolix/releases/download/v0.1.12/Portfolix-0.1.12-build25.dmg" length="8452100" type="application/octet-stream" sparkle:edSignature="p0CtyGw0oSw4OZ9EGe4oiuVF8oixdY5Nck5GwdKmzf/a9fxeJsLacxfoQdyI0MWdgWMG92bxahK4sZTqs1MZBA=="/>
-        </item></channel>
+        </item>
+    </channel>
 </rss>
