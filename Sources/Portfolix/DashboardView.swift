@@ -898,7 +898,7 @@ private struct PerformanceRiskCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
                     SectionHeader(
-                        title: localizedText("收益与回撤", "Returns & Drawdown", language: store.appLanguage),
+                        title: localizedText("收益波动", "Returns & Drawdown", language: store.appLanguage),
                         symbol: "chart.line.uptrend.xyaxis"
                     )
 
