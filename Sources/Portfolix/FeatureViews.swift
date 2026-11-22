@@ -1098,7 +1098,10 @@ private struct AIReportFollowUpMessage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, PortfolixSpacing.lg)
                     .padding(.vertical, PortfolixSpacing.md)
-                    .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+                    .background(
+                        PortfolixTheme.soft.opacity(0.55),
+                        in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                    )
             }
 
             AIReportDisclaimer(language: language, modelUsage: modelUsage, showsDisclosure: showsDisclaimer)
