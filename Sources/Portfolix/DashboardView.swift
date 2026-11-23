@@ -467,7 +467,24 @@ private struct HeroValueTrendPlot: View {
                     yEnd: .value("Value", point.value)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(PortfolixTheme.brandWashStrong)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [
+                            PortfolixTheme.brandChart.opacity(0.32),
+                            PortfolixTheme.brandChart.opacity(0.03)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
+                LineMark(
+                    x: .value("Date", point.snapshot.date),
+                    y: .value("Value", point.value)
+                )
+                .interpolationMethod(.monotone)
+                .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .butt, lineJoin: .round))
+                .foregroundStyle(PortfolixTheme.brandChart)
             }
 
             if let highlightedSnapshotID,
@@ -484,7 +501,8 @@ private struct HeroValueTrendPlot: View {
                 .foregroundStyle(PortfolixTheme.text)
                 .annotation(
                     position: shouldPlaceAnnotationLeading(for: point, in: xDomain) ? .topLeading : .topTrailing,
-                    spacing: PortfolixSpacing.xs
+                    spacing: PortfolixSpacing.xs,
+                    overflowResolution: AnnotationOverflowResolution(x: .fit(to: .chart), y: .fit(to: .chart))
                 ) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(point.snapshot.date.formatted(
@@ -1015,28 +1033,42 @@ private struct PerformanceRiskCard: View {
         accessibilityValue: String
     ) -> some View {
         let series = ProfitAreaSeries.make(from: samples.map { ($0.date, $0.profitCNY * displayRate) })
+        let styleDomain = series.map { "area-\($0.id)" } + series.map { "line-\($0.id)" }
+        let styleRange: [Color] = series.map {
+            ($0.isPositive ? profitPositiveAreaColor : profitNegativeAreaColor).opacity(0.70)
+        } + series.map {
+            $0.isPositive ? profitPositiveColor : profitNegativeColor
+        }
         return Chart {
             RuleMark(y: .value("零线", 0))
                 .foregroundStyle(PortfolixTheme.border)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
 
-            ForEach(series) { series in
-                ForEach(series.points) { point in
+            ForEach(series) { segment in
+                ForEach(segment.points) { point in
                     AreaMark(
                         x: .value("日期", point.date),
                         yStart: .value("基线", 0),
                         yEnd: .value("浮盈", point.value)
                     )
                     .interpolationMethod(.monotone)
-                    .foregroundStyle(by: .value("段", series.id))
+                    .foregroundStyle(by: .value("段", "area-\(segment.id)"))
+
+                    LineMark(
+                        x: .value("日期", point.date),
+                        y: .value("浮盈", point.value)
+                    )
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 1.4, lineCap: .butt, lineJoin: .round))
+                    .foregroundStyle(by: .value("段", "line-\(segment.id)"))
                 }
             }
         }
-        .chartForegroundStyleScale(
-            domain: series.map(\.id),
-            range: series.map { $0.isPositive ? profitPositiveAreaColor : profitNegativeAreaColor }
-        )
+        .chartForegroundStyleScale(domain: styleDomain, range: styleRange)
         .chartLegend(.hidden)
+        .chartPlotStyle { plot in
+            plot.clipped()
+        }
         .chartOverlay { proxy in
             GeometryReader { geometry in
                 RiskChartHoverLayer(
@@ -1098,9 +1130,20 @@ private struct PerformanceRiskCard: View {
                     yEnd: .value("回撤", point.drawdownCNY * displayRate)
                 )
                 .interpolationMethod(.monotone)
-                .foregroundStyle(drawdownAreaColor)
+                .foregroundStyle(drawdownAreaColor.opacity(0.58))
+
+                LineMark(
+                    x: .value("日期", point.date),
+                    y: .value("回撤", point.drawdownCNY * displayRate)
+                )
+                .interpolationMethod(.monotone)
+                .lineStyle(StrokeStyle(lineWidth: 1.25, lineCap: .butt, lineJoin: .round))
+                .foregroundStyle(drawdownColor.opacity(0.85))
             }
 
+        }
+        .chartPlotStyle { plot in
+            plot.clipped()
         }
         .chartOverlay { proxy in
             GeometryReader { geometry in
@@ -1997,17 +2040,24 @@ private struct PositionSparkline: View {
         values.enumerated().map { (offset: $0.offset, value: $0.element) }
     }
 
-    /// Keep the area visible at 28 pt and use the active performance color scheme.
-    private var paleAreaColor: Color {
-        // Flat trends use the same neutral wash as the investment map’s Other tile.
-        if trendDelta == 0 { return PortfolixTheme.neutralWash }
-        let isPositive = trendDelta >= 0
-        switch store.performanceColorScheme {
-        case .redUpGreenDown:
-            return isPositive ? PortfolixTheme.lossWash4 : PortfolixTheme.gainWash4
-        case .greenUpRedDown:
-            return isPositive ? PortfolixTheme.gainWash4 : PortfolixTheme.lossWash4
+    private var lineColor: Color {
+        if trendDelta == 0 { return PortfolixTheme.tertiary }
+        return PortfolixTheme.performanceColor(for: trendDelta, scheme: store.performanceColorScheme)
+    }
+
+    private var areaGradient: LinearGradient {
+        if trendDelta == 0 {
+            return LinearGradient(
+                colors: [PortfolixTheme.neutralWash, PortfolixTheme.neutralWash.opacity(0.2)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
+        return LinearGradient(
+            colors: [lineColor.opacity(0.24), lineColor.opacity(0.02)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     private var trendDelta: Double {
@@ -2041,11 +2091,22 @@ private struct PositionSparkline: View {
                         yEnd: .value("价格", point.value)
                     )
                     .interpolationMethod(.catmullRom)
-                    .foregroundStyle(paleAreaColor)
+                    .foregroundStyle(areaGradient)
+
+                    LineMark(
+                        x: .value("日", point.offset),
+                        y: .value("价格", point.value)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 1.25, lineCap: .butt, lineJoin: .round))
+                    .foregroundStyle(lineColor)
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartYScale(domain: domain)
+                .chartPlotStyle { plot in
+                    plot.clipped()
+                }
                 .frame(height: 28)
             }
         }
@@ -2559,7 +2620,7 @@ private struct DailyProfitMonthCard: View {
                     )
             } else {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(PortfolixTheme.soft.opacity(0.55))
+                    .fill(PortfolixTheme.subtleFill)
 
                 if isHovered {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)

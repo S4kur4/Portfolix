@@ -2,39 +2,43 @@ import AppKit
 import SwiftUI
 
 enum PortfolixTheme {
-    // MARK: Neutral colors
-    // Use canvas, surface, or raised for large surfaces. Avoid pure black and white.
-    static let canvas = adaptive(light: 0xEFEDF2, dark: 0x0A090D)
-    static let surface = adaptive(light: 0xF7F5FA, dark: 0x121016)
-    static let raised = adaptive(light: 0xFDFCFF, dark: 0x1A1720)
-    static let soft = adaptive(light: 0xE5E2EA, dark: 0x241F2C)
-    static let border = adaptive(light: 0xD7D3DE, dark: 0x302A3B)
-    static let borderStrong = adaptive(light: 0x8F87A1, dark: 0x696079)
-    static let text = adaptive(light: 0x1B1722, dark: 0xF5F3F8)
-    static let secondary = adaptive(light: 0x5C5668, dark: 0xB2ABBF)
-    static let tertiary = adaptive(light: 0x6F687C, dark: 0x8C8499)
-    static let disabled = adaptive(light: 0xA9A2B4, dark: 0x5B5468)
-    static let inverse = adaptive(light: 0xF7F5FA, dark: 0x121016)
+    // MARK: Neutral colors (v1.4.1 Obsidian Amethyst — 3-level surface elevation)
+    // Pure obsidian slate in dark mode (L0 canvas -> L1 surface -> L2 raised) and clean porcelain in light mode.
+    static let canvas = adaptive(light: 0xF2F3F7, dark: 0x0B0C10)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x14171F)
+    static let raised = adaptive(light: 0xFFFFFF, dark: 0x1E222D)
+    static let soft = adaptive(light: 0xECEEF4, dark: 0x262B38)
+    static let border = adaptive(light: 0xE2E4EC, dark: 0x292F3D)
+    static let borderStrong = adaptive(light: 0x82889C, dark: 0x687189)
+    static let cardBorder = adaptive(light: 0x111422, lightAlpha: 0.075, dark: 0xFFFFFF, darkAlpha: 0.042)
+    static let controlBorder = adaptive(light: 0x111422, lightAlpha: 0.12, dark: 0xFFFFFF, darkAlpha: 0.08)
+    static let cardShadow = adaptive(light: 0x111422, lightAlpha: 0.028, dark: 0x000000, darkAlpha: 0.0)
+    static let subtleFill = adaptive(light: 0xF0F2F7, dark: 0x1C202B)
+    static let text = adaptive(light: 0x14161F, dark: 0xF4F6FA)
+    static let secondary = adaptive(light: 0x53586C, dark: 0xA7AEC2)
+    static let tertiary = adaptive(light: 0x676D82, dark: 0x858EA6)
+    static let disabled = adaptive(light: 0x9FA5B8, dark: 0x586075)
+    static let inverse = adaptive(light: 0xFFFFFF, dark: 0x14171F)
 
     // MARK: Brand colors for identity, interaction, selection, focus, and single-series data
-    static let brandText = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
-    static let brandSolid = adaptive(light: 0x654BC8, dark: 0xB7A5FF)
-    static let brandSolidHover = adaptive(light: 0x513AB6, dark: 0xC2BAFC)
-    static let brandSolidPressed = adaptive(light: 0x3E308F, dark: 0x9D8CFF)
-    static let brandSolidInk = adaptive(light: 0xFFFFFF, dark: 0x1A1428)
-    static let brandWash = adaptive(light: 0xEAE7FE, dark: 0x231D39)
-    static let brandWashStrong = adaptive(light: 0xD8D2FD, dark: 0x302754)
-    static let brandWashText = adaptive(light: 0x513AB6, dark: 0xC2BAFC)
-    static let brandFocus = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
-    static let brandChart = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
-    static let brandLogoStart = adaptive(light: 0x7C63F2, dark: 0xB7A5FF)
-    static let brandLogoEnd = adaptive(light: 0x654BC8, dark: 0x7C63F2)
+    static let brandText = adaptive(light: 0x5E47C7, dark: 0xB7A6FF)
+    static let brandSolid = adaptive(light: 0x5E47C7, dark: 0x6E56CF)
+    static let brandSolidHover = adaptive(light: 0x4C36B2, dark: 0x765FD6)
+    static let brandSolidPressed = adaptive(light: 0x3C2994, dark: 0x5B44B8)
+    static let brandSolidInk = adaptive(light: 0xFFFFFF, dark: 0xFFFFFF)
+    static let brandWash = adaptive(light: 0xEFEBFD, dark: 0x221E3A)
+    static let brandWashStrong = adaptive(light: 0xE0D9FA, dark: 0x2F2954)
+    static let brandWashText = adaptive(light: 0x4C36B2, dark: 0xC8BDFF)
+    static let brandFocus = adaptive(light: 0x6C54D9, dark: 0x9B87FF)
+    static let brandChart = adaptive(light: 0x6C54D9, dark: 0x9B87FF)
+    static let brandLogoStart = adaptive(light: 0x755CE8, dark: 0x9B87FF)
+    static let brandLogoEnd = adaptive(light: 0x5E47C7, dark: 0x6E56CF)
     static let brandLogoInk = Color(hex: 0xFFFFFF)
-    static let brandGradientStart = adaptive(light: 0xB7A5FF, dark: 0xB7A5FF)
-    static let brandGradientEnd = adaptive(light: 0x7C63F2, dark: 0x9D8CFF)
-    static let brandBubbleStart = adaptive(light: 0xC2BAFC, dark: 0xB7A5FF)
-    static let brandBubbleEnd = adaptive(light: 0xB7A5FF, dark: 0x9D8CFF)
-    static let brandBubbleInk = Color(hex: 0x1A1428)
+    static let brandGradientStart = adaptive(light: 0x9B87FF, dark: 0x9B87FF)
+    static let brandGradientEnd = adaptive(light: 0x6C54D9, dark: 0x6E56CF)
+    static let brandBubbleStart = adaptive(light: 0xDDD5FA, dark: 0x725AD4)
+    static let brandBubbleEnd = adaptive(light: 0xCEC2F8, dark: 0x5E47C7)
+    static let brandBubbleInk = adaptive(light: 0x1D1738, dark: 0xFFFFFF)
 
     static let brandLogoGradient = LinearGradient(
         colors: [brandLogoStart, brandLogoEnd],
@@ -52,71 +56,70 @@ enum PortfolixTheme {
         endPoint: .bottomTrailing
     )
 
-    // MARK: Semantic colors for performance and risk
-    static let gainFill = adaptive(light: 0x287D70, dark: 0x76C7B7)
-    static let gainText = adaptive(light: 0x20675C, dark: 0x76C7B7)
-    static let gainOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
-    static let lossFill = adaptive(light: 0xB44755, dark: 0xDD7D88)
-    static let lossText = adaptive(light: 0x9E3947, dark: 0xDD7D88)
-    static let lossOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
-    static let warnFill = adaptive(light: 0x9B681E, dark: 0xD7A967)
-    static let warnText = adaptive(light: 0x805319, dark: 0xD7A967)
-    static let warnOnFill = adaptive(light: 0xFFFFFF, dark: 0x121016)
-    static let lossSolidHover = adaptive(light: 0x9E3947, dark: 0xE89AA4)
-    static let lossSolidPressed = adaptive(light: 0x7A2B35, dark: 0xF0B0B8)
+    // MARK: Semantic colors for performance and risk (Steady Botanical Jade & Refined Crimson)
+    static let gainFill = adaptive(light: 0x267D60, dark: 0x54BC96)
+    static let gainText = adaptive(light: 0x1E6B52, dark: 0x54BC96)
+    static let gainOnFill = adaptive(light: 0xFFFFFF, dark: 0x0D1512)
+    static let lossFill = adaptive(light: 0xBC404B, dark: 0xE26E78)
+    static let lossText = adaptive(light: 0xA6343F, dark: 0xE26E78)
+    static let lossOnFill = adaptive(light: 0xFFFFFF, dark: 0x170D0F)
+    static let warnFill = adaptive(light: 0x9E6510, dark: 0xE2AE5B)
+    static let warnText = adaptive(light: 0x85530C, dark: 0xE2AE5B)
+    static let warnOnFill = adaptive(light: 0xFFFFFF, dark: 0x17120A)
+    static let lossSolidHover = adaptive(light: 0x9A2E38, dark: 0xEC848D)
+    static let lossSolidPressed = adaptive(light: 0x7F232C, dark: 0xCC5B65)
 
-    // Opaque semantic washes from lightest (W1) to strongest (W4) for badges, charts, and calendar cells.
-    static let gainWash1 = adaptive(light: 0xE2E9EC, dark: 0x202A2D)
-    static let gainWash2 = adaptive(light: 0xD2DFE1, dark: 0x2A3C3D)
-    static let gainWash3 = adaptive(light: 0xC1D6D6, dark: 0x344E4D)
-    static let gainWash4 = adaptive(light: 0xB1CCCB, dark: 0x3E615D)
-    static let lossWash1 = adaptive(light: 0xF0E4EA, dark: 0x2E1F26)
-    static let lossWash2 = adaptive(light: 0xEBD6DC, dark: 0x432A31)
-    static let lossWash3 = adaptive(light: 0xE6C8CF, dark: 0x57353D)
-    static let lossWash4 = adaptive(light: 0xE0BAC2, dark: 0x6B4048)
-    static let warnWash1 = adaptive(light: 0xEEE7E4, dark: 0x2E2521)
-    static let warnWash2 = adaptive(light: 0xE6DCD2, dark: 0x413529)
-    static let warnWash3 = adaptive(light: 0xDFD0C1, dark: 0x554432)
-    static let warnWash4 = adaptive(light: 0xD8C5AF, dark: 0x69533A)
-    static let neutralWash = adaptive(light: 0xEBE8EE, dark: 0x222027)
+    // Opaque semantic washes from lightest (W1) to strongest (W4) for badges, charts, and tiles.
+    static let gainWash1 = adaptive(light: 0xEBF2EF, dark: 0x182622)
+    static let gainWash2 = adaptive(light: 0xD7E6DF, dark: 0x1E332D)
+    static let gainWash3 = adaptive(light: 0xC0D8CE, dark: 0x27453C)
+    static let gainWash4 = adaptive(light: 0xA7C9BC, dark: 0x31584C)
+    static let lossWash1 = adaptive(light: 0xF4ECEC, dark: 0x261A1E)
+    static let lossWash2 = adaptive(light: 0xECDADB, dark: 0x362025)
+    static let lossWash3 = adaptive(light: 0xE1C3C6, dark: 0x492A30)
+    static let lossWash4 = adaptive(light: 0xD5ACB1, dark: 0x5E343C)
+    static let warnWash1 = adaptive(light: 0xF6EFE4, dark: 0x292117)
+    static let warnWash2 = adaptive(light: 0xEDE0CA, dark: 0x3D301E)
+    static let warnWash3 = adaptive(light: 0xE4D0AE, dark: 0x524026)
+    static let warnWash4 = adaptive(light: 0xDABF91, dark: 0x68512F)
+    static let neutralWash = adaptive(light: 0xEFEFF4, dark: 0x1F232E)
 
-    // MARK: A+ asset class colors with a 12% brand purple blend, shared across the app
-    static let classStockFill = adaptive(light: 0x6D85F7, dark: 0x7089FF)
-    static let classStockMark = adaptive(light: 0x5F74D9, dark: 0x7089FF)
-    static let classFundFill = adaptive(light: 0xAF71E4, dark: 0xB373E9)
-    static let classFundMark = adaptive(light: 0x9862C6, dark: 0xB373E9)
-    static let classCryptoFill = adaptive(light: 0xCC6DA9, dark: 0xE078BA)
-    static let classCryptoMark = adaptive(light: 0xBE669E, dark: 0xE078BA)
-    static let classCashFill = adaptive(light: 0x728FBB, dark: 0x728FBB)
-    static let classCashMark = adaptive(light: 0x617A9F, dark: 0x728FBB)
-    static let classOtherFill = adaptive(light: 0x9D898F, dark: 0xB49DA4)
-    static let classOtherMark = adaptive(light: 0x958288, dark: 0xB49DA4)
-    static let classOnFill = Color(hex: 0x121016)
-    static let classMarkInk = adaptive(light: 0xFFFFFF, dark: 0x121016)
+    // MARK: Limited-hue, low-saturation 5-class asset palette (Slate Cobalt, Muted Iris, Dusty Plum, Mist Teal, Graphite Pewter)
+    static let classStockFill = adaptive(light: 0x4B72C8, dark: 0x6B92E8)
+    static let classStockMark = adaptive(light: 0x3B61B5, dark: 0x759BF0)
+    static let classFundFill = adaptive(light: 0x8367CC, dark: 0x9B80E4)
+    static let classFundMark = adaptive(light: 0x6A4FB5, dark: 0xA68CEB)
+    static let classCryptoFill = adaptive(light: 0x9E68A6, dark: 0xBE86C4)
+    static let classCryptoMark = adaptive(light: 0x834F8C, dark: 0xC892CE)
+    static let classCashFill = adaptive(light: 0x47868B, dark: 0x5BA3A8)
+    static let classCashMark = adaptive(light: 0x336E73, dark: 0x66B0B5)
+    static let classOtherFill = adaptive(light: 0x808698, dark: 0x9097AB)
+    static let classOtherMark = adaptive(light: 0x63697B, dark: 0x9BA2B6)
+    static let classOnFill = Color(hex: 0x14161F)
+    static let classMarkInk = adaptive(light: 0xFFFFFF, dark: 0x14171F)
 
-    // MARK: Muted asset class colors with 55% A+ fill and 45% neutral
-    static let classStockArea = adaptive(light: 0x7C86D0, dark: 0x535EA7)
-    static let classFundArea = adaptive(light: 0xA17BC6, dark: 0x78529B)
-    static let classCryptoArea = adaptive(light: 0xB179A5, dark: 0x915581)
-    static let classCashArea = adaptive(light: 0x7F8BAF, dark: 0x546281)
-    static let classOtherArea = adaptive(light: 0x978897, dark: 0x796975)
-    static let classOnArea = adaptive(light: 0x121016, dark: 0xF5F3F8)
+    // MARK: Mid-chroma asset class markers for legend dots, category badges, and small accents
+    static let classStockArea = adaptive(light: 0x476DC0, dark: 0x6289DF)
+    static let classFundArea = adaptive(light: 0x795EC2, dark: 0x9276DB)
+    static let classCryptoArea = adaptive(light: 0x935E9B, dark: 0xB37BB9)
+    static let classCashArea = adaptive(light: 0x407E83, dark: 0x53999E)
+    static let classOtherArea = adaptive(light: 0x73798C, dark: 0x878EA2)
+    static let classOnArea = adaptive(light: 0xFFFFFF, dark: 0x14171F)
 
-    // MARK: Pale asset class fills with roughly 35% A+ fill over surface
-    // Small markers use classMark or classArea for legibility.
-    static let classStockPale = adaptive(light: 0xC8CFFC, dark: 0x333A68)
-    static let classFundPale = adaptive(light: 0xDFC8F4, dark: 0x4A3360)
-    static let classCryptoPale = adaptive(light: 0xEFC9E4, dark: 0x5A344F)
-    static let classCashPale = adaptive(light: 0xC8D1E4, dark: 0x343C50)
-    static let classOtherPale = adaptive(light: 0xE0D6DC, dark: 0x4B4148)
-    static let classOnPale = adaptive(light: 0x121016, dark: 0xF5F3F8)
+    // MARK: Pale asset class fills for treemap tiles, holding share bars, and row avatars
+    static let classStockPale = adaptive(light: 0xD6E2F7, dark: 0x203356)
+    static let classFundPale = adaptive(light: 0xE5DDF8, dark: 0x322854)
+    static let classCryptoPale = adaptive(light: 0xF0DFEE, dark: 0x462E4D)
+    static let classCashPale = adaptive(light: 0xD4E9E9, dark: 0x1D3A42)
+    static let classOtherPale = adaptive(light: 0xE7E9EE, dark: 0x2E323D)
+    static let classOnPale = adaptive(light: 0x14161F, dark: 0xF4F6FA)
 
-    // MARK: Distinct gain and loss area fills for charts without a line
-    static let lossAreaWash = adaptive(light: 0xE58A96, dark: 0x7C3F4A)
-    static let gainAreaWash = adaptive(light: 0xA8CBC3, dark: 0x3E615D)
+    // MARK: Distinct gain and loss area fills for return and drawdown charts
+    static let lossAreaWash = adaptive(light: 0xDFB3B7, dark: 0x65323A)
+    static let gainAreaWash = adaptive(light: 0xB2CFC4, dark: 0x265345)
 
     // MARK: Glass button shadow
-    static let buttonShadow = Color.black.opacity(0.12)
+    static let buttonShadow = Color.black.opacity(0.14)
 
     // MARK: Performance color mapping (Fill for graphics, Text for compact labels)
     static func performanceColor(for value: Decimal, scheme: PerformanceColorScheme = .greenUpRedDown) -> Color {
@@ -193,6 +196,21 @@ enum PortfolixTheme {
         Color(nsColor: NSColor(name: nil) { appearance in
             let match = appearance.bestMatch(from: [.darkAqua, .aqua])
             return NSColor(hex: match == .darkAqua ? dark : light)
+        })
+    }
+
+    private static func adaptive(
+        light: UInt,
+        lightAlpha: CGFloat,
+        dark: UInt,
+        darkAlpha: CGFloat
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+            if match == .darkAqua {
+                return NSColor(hex: dark).withAlphaComponent(darkAlpha)
+            }
+            return NSColor(hex: light).withAlphaComponent(lightAlpha)
         })
     }
 }
@@ -446,6 +464,7 @@ extension EnvironmentValues {
 private struct PortfolixGlassControlSurface: ViewModifier {
     let height: CGFloat
     @Environment(\.portfolixFormGlass) private var isInForm
+    @Environment(\.colorScheme) private var colorScheme
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
@@ -465,12 +484,26 @@ private struct PortfolixGlassControlSurface: ViewModifier {
                         }
                     }
                     .clipShape(shape)
+                    .overlay {
+                        shape.strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
+                    }
                     .shadow(color: PortfolixTheme.buttonShadow, radius: 8, x: 0, y: 3)
                     .allowsHitTesting(false)
                 }
             } else {
-                label.portfolixGlass(in: shape, fallbackTint: PortfolixTheme.soft,
-                    fallbackOpacity: 0.48, interactive: true)
+                label
+                    .portfolixGlass(
+                        in: shape,
+                        tint: colorScheme == .light ? PortfolixTheme.soft.opacity(0.55) : nil,
+                        fallbackTint: PortfolixTheme.soft,
+                        fallbackOpacity: 0.55,
+                        interactive: true
+                    )
+                    .overlay {
+                        shape
+                            .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    }
             }
         }
         .contentShape(shape)
@@ -715,11 +748,18 @@ struct Panel<Content: View>: View {
     }
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
         content
             .padding(padding)
             .background {
-                RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                shape
                     .fill(PortfolixTheme.surface)
+                    .shadow(color: PortfolixTheme.cardShadow, radius: 1.5, x: 0, y: 0.5)
+            }
+            .overlay {
+                shape
+                    .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                    .allowsHitTesting(false)
             }
     }
 }
@@ -967,6 +1007,12 @@ private struct InteractiveButtonLabel: View {
                     }
                 }
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .overlay {
+                        if !isPrimary {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
+                        }
+                    }
                     .shadow(color: PortfolixTheme.buttonShadow, radius: 4, x: 0, y: 2)
                     .allowsHitTesting(false)
             }

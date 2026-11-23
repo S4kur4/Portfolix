@@ -1094,9 +1094,14 @@ private struct AIReportFollowUpMessage: View {
                     .padding(.horizontal, PortfolixSpacing.lg)
                     .padding(.vertical, PortfolixSpacing.md)
                     .background(
-                        PortfolixTheme.soft.opacity(0.55),
+                        PortfolixTheme.subtleFill,
                         in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                     )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                            .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    }
             }
 
             AIReportDisclaimer(language: language, modelUsage: modelUsage, showsDisclosure: showsDisclaimer)
@@ -1501,7 +1506,12 @@ private struct AIReportWelcomeMessage: View {
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.subtleFill, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -1576,7 +1586,12 @@ struct AIReportProgressCard: View {
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.subtleFill, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -1602,7 +1617,12 @@ private struct AIReportStaticStatusMessage: View {
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.subtleFill, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
     }
 
     private var title: String {
@@ -1908,7 +1928,12 @@ private struct AIReportChatSection<Content: View>: View {
         }
         .padding(PortfolixSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .background(PortfolixTheme.subtleFill, in: RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
     }
 }
 

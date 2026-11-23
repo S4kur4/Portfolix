@@ -395,6 +395,12 @@ struct InvestmentCloudTreemap: View {
         return ZStack {
             RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                 .fill(fillColor(for: item))
+                .overlay {
+                    if let border = borderColor(for: item) {
+                        RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
+                            .strokeBorder(border, lineWidth: 0.5)
+                    }
+                }
                 .opacity(dimmed ? 0.62 : 1)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: dimmed)
             if canShowLabels(item: item, rect: rect) {
@@ -431,12 +437,30 @@ struct InvestmentCloudTreemap: View {
 
     private func fillColor(for item: InvestmentCloudItem) -> Color {
         if item.mode == .dailyProfit {
-            return PortfolixTheme.neutralWash
+            guard !item.isAggregated, item.amountCNY != 0 else {
+                return PortfolixTheme.neutralWash
+            }
+            let isGain = item.amountCNY > 0
+            switch performanceColorScheme {
+            case .greenUpRedDown:
+                return isGain ? PortfolixTheme.gainWash1 : PortfolixTheme.lossWash1
+            case .redUpGreenDown:
+                return isGain ? PortfolixTheme.lossWash1 : PortfolixTheme.gainWash1
+            }
         }
         if item.isAggregated {
             return PortfolixTheme.neutralWash
         }
         return item.assetClass.pale
+    }
+
+    private func borderColor(for item: InvestmentCloudItem) -> Color? {
+        guard item.mode == .dailyProfit else { return nil }
+        guard !item.isAggregated, item.amountCNY != 0 else {
+            return PortfolixTheme.cardBorder
+        }
+        return PortfolixTheme.performanceColor(for: item.amountCNY, scheme: performanceColorScheme)
+            .opacity(0.18)
     }
 
     /// Use the matching ink on pale distribution tiles and standard text on neutral tiles.

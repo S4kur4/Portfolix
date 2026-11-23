@@ -327,12 +327,14 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
             let pairs: [(Color, Color)] = [
-                (PortfolixTheme.gainText, Color(hex: 0x76C7B7)),
-                (PortfolixTheme.lossText, Color(hex: 0xDD7D88)),
-                (PortfolixTheme.warnText, Color(hex: 0xD7A967)),
-                (PortfolixTheme.brandBubbleInk, Color(hex: 0x1A1428)),
-                (PortfolixTheme.brandBubbleStart, Color(hex: 0xB7A5FF)),
-                (PortfolixTheme.brandBubbleEnd, Color(hex: 0x9D8CFF)),
+                (PortfolixTheme.gainText, Color(hex: 0x54BC96)),
+                (PortfolixTheme.lossText, Color(hex: 0xE26E78)),
+                (PortfolixTheme.warnText, Color(hex: 0xE2AE5B)),
+                (PortfolixTheme.brandSolid, Color(hex: 0x6E56CF)),
+                (PortfolixTheme.brandSolidInk, Color(hex: 0xFFFFFF)),
+                (PortfolixTheme.brandBubbleInk, Color(hex: 0xFFFFFF)),
+                (PortfolixTheme.brandBubbleStart, Color(hex: 0x725AD4)),
+                (PortfolixTheme.brandBubbleEnd, Color(hex: 0x5E47C7)),
             ]
             for (actual, expected) in pairs {
                 let actual = NSColor(actual).usingColorSpace(.sRGB)!
@@ -341,6 +343,36 @@ struct ThemeTests {
                 #expect(abs(actual.greenComponent - expected.greenComponent) < 0.00001)
                 #expect(abs(actual.blueComponent - expected.blueComponent) < 0.00001)
                 #expect(abs(actual.alphaComponent - expected.alphaComponent) < 0.00001)
+            }
+        }
+    }
+
+    @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
+    func obsidianAmethystPaletteMeetsWCAGAA(appearanceName: NSAppearance.Name) throws {
+        let appearance = try #require(NSAppearance(named: appearanceName))
+        appearance.performAsCurrentDrawingAppearance {
+            let pairs: [(Color, Color, CGFloat)] = [
+                (PortfolixTheme.brandSolidInk, PortfolixTheme.brandSolid, 4.5),
+                (PortfolixTheme.brandSolidInk, PortfolixTheme.brandSolidHover, 4.5),
+                (PortfolixTheme.brandSolidInk, PortfolixTheme.brandSolidPressed, 4.5),
+                (PortfolixTheme.brandText, PortfolixTheme.surface, 4.5),
+                (PortfolixTheme.brandWashText, PortfolixTheme.brandWash, 4.5),
+                (PortfolixTheme.brandWashText, PortfolixTheme.brandWashStrong, 4.5),
+                (PortfolixTheme.brandChart, PortfolixTheme.brandWash, 3.0),
+                (PortfolixTheme.borderStrong, PortfolixTheme.surface, 3.0),
+                (PortfolixTheme.text, PortfolixTheme.subtleFill, 4.5),
+                (PortfolixTheme.gainText, PortfolixTheme.subtleFill, 4.5),
+                (PortfolixTheme.lossText, PortfolixTheme.subtleFill, 4.5),
+                (PortfolixTheme.classOnPale, PortfolixTheme.classStockPale, 4.5),
+                (PortfolixTheme.classOnPale, PortfolixTheme.classFundPale, 4.5),
+                (PortfolixTheme.classOnPale, PortfolixTheme.classCryptoPale, 4.5),
+                (PortfolixTheme.classOnPale, PortfolixTheme.classCashPale, 4.5),
+                (PortfolixTheme.classOnPale, PortfolixTheme.classOtherPale, 4.5),
+            ]
+            for (fg, bg, minRatio) in pairs {
+                let fgRGB = NSColor(fg).usingColorSpace(.sRGB)!
+                let bgRGB = NSColor(bg).usingColorSpace(.sRGB)!
+                #expect(contrast(fgRGB, bgRGB) >= minRatio)
             }
         }
     }
@@ -473,9 +505,9 @@ struct ThemeTests {
         let surface = try #require(panel)
         let background = try #require(canvas)
         #expect(surface.redComponent > background.redComponent + 0.025)
-        #expect(surface.blueComponent > surface.redComponent)
-        #expect(surface.redComponent > surface.greenComponent)
-        #expect(surface == NSColor(hex: 0x121016).usingColorSpace(.sRGB))
+        #expect(surface.blueComponent >= surface.greenComponent)
+        #expect(surface.greenComponent >= surface.redComponent)
+        #expect(surface == NSColor(hex: 0x14171F).usingColorSpace(.sRGB))
     }
 
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
@@ -486,15 +518,20 @@ struct ThemeTests {
         appearance.performAsCurrentDrawingAppearance {
             for surface in colors {
                 let color = NSColor(surface).usingColorSpace(.sRGB)!
-                #expect(color.blueComponent >= color.redComponent)
-                #expect(color.redComponent >= color.greenComponent)
+                #expect(color.blueComponent >= color.greenComponent)
+                #expect(color.greenComponent >= color.redComponent)
                 #expect(color.alphaComponent == 1)
             }
             let canvas = NSColor(PortfolixTheme.canvas).usingColorSpace(.sRGB)!
             let panel = NSColor(PortfolixTheme.surface).usingColorSpace(.sRGB)!
+            let raised = NSColor(PortfolixTheme.raised).usingColorSpace(.sRGB)!
             let dark = appearanceName == .darkAqua
-            #expect(canvas == NSColor(hex: dark ? 0x0A090D : 0xEFEDF2).usingColorSpace(.sRGB))
-            #expect(panel == NSColor(hex: dark ? 0x121016 : 0xF7F5FA).usingColorSpace(.sRGB))
+            #expect(canvas == NSColor(hex: dark ? 0x0B0C10 : 0xF2F3F7).usingColorSpace(.sRGB))
+            #expect(panel == NSColor(hex: dark ? 0x14171F : 0xFFFFFF).usingColorSpace(.sRGB))
+            if dark {
+                #expect(raised == NSColor(hex: 0x1E222D).usingColorSpace(.sRGB))
+                #expect(raised.redComponent > panel.redComponent)
+            }
         }
     }
 
@@ -502,14 +539,14 @@ struct ThemeTests {
     func neutralSurfacesDoNotChangeBrandPurples(appearanceName: NSAppearance.Name) throws {
         let appearance = try #require(NSAppearance(named: appearanceName))
         let pairs: [(Color, UInt, UInt)] = [
-            (PortfolixTheme.brandText, 0x654BC8, 0xB7A5FF),
-            (PortfolixTheme.brandFocus, 0x7C63F2, 0xB7A5FF),
-            (PortfolixTheme.brandWash, 0xEAE7FE, 0x231D39),
-            (PortfolixTheme.brandWashStrong, 0xD8D2FD, 0x302754),
-            (PortfolixTheme.brandWashText, 0x513AB6, 0xC2BAFC),
-            (PortfolixTheme.brandSolid, 0x654BC8, 0xB7A5FF),
-            (PortfolixTheme.brandSolidInk, 0xFFFFFF, 0x1A1428),
-            (PortfolixTheme.brandChart, 0x7C63F2, 0xB7A5FF),
+            (PortfolixTheme.brandText, 0x5E47C7, 0xB7A6FF),
+            (PortfolixTheme.brandFocus, 0x6C54D9, 0x9B87FF),
+            (PortfolixTheme.brandWash, 0xEFEBFD, 0x221E3A),
+            (PortfolixTheme.brandWashStrong, 0xE0D9FA, 0x2F2954),
+            (PortfolixTheme.brandWashText, 0x4C36B2, 0xC8BDFF),
+            (PortfolixTheme.brandSolid, 0x5E47C7, 0x6E56CF),
+            (PortfolixTheme.brandSolidInk, 0xFFFFFF, 0xFFFFFF),
+            (PortfolixTheme.brandChart, 0x6C54D9, 0x9B87FF),
         ]
         appearance.performAsCurrentDrawingAppearance {
             for (color, light, dark) in pairs {
@@ -585,7 +622,7 @@ struct ThemeTests {
         }
         let color = try #require(resolved)
         let dark = appearanceName == .darkAqua
-        #expect(color == NSColor(hex: dark ? 0x121016 : 0xF7F5FA).usingColorSpace(.sRGB))
+        #expect(color == NSColor(hex: dark ? 0x14171F : 0xFFFFFF).usingColorSpace(.sRGB))
     }
 
     @Test
@@ -593,7 +630,7 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: .aqua))
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.brandSolid).usingColorSpace(.sRGB)
-                == NSColor(hex: 0x654BC8).usingColorSpace(.sRGB))
+                == NSColor(hex: 0x5E47C7).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.brandSolidInk).usingColorSpace(.sRGB)
                 == NSColor(hex: 0xFFFFFF).usingColorSpace(.sRGB))
         }
@@ -604,9 +641,9 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.brandSolid).usingColorSpace(.sRGB)
-                == NSColor(hex: 0xB7A5FF).usingColorSpace(.sRGB))
+                == NSColor(hex: 0x6E56CF).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.brandSolidInk).usingColorSpace(.sRGB)
-                == NSColor(hex: 0x1A1428).usingColorSpace(.sRGB))
+                == NSColor(hex: 0xFFFFFF).usingColorSpace(.sRGB))
         }
     }
 
@@ -778,7 +815,7 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: .darkAqua))
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
-                == NSColor(hex: 0xF5F3F8).usingColorSpace(.sRGB))
+                == NSColor(hex: 0xF4F6FA).usingColorSpace(.sRGB))
         }
     }
 
@@ -788,13 +825,13 @@ struct ThemeTests {
         let dark = appearanceName == .darkAqua
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
-                == NSColor(hex: dark ? 0xF5F3F8 : 0x1B1722).usingColorSpace(.sRGB))
+                == NSColor(hex: dark ? 0xF4F6FA : 0x14161F).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.secondary).usingColorSpace(.sRGB)
-                == NSColor(hex: dark ? 0xB2ABBF : 0x5C5668).usingColorSpace(.sRGB))
+                == NSColor(hex: dark ? 0xA7AEC2 : 0x53586C).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.tertiary).usingColorSpace(.sRGB)
-                == NSColor(hex: dark ? 0x8C8499 : 0x6F687C).usingColorSpace(.sRGB))
+                == NSColor(hex: dark ? 0x858EA6 : 0x676D82).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.disabled).usingColorSpace(.sRGB)
-                == NSColor(hex: dark ? 0x5B5468 : 0xA9A2B4).usingColorSpace(.sRGB))
+                == NSColor(hex: dark ? 0x586075 : 0x9FA5B8).usingColorSpace(.sRGB))
             #expect(NSColor(PortfolixTheme.tertiary).usingColorSpace(.sRGB)
                 != NSColor(PortfolixTheme.secondary).usingColorSpace(.sRGB))
         }
@@ -805,7 +842,7 @@ struct ThemeTests {
         let appearance = try #require(NSAppearance(named: .aqua))
         appearance.performAsCurrentDrawingAppearance {
             #expect(NSColor(PortfolixTheme.text).usingColorSpace(.sRGB)
-                == NSColor(hex: 0x1B1722).usingColorSpace(.sRGB))
+                == NSColor(hex: 0x14161F).usingColorSpace(.sRGB))
         }
     }
 }
