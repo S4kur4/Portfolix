@@ -984,7 +984,7 @@ enum PortfolixDataFilePanel {
         panel.isExtensionHidden = false
         panel.nameFieldStringValue = defaultFilename()
         panel.title = localizedText("导出 Portfolix 数据", "Export Portfolix Data", language: language)
-        panel.prompt = localizedText("创建导出", "Export", language: language)
+        panel.prompt = localizedText("导出备份", "Export Backup", language: language)
         return panel.runModal() == .OK ? panel.url : nil
     }
 

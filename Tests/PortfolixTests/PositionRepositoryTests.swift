@@ -3785,7 +3785,7 @@ struct PositionRepositoryTests {
         store.generateAIAnalysis(trigger: .manual)
 
         let message = try await waitForLatestAssistantMessage(in: store)
-        #expect(message.contains("DeepSeek API 未完成有效配置"))
+        #expect(message.contains("DeepSeek API 尚未完成配置"))
         #expect(!message.contains("Search API"))
     }
 
@@ -3809,7 +3809,7 @@ struct PositionRepositoryTests {
         store.generateAIAnalysis(trigger: .manual)
 
         let message = try await waitForLatestAssistantMessage(in: store)
-        #expect(message.contains("DeepSeek API 未完成有效配置"))
+        #expect(message.contains("DeepSeek API 尚未完成配置"))
         #expect(!message.contains("Search API"))
     }
 

@@ -182,7 +182,7 @@ struct PositionReconciliationDetailSheet: View {
                     LabeledContent(localizedText("更新原因", "Reason", language: store.appLanguage), value: reasonText)
                     LabeledContent(localizedText("备注", "Note", language: store.appLanguage), value: record.note.isEmpty ? "—" : record.note).lineLimit(1).portfolixHelp(record.note)
                 } footer: {
-                    Text(localizedText("此记录是余额校准，未产生现金流或已实现收益。校准前的遗漏记录仍未补齐。", "This balance checkpoint creates no cash flow or realized profit. Missing historical records remain incomplete.", language: store.appLanguage))
+                    Text(localizedText("此条为余额校准，不计入现金流与已实现收益；校准前的历史缺口仍需另行补录。", "Balance checkpoint only — no cash flow or realized P&L recorded. Earlier history gaps remain unrecorded.", language: store.appLanguage))
                 }
             }.portfolixSheetForm()
             HStack { Spacer(); Button(localizedText("完成", "Done", language: store.appLanguage)) { dismiss() }.buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction) }.padding(20)

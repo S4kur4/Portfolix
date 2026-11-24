@@ -586,7 +586,7 @@ struct InvestmentDistributionTests {
             store.todayProfitCNY(for: $0, asOf: now.addingTimeInterval(86400))
         }.isEmpty)
         #expect(store.investmentDistributionHelpText == localizedText(
-            "投资分布功能由AI分析计算，仅供参考。", "Investment distribution is analyzed by AI and is for reference only.",
+            "投资分布由 AI 穿透分析生成，仅供参考。", "Allocation breakdown is estimated by AI for reference only.",
             language: store.appLanguage
         ))
     }

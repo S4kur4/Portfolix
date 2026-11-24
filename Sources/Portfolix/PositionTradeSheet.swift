@@ -35,8 +35,8 @@ struct PositionTradeSheet: View {
             Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
-                    LabeledContent(text("实际操作时间", "Actual Trade Time")) {
-                        PortfolixDateTimePicker(title: localizedText("实际操作时间", "Actual Trade Time", language: store.appLanguage), selection: $actualTradeDate, language: store.appLanguage, isPresented: $isDatePickerPresented)
+                    LabeledContent(text("成交时间", "Trade Time")) {
+                        PortfolixDateTimePicker(title: localizedText("成交时间", "Trade Time", language: store.appLanguage), selection: $actualTradeDate, language: store.appLanguage, isPresented: $isDatePickerPresented)
                     }
                     LabeledContent(text("资产", "Asset")) {
                         PortfolixGlassMenuPicker(title: text("资产", "Asset"), selection: $assetSelection,
@@ -95,7 +95,7 @@ struct PositionTradeSheet: View {
             Divider().overlay(PortfolixTheme.border)
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }.buttonStyle(QuietButtonStyle()).keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
-                Button(text("确认卖出", "Record Sell")) {
+                Button(text("记录卖出", "Record Sale")) {
                     let window = NSApp.keyWindow
                     Task { await save(committing: window) }
                 }.buttonStyle(PrimaryButtonStyle()).disabled(isSaving)
@@ -145,7 +145,7 @@ struct PositionTradeSheet: View {
         defer { isSaving = false }
         focusedField = nil
         guard await SheetEditingCommit.commit(in: window) else {
-            errorMessage = text("无法结束当前输入，请检查后重试。", "Unable to finish editing. Check the current field and try again.")
+            errorMessage = text("当前输入格式有误，请核对后重试。", "Please check the current input and try again.")
             return
         }
         do {
@@ -176,7 +176,7 @@ struct PositionTradeDetailSheet: View {
                 Section {
                     LabeledContent(text("资产", "Asset"), value: "\(record.asset.name) · \(record.asset.symbol)")
                     LabeledContent(text("交易类型", "Type"), value: record.side.title(language: store.appLanguage))
-                    LabeledContent(text("实际操作时间", "Actual Trade Time"), value: record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
+                    LabeledContent(text("成交时间", "Trade Time"), value: record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
                     LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
                     LabeledContent(text("成交份额", "Quantity"), value: record.quantity)
                     LabeledContent(text("成交均价", "Trade Price"), value: formatMoney(record.price, currency: record.currency))

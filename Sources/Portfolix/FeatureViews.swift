@@ -35,7 +35,7 @@ struct PositionsView: View {
                             else { pendingClosure = target }
                         } label: {
                             Label(reductionTarget?.category == .cash
-                                ? localizedText("减少现金", "Reduce Cash", language: store.appLanguage)
+                                ? localizedText("转出现金", "Cash Out", language: store.appLanguage)
                                 : localizedText("卖出资产", "Sell Asset", language: store.appLanguage), systemImage: "minus")
                         }
                         .buttonStyle(QuietButtonStyle())
@@ -132,7 +132,7 @@ struct PositionsView: View {
                     ? localizedText("将撤销 \(record.name) 的期初持仓，并移除该资产的余额及相关历史。", "Reverse the opening balance for \(record.name) and remove its balance and related history.", language: store.appLanguage)
                     : localizedText("将撤销 \(record.name) 的这条记录，并重新计算相关份额、现金和后续记录。", "Reverse this record for \(record.name) and recalculate related units, cash, and later records.", language: store.appLanguage))
         }
-        .alert(localizedText("操作未完成", "Operation Not Completed", language: store.appLanguage), isPresented: operationErrorPresented) {
+        .alert(localizedText("无法完成操作", "Unable to Complete", language: store.appLanguage), isPresented: operationErrorPresented) {
             Button(localizedText("好", "OK", language: store.appLanguage), role: .cancel) {
                 operationErrorMessage = nil
             }
@@ -257,7 +257,7 @@ struct PositionsView: View {
             .width(116)
 
             TableColumn(
-                localizedText("收益率", "Return Rate", language: store.appLanguage),
+                localizedText("收益率", "Return", language: store.appLanguage),
                 value: \.profitRate
             ) { position in
                 Text(position.costIsKnown ? formatPercent(position.profitRate) : "—")
@@ -266,7 +266,7 @@ struct PositionsView: View {
             }
             .width(72)
 
-            TableColumn(localizedText("来源 / 状态", "Source / Status", language: store.appLanguage)) { position in
+            TableColumn(localizedText("行情来源", "Quote Source", language: store.appLanguage)) { position in
                 PositionSourceCell(position: position, store: store)
             }
             .width(min: 136, ideal: 160)
@@ -300,7 +300,7 @@ struct PositionsView: View {
                     }
                     if position.category == .cash {
                         Button { pendingCashReduction = position } label: {
-                            Label(localizedText("减少现金", "Reduce Cash", language: store.appLanguage), systemImage: "minus.circle")
+                            Label(localizedText("转出现金", "Cash Out", language: store.appLanguage), systemImage: "minus.circle")
                         }
                     } else {
                         Button { pendingClosure = position } label: {
@@ -349,7 +349,7 @@ struct PositionsView: View {
                 }.monospacedDigit()
             }.width(88)
             TableColumn(localizedText("类型", "Type", language: store.appLanguage)) {
-                activityText($0.needsOpeningReview ? localizedText("期初待核对", "Review Opening", language: store.appLanguage) : ($0.reconciliation?.units == 0 ? localizedText("持仓归零", "Zero Balance", language: store.appLanguage) : $0.kind.title(language: store.appLanguage))).lineLimit(1)
+                activityText($0.needsOpeningReview ? localizedText("期初待核对", "Verify Opening", language: store.appLanguage) : ($0.reconciliation?.units == 0 ? localizedText("已清仓", "Closed", language: store.appLanguage) : $0.kind.title(language: store.appLanguage))).lineLimit(1)
             }.width(76)
             TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { activityText($0.needsOpeningReview ? "—" : $0.quantity).monospacedDigit() }.width(72)
             TableColumn(localizedText("成交均价", "Trade Price", language: store.appLanguage)) {
@@ -396,7 +396,7 @@ struct PositionsView: View {
         }
         .overlay {
             if records.isEmpty {
-                Text(localizedText("暂无操作记录", "No activity", language: store.appLanguage))
+                Text(localizedText("暂无交易与调整记录", "No activity yet", language: store.appLanguage))
                     .font(PortfolixTypography.body).foregroundStyle(PortfolixTheme.secondary).allowsHitTesting(false)
             }
         }
@@ -502,7 +502,7 @@ struct AIReportView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-            PageHeader(title: localizedText("智能分析", "Smart Analysis", language: store.appLanguage))
+            PageHeader(title: localizedText("AI 投研", "AI Insights", language: store.appLanguage))
 
             AIReportChatSurface(
                 report: store.aiAnalysisReport,
@@ -539,8 +539,8 @@ struct AIReportView: View {
         } message: {
             Text(
                 localizedText(
-                    "将删除智能分析报告、追问、回答和诊断记录。",
-                    "This will delete analysis reports, follow-up questions, answers, and diagnostics.",
+                    "将删除 AI 投研报告、追问、回答与诊断记录。",
+                    "This will delete AI Insights reports, follow-ups, responses, and diagnostics.",
                     language: store.appLanguage
                 )
             )
@@ -1421,13 +1421,13 @@ enum AIReportReadiness: Equatable {
             ""
         case .missing:
             localizedText(
-                "请在系统设置中配置 \(name)",
+                "请在设置中配置 \(name)",
                 "Configure \(name) in Settings",
                 language: language
             )
         case .needsValidation:
             localizedText(
-                "请在系统设置中验证已配置的 \(name)",
+                "请在设置中验证已配置的 \(name)",
                 "Validate the configured \(name) in Settings",
                 language: language
             )
@@ -1481,7 +1481,7 @@ private struct AIReportWelcomeMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-            Text(localizedText("我可以基于你的持仓、风险偏好和行情数据生成组合分析", "I can analyze your portfolio using holdings, risk profile, and market data", language: language))
+            Text(localizedText("结合当前持仓、历史收益与风险边界，为你生成深度组合诊断。", "Generate a portfolio review based on your holdings, performance, and risk limits.", language: language))
                 .font(PortfolixTypography.body)
                 .foregroundStyle(PortfolixTheme.text)
 
@@ -1702,7 +1702,7 @@ private struct AIReportChatReport: View {
             HStack(spacing: PortfolixSpacing.sm) {
                 CapsuleLabel(title: localizedText("分析报告", "Analysis Report", language: language), color: PortfolixTheme.brandText, symbol: "doc.text.magnifyingglass")
                 if run.usedFallback {
-                    CapsuleLabel(title: localizedText("安全回退", "Fallback", language: language), color: PortfolixTheme.warnText, symbol: "exclamationmark.triangle.fill")
+                    CapsuleLabel(title: localizedText("本地简报", "Local Summary", language: language), color: PortfolixTheme.warnText, symbol: "exclamationmark.triangle.fill")
                 }
                 Spacer()
             }
@@ -1717,8 +1717,8 @@ private struct AIReportChatReport: View {
                         Text(
                             run.fallbackReason
                                 ?? localizedText(
-                                    "在线分析未完成，本报告由本地规则生成。",
-                                    "Online analysis did not complete; this report was generated from local rules.",
+                                    "在线模型暂未完成响应，已基于本地持仓规则生成摘要。",
+                                    "Cloud analysis didn't finish, so a local rule-based summary was generated.",
                                     language: language
                                 )
                         )
@@ -1774,8 +1774,8 @@ private struct AIReportChatReport: View {
                         AIReportBullet(
                             title: localizedText("暂无需要单独关注的资产", "No individual holdings require special attention", language: language),
                             body: localizedText(
-                                "当前报告未发现需要从组合中单独拎出的持仓，后续可继续观察集中度、币种敞口和区间表现变化。",
-                                "This report did not identify a holding that needs to be singled out; keep watching concentration, currency exposure, and recent performance.",
+                                "当前持仓结构整体均衡，暂无异常标的需要单独预警；建议持续关注集中度与币种敞口变化。",
+                                "No individual positions require immediate attention. Continue monitoring concentration, currency exposure, and recent performance.",
                                 language: language
                             ),
                             color: PortfolixTheme.secondary,
@@ -2167,7 +2167,7 @@ private struct AIReportChatComposer: View {
     }
 
     private var placeholder: String {
-        localizedText("向 Portfolix Agent 提问", "Ask Portfolix Agent", language: language)
+        localizedText("围绕持仓、风险或市场变化提问…", "Ask about your portfolio, risks, or markets…", language: language)
     }
 
     private var canSubmitFollowUp: Bool {
@@ -2558,8 +2558,8 @@ struct RiskProfileView: View {
                         )
 
                         RiskConstraintSliderRow(
-                            title: localizedText("数字货币最大占比", "Max Crypto", language: store.appLanguage),
-                            actualLabel: localizedText("当前数字货币", "Current Crypto", language: store.appLanguage),
+                            title: localizedText("加密资产上限", "Max Crypto", language: store.appLanguage),
+                            actualLabel: localizedText("当前加密资产", "Current Crypto", language: store.appLanguage),
                             actualValue: cryptoAllocationPercent,
                             limitLabel: localizedText("上限", "Limit", language: store.appLanguage),
                             value: $store.cryptoLimit,
@@ -2570,8 +2570,8 @@ struct RiskProfileView: View {
                         )
 
                         RiskConstraintSliderRow(
-                            title: localizedText("非 CNY 计价资产最大占比", "Max Non-CNY Assets", language: store.appLanguage),
-                            actualLabel: localizedText("当前非 CNY", "Current Non-CNY", language: store.appLanguage),
+                            title: localizedText("外币资产上限", "Max Non-Base Currency", language: store.appLanguage),
+                            actualLabel: localizedText("当前外币占比", "Current Non-Base", language: store.appLanguage),
                             actualValue: nonCNYAllocationPercent,
                             limitLabel: localizedText("上限", "Limit", language: store.appLanguage),
                             value: $store.foreignCurrencyLimit,
@@ -2582,8 +2582,8 @@ struct RiskProfileView: View {
                         )
 
                         RiskConstraintSliderRow(
-                            title: localizedText("最低现金占比", "Minimum Cash", language: store.appLanguage),
-                            actualLabel: localizedText("当前现金", "Current Cash", language: store.appLanguage),
+                            title: localizedText("最低现金比例", "Minimum Cash", language: store.appLanguage),
+                            actualLabel: localizedText("当前现金占比", "Current Cash", language: store.appLanguage),
                             actualValue: cashAllocationPercent,
                             limitLabel: localizedText("下限", "Minimum", language: store.appLanguage),
                             value: $store.liquidityMinimum,
@@ -2614,16 +2614,15 @@ struct RiskProfileView: View {
     }
 
     private var localizedRiskLevel: String {
-        guard store.appLanguage == .english else { return store.riskLevel }
         switch store.riskLevel {
         case "保守稳健":
-            return "Conservative"
+            return localizedText("保守型", "Conservative", language: store.appLanguage)
         case "稳健平衡":
-            return "Balanced"
+            return localizedText("平衡型", "Balanced", language: store.appLanguage)
         case "积极成长":
-            return "Growth"
+            return localizedText("进取型", "Growth", language: store.appLanguage)
         case "未配置":
-            return "Not configured"
+            return localizedText("未配置", "Not configured", language: store.appLanguage)
         default:
             return store.riskLevel
         }
@@ -2649,11 +2648,11 @@ struct RiskProfileView: View {
         }
         switch store.riskLevel {
         case "保守稳健":
-            return localizedText("更重视本金稳定与波动控制，适合以低波动资产为核心", "Prioritizes capital stability and volatility control, with lower-volatility assets as the core", language: store.appLanguage)
+            return localizedText("以本金安全与低回撤为首要目标，核心仓位偏向低波动与固收资产。", "Prioritizes capital preservation and low drawdowns with lower-volatility core holdings.", language: store.appLanguage)
         case "积极成长":
-            return localizedText("可承受较高波动，偏向以长期增长和资产弹性换取潜在收益", "Accepts higher volatility in pursuit of long-term growth and portfolio upside", language: store.appLanguage)
+            return localizedText("愿意承受阶段性较大回撤，以高弹性权益与成长资产博取长期复利。", "Accepts deeper drawdowns in pursuit of higher long-term compounding from growth assets.", language: store.appLanguage)
         case "稳健平衡":
-            return localizedText("在收益机会与波动控制之间保持平衡，适合多资产分散配置", "Balances return opportunities with volatility control through diversified allocation", language: store.appLanguage)
+            return localizedText("兼顾长期增值与回撤控制，通过股债与多资产分散降低单一波动。", "Balances long-term growth with drawdown control through multi-asset diversification.", language: store.appLanguage)
         default:
             return localizedText("基于问卷与关键约束生成的风险偏好说明", "A risk profile summary based on the questionnaire and key constraints", language: store.appLanguage)
         }
@@ -2830,7 +2829,7 @@ private struct RiskPortfolioMatchCard: View {
     var body: some View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.lg) {
-                SectionHeader(title: localizedText("约束匹配度", "Constraint Fit", language: language), symbol: "target")
+                SectionHeader(title: localizedText("约束状态", "Limit Status", language: language), symbol: "target")
 
                 HStack(alignment: .center, spacing: PortfolixSpacing.xl) {
                     VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
@@ -2848,7 +2847,7 @@ private struct RiskPortfolioMatchCard: View {
 
                     VStack(alignment: .trailing, spacing: PortfolixSpacing.sm) {
                         RiskCountPill(
-                            title: localizedText("通过", "Passed", language: language),
+                            title: localizedText("正常", "Within Limits", language: language),
                             value: "\(passedCount)/\(totalCount)",
                             color: PortfolixTheme.gainText
                         )
@@ -2941,7 +2940,7 @@ private struct RiskConstraintSliderRow: View {
                             .lineLimit(1)
 
                         RiskLimitBadge(
-                            title: isPassing ? localizedText("正常", "OK", language: language) : localizedText("需关注", "Watch", language: language),
+                            title: isPassing ? localizedText("正常", "Within Limits", language: language) : localizedText("需关注", "Watch", language: language),
                             color: isPassing ? PortfolixTheme.gainText : PortfolixTheme.warnText,
                             textColor: isPassing ? PortfolixTheme.gainText : PortfolixTheme.warnText
                         )
@@ -2977,7 +2976,7 @@ private struct RiskMaintenanceCard: View {
     let language: AppLanguage
 
     var body: some View {
-        SettingsSection(title: localizedText("复评维护", "Review", language: language), symbol: "calendar.badge.clock") {
+        SettingsSection(title: localizedText("复评周期", "Review Schedule", language: language), symbol: "calendar.badge.clock") {
             SettingsRow(title: localizedText("当前状态", "Status", language: language)) {
                 RiskStatusValue(status: status, language: language)
             }
@@ -3120,7 +3119,7 @@ struct SettingsView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
-                PageHeader(title: settingsText("系统设置", "Settings"))
+                PageHeader(title: settingsText("设置", "Settings"))
 
                 SettingsSection(title: settingsText("显示设置", "Display"), symbol: "display") {
                     SettingsRow(title: settingsText("外观模式", "Appearance")) {
@@ -3191,12 +3190,12 @@ struct SettingsView: View {
                     }
                 }
 
-                SettingsSection(title: settingsText("智能分析", "Smart Analysis"), symbol: "sparkles.rectangle.stack") {
+                SettingsSection(title: settingsText("AI 投研", "AI Insights"), symbol: "sparkles.rectangle.stack") {
                     SettingsToggleRow(
                         title: settingsText("AI 资产分析", "AI Asset Analysis"),
                         helpText: settingsText(
-                            "开启后，Portfolix 将通过 DeepSeek 分析您的资产组合、收益及风险偏好。",
-                            "When enabled, Portfolix uses DeepSeek to analyze your portfolio, returns, and risk preferences."
+                            "开启后，通过 DeepSeek 分析当前持仓、收益表现与风险约束。",
+                            "Uses DeepSeek to analyze your portfolio, performance, and risk limits."
                         ),
                         helpPlacement: .trailing,
                         isOn: $store.aiConfiguration.isEnabled
@@ -3205,8 +3204,8 @@ struct SettingsView: View {
                     SettingsRow(
                         title: settingsText("分析模式", "Analysis Mode"),
                         helpText: settingsText(
-                            "基础模式仅使用组合数据；联网增强会按需调用已启用的搜索服务。",
-                            "Basic uses portfolio data only; Connected calls enabled search services when needed."
+                            "基础分析仅使用本机组合数据；联网研究会按需调用已启用的搜索源检索公开市场信息。",
+                            "Basic uses local portfolio data only; Web Research calls enabled search sources for public market data."
                         ),
                         helpPlacement: .trailing
                     ) {
@@ -3268,7 +3267,7 @@ struct SettingsView: View {
 
                 SettingsSection(title: settingsText("数据备份", "Data Backup"), symbol: "externaldrive.badge.timemachine") {
                     SettingsRow(title: settingsText("数据存储", "Data Storage")) {
-                        Label(settingsText("仅本机", "Local only"), systemImage: "lock.shield.fill")
+                        Label(settingsText("仅本地存储", "On this Mac only"), systemImage: "lock.shield.fill")
                             .font(PortfolixTypography.captionEmphasis)
                             .foregroundStyle(PortfolixTheme.gainText)
                     }
@@ -3276,14 +3275,14 @@ struct SettingsView: View {
                     SettingsRow(
                         title: settingsText("数据导出", "Data Export"),
                         helpText: settingsText(
-                            "将持仓、历史收益、资产价格和风险偏好导出为结构化数据包，不包含智能分析数据、API Key 和设备相关设置。",
-                            "Exports holdings, return history, asset prices, and risk preferences as a structured data package. Smart analysis data, API keys, and device-specific settings are excluded."
+                            "导出持仓、历史净值、行情快照与风险配置为本地备份包（不含 AI 对话、API 密钥与本机设置）。",
+                            "Exports holdings, history, price snapshots, and risk profile to a local backup package (excludes AI chats, API keys, and local settings)."
                         ),
                         helpPlacement: .trailing
                     ) {
                         HStack(spacing: PortfolixSpacing.md) {
                             DataTransferInlineStatusView(status: exportStatus)
-                            Button(settingsText("创建导出", "Create Export"), action: createDataExport)
+                            Button(settingsText("导出备份", "Export Backup"), action: createDataExport)
                                 .buttonStyle(QuietButtonStyle())
                                 .disabled(exportStatus.isWorking)
                         }

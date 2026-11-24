@@ -30,7 +30,7 @@ struct PositionClosureSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(title: text("清仓记账", "Close Position"), symbol: "arrow.down.right.circle")
+            SheetHeader(title: text("清仓记录", "Close Position"), symbol: "arrow.down.right.circle")
             Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
@@ -88,7 +88,7 @@ struct PositionClosureSheet: View {
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }
                     .buttonStyle(QuietButtonStyle()).keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
-                Button(text("确认清仓", "Record Closure"), action: save)
+                Button(text("记录清仓", "Record Closure"), action: save)
                     .buttonStyle(PrimaryButtonStyle()).disabled(isSaving)
             }
         }

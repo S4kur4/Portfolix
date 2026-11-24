@@ -49,90 +49,90 @@ enum AIAnalysisProgress: Equatable, Sendable {
     func title(language: AppLanguage) -> String {
         switch self {
         case let .loadingMarketData(assetCount):
-            localizedText("正在读取 \(assetCount) 项资产行情", "Loading market data for \(assetCount) assets", language: language)
+            localizedText("正在同步 \(assetCount) 项资产最新行情", "Syncing latest quotes for \(assetCount) assets", language: language)
         case let .marketDataLoaded(total):
-            localizedText("已载入 \(total) 项资产行情", "Loaded market data for \(total) assets", language: language)
+            localizedText("已载入 \(total) 项资产行情", "Loaded quotes for \(total) assets", language: language)
         case .preflight:
-            localizedText("正在检查分析配置", "Checking analysis configuration", language: language)
+            localizedText("正在准备分析环境", "Preparing analysis", language: language)
         case .buildingInput:
-            localizedText("正在整理完整持仓与历史表现", "Preparing complete holdings and historical performance", language: language)
+            localizedText("正在梳理持仓结构与历史表现", "Reviewing holdings and performance", language: language)
         case .planningToolCalls:
-            localizedText("正在判断是否需要联网搜索", "Deciding whether connected search is needed", language: language)
+            localizedText("正在评估是否需要检索市场动态", "Checking if market research is needed", language: language)
         case let .replanningToolCalls(turn, total):
-            localizedText("正在调整搜索计划 \(turn)/\(total)", "Refining the search plan \(turn)/\(total)", language: language)
+            localizedText("正在补充市场检索 \(turn)/\(total)", "Refining research queries \(turn)/\(total)", language: language)
         case let .callingWebSearch(query, _, _):
-            localizedText("正在搜索 \(shortened(query))", "Searching \(shortened(query))", language: language)
+            localizedText("正在检索 \(shortened(query))", "Searching \(shortened(query))", language: language)
         case .webSearchResultsReady:
-            localizedText("联网搜索结果已整理", "Connected search results are ready", language: language)
+            localizedText("市场公开信息已整理", "Market research ready", language: language)
         case .evaluatingEvidence:
-            localizedText("正在评估现有证据", "Evaluating available evidence", language: language)
+            localizedText("正在交叉核验市场信息", "Cross-checking research findings", language: language)
         case .generatingReport:
-            localizedText("正在分析组合并生成报告", "Analyzing the portfolio and generating the report", language: language)
+            localizedText("正在深度分析组合表现", "Analyzing portfolio performance", language: language)
         case let .modelReasoning(_, elapsedSeconds):
             if let elapsedSeconds {
                 localizedText(
-                    "DeepSeek 推理仍在进行 · \(elapsedSeconds) 秒",
-                    "DeepSeek is still reasoning · \(elapsedSeconds)s",
+                    "DeepSeek 深度推理中 · \(elapsedSeconds) 秒",
+                    "DeepSeek is reasoning · \(elapsedSeconds)s",
                     language: language
                 )
             } else {
-                localizedText("DeepSeek 已开始推理", "DeepSeek started reasoning", language: language)
+                localizedText("DeepSeek 深度推理中", "DeepSeek started reasoning", language: language)
             }
         case .modelOutputStarted:
-            localizedText("正在生成分析内容", "Generating the analysis", language: language)
+            localizedText("正在撰写分析报告", "Drafting analysis report", language: language)
         case .validatingModelOutput:
-            localizedText("正在校验模型输出", "Validating model output", language: language)
+            localizedText("正在核对数据准确性", "Verifying figures and structure", language: language)
         case let .repairingReport(attempt, total, _):
-            localizedText("正在修复模型返回 \(attempt)/\(total)", "Repairing model response \(attempt)/\(total)", language: language)
+            localizedText("正在整理报告格式 \(attempt)/\(total)", "Formatting report \(attempt)/\(total)", language: language)
         case .validatingReport:
-            localizedText("正在执行报告安全校验", "Running report safety checks", language: language)
+            localizedText("正在复核引用与合规边界", "Verifying citations and guardrails", language: language)
         case .preparingArtifacts:
-            localizedText("正在整理分析审计记录", "Preparing analysis audit records", language: language)
+            localizedText("正在归档分析报告", "Archiving analysis report", language: language)
         case .savingReport:
-            localizedText("正在保存报告与运行记录", "Saving the report and run record", language: language)
+            localizedText("正在保存分析报告", "Saving report locally", language: language)
         }
     }
 
     func detail(language: AppLanguage) -> String {
         switch self {
         case .loadingMarketData:
-            localizedText("同步后台已保存的最新行情，不额外发起价格请求", "Syncing the latest saved market data without issuing another price request", language: language)
+            localizedText("同步已缓存的最新行情数据", "Syncing latest cached market quotes", language: language)
         case let .marketDataLoaded(total):
-            localizedText("已核对 \(total) 项持仓的价格与历史记录", "Checked prices and history for \(total) holdings", language: language)
+            localizedText("已核对 \(total) 项持仓的价格与历史净值", "Checked prices and history for \(total) holdings", language: language)
         case .preflight:
-            localizedText("核对持仓、模型配置和凭据状态", "Checking holdings, model configuration, and credentials", language: language)
+            localizedText("确认持仓、模型配置与连接状态", "Checking holdings, model, and connection status", language: language)
         case .buildingInput:
-            localizedText("核对持仓明细、区间表现和风险约束", "Checking holdings, performance, and risk constraints", language: language)
+            localizedText("汇总持仓明细、区间收益与风险约束", "Summarizing holdings, returns, and risk limits", language: language)
         case .planningToolCalls:
-            localizedText("检查报告是否依赖近期公开信息", "Checking whether recent public information is needed", language: language)
+            localizedText("判断是否需要结合近期公开市场信息", "Checking whether recent public market data is needed", language: language)
         case let .replanningToolCalls(turn, total):
-            localizedText("根据上一轮结果补充缺失信息（\(turn)/\(total)）", "Filling evidence gaps from the previous turn (\(turn)/\(total))", language: language)
+            localizedText("补充关键市场信息（\(turn)/\(total)）", "Filling research gaps (\(turn)/\(total))", language: language)
         case let .callingWebSearch(_, ordinal, total):
-            localizedText("受控联网搜索 \(ordinal)/\(total)", "Controlled connected search \(ordinal)/\(total)", language: language)
+            localizedText("检索公开市场信息 \(ordinal)/\(total)", "Searching market sources \(ordinal)/\(total)", language: language)
         case let .webSearchResultsReady(callCount, sourceCount):
-            localizedText("完成 \(callCount) 次搜索，保留 \(sourceCount) 个可信来源", "Completed \(callCount) searches and retained \(sourceCount) trusted sources", language: language)
+            localizedText("已完成 \(callCount) 次检索，采纳 \(sourceCount) 条来源", "Completed \(callCount) searches across \(sourceCount) sources", language: language)
         case let .evaluatingEvidence(turn, total):
-            localizedText("检查来源覆盖、失败调用与重复查询（\(turn)/\(total)）", "Checking source coverage, failed calls, and duplicate queries (\(turn)/\(total))", language: language)
+            localizedText("核验来源覆盖与信息时效（\(turn)/\(total)）", "Checking source coverage and recency (\(turn)/\(total))", language: language)
         case let .generatingReport(model):
             localizedText("模型：\(shortened(model))", "Model: \(shortened(model))", language: language)
         case let .modelReasoning(model, _):
-            localizedText("模型：\(shortened(model))；推理内容不会被保存", "Model: \(shortened(model)); reasoning content is not stored", language: language)
+            localizedText("模型：\(shortened(model)) · 推理过程不落盘", "Model: \(shortened(model)) · reasoning is not stored", language: language)
         case .modelOutputStarted:
-            localizedText("已收到最终内容流，正在等待完整结果", "Receiving the final output stream", language: language)
+            localizedText("正在接收完整分析内容", "Receiving analysis output", language: language)
         case let .validatingModelOutput(attempt, total):
             localizedText(
-                "检查 JSON、字段、语言和信息安全边界（\(attempt)/\(total)）",
-                "Checking JSON, fields, language, and security boundaries (\(attempt)/\(total))",
+                "复核数值、语言与报告结构（\(attempt)/\(total)）",
+                "Checking figures, language, and structure (\(attempt)/\(total))",
                 language: language
             )
         case let .repairingReport(_, _, reason):
-            localizedText("原因：\(shortened(reason))", "Reason: \(shortened(reason))", language: language)
+            localizedText("优化项：\(shortened(reason))", "Refining: \(shortened(reason))", language: language)
         case .validatingReport:
-            localizedText("检查结构、引用、来源 URL 与信息安全边界", "Checking structure, references, source URLs, and information security boundaries", language: language)
+            localizedText("复核数据引用与来源链接", "Checking citations and source links", language: language)
         case .preparingArtifacts:
-            localizedText("整理本次分析过程和校验结果", "Organizing the analysis and validation results", language: language)
+            localizedText("整理本次分析摘要与记录", "Organizing analysis summary and records", language: language)
         case .savingReport:
-            localizedText("事务写入本地数据库", "Writing to the local database transactionally", language: language)
+            localizedText("写入本机账本记录", "Saving to local ledger", language: language)
         }
     }
 
@@ -184,44 +184,44 @@ enum AIFollowUpProgress: Equatable, Sendable {
         case .evaluatingEvidence:
             localizedText("正在评估搜索结果", "Evaluating search results", language: language)
         case .composing:
-            localizedText("正在整理回答", "Preparing the answer", language: language)
+            localizedText("正在组织回复", "Drafting response", language: language)
         case let .reasoning(elapsedSeconds):
             if let elapsedSeconds {
                 localizedText(
-                    "DeepSeek 推理仍在进行 · \(elapsedSeconds) 秒",
-                    "DeepSeek is still reasoning · \(elapsedSeconds)s",
+                    "DeepSeek 深度推理中 · \(elapsedSeconds) 秒",
+                    "DeepSeek is reasoning · \(elapsedSeconds)s",
                     language: language
                 )
             } else {
-                localizedText("DeepSeek 已开始推理", "DeepSeek started reasoning", language: language)
+                localizedText("DeepSeek 深度推理中", "DeepSeek started reasoning", language: language)
             }
         case .outputStarted:
-            localizedText("正在生成回答", "Generating the answer", language: language)
+            localizedText("正在生成回复", "Generating response", language: language)
         case .repairingResponse:
-            localizedText("正在修复模型返回", "Repairing the model response", language: language)
+            localizedText("正在整理回复格式", "Formatting response", language: language)
         }
     }
 
     func detail(language: AppLanguage) -> String {
         switch self {
         case .analyzing:
-            localizedText("正在结合当前报告与持仓信息进行分析", "Reviewing the current report and holdings", language: language)
+            localizedText("结合当前报告与持仓记录进行分析", "Reviewing the current report and holdings", language: language)
         case .readingLocalData:
-            localizedText("正在按需读取 App 中的最新数据", "Reading the latest relevant records in the app", language: language)
+            localizedText("按需读取本机最新持仓与历史记录", "Reading the latest local holdings and history", language: language)
         case let .replanning(turn, total):
-            localizedText("根据上一轮结果补充缺失信息（\(turn)/\(total)）", "Filling evidence gaps from the previous turn (\(turn)/\(total))", language: language)
+            localizedText("补充关键市场信息（\(turn)/\(total)）", "Filling research gaps (\(turn)/\(total))", language: language)
         case let .searching(_, ordinal, total):
-            localizedText("联网补充近期公开信息 \(ordinal)/\(total)", "Checking recent public information \(ordinal)/\(total)", language: language)
+            localizedText("检索公开市场信息 \(ordinal)/\(total)", "Searching market sources \(ordinal)/\(total)", language: language)
         case let .evaluatingEvidence(turn, total):
-            localizedText("检查来源是否足以回答问题（\(turn)/\(total)）", "Checking whether the sources are sufficient (\(turn)/\(total))", language: language)
+            localizedText("核验来源是否充分（\(turn)/\(total)）", "Checking source sufficiency (\(turn)/\(total))", language: language)
         case .composing:
-            localizedText("正在把分析结果转化为清晰、易读的说明", "Turning the analysis into a clear response", language: language)
+            localizedText("正在组织清晰简洁的分析回复", "Drafting a clear response", language: language)
         case .reasoning:
-            localizedText("推理内容仅用于本次请求，不会展示或保存", "Reasoning content is not displayed or stored", language: language)
+            localizedText("推理过程仅用于本次回答，不会展示或保存", "Reasoning is not displayed or stored", language: language)
         case .outputStarted:
-            localizedText("已收到最终内容流，正在等待完整回答", "Receiving the final output stream", language: language)
+            localizedText("正在接收完整回答", "Receiving response", language: language)
         case .repairingResponse:
-            localizedText("返回结构需要调整，正在自动重试", "The response structure needs adjustment; retrying automatically", language: language)
+            localizedText("正在优化回答格式并重试", "Refining response format automatically", language: language)
         }
     }
 
@@ -379,9 +379,9 @@ struct AIAnalysisDiagnostic: Codable, Identifiable, Equatable {
     func analysisModeLabel(language: AppLanguage) -> String {
         switch analysisMode {
         case "connected_enhanced":
-            localizedText("联网增强", "Connected enhanced", language: language)
+            localizedText("联网研究", "Web Research", language: language)
         case "basic_standard":
-            localizedText("基础模式", "Basic mode", language: language)
+            localizedText("基础分析", "Basic Analysis", language: language)
         default:
             analysisMode
         }

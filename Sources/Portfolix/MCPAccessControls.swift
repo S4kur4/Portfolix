@@ -29,8 +29,8 @@ struct MCPAccessControls: View {
         } message: {
             Text(
                 text(
-                    "您连接的本机 Agent 可读取持仓、成本和收益，并可能将这些信息发送给其模型服务。关闭 App 后授权仍有效，可随时在此关闭。",
-                    "Local agents you connect can read holdings, costs, and returns, and may send them to their model providers. Access remains enabled when Portfolix is closed. You can revoke it here at any time."
+                    "授权后，本机连接的外部 Agent 可只读访问持仓、成本与收益数据（可能发送至其所选模型服务）。关闭 App 后授权依然生效，可随时在此撤销。",
+                    "Connected local agents will have read-only access to holdings, costs, and returns (which may be sent to their model providers). Access persists when Portfolix is closed and can be revoked anytime."
                 ))
         }
     }

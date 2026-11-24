@@ -75,7 +75,7 @@ struct RiskQuestionnaireSheet: View {
                     )
 
                     ThresholdPicker(
-                        title: localizedText("数字货币最大占比", "Max crypto", language: store.appLanguage),
+                        title: localizedText("加密资产上限", "Max Crypto", language: store.appLanguage),
                         selection: $crypto,
                         customValue: $customCrypto,
                         options: ["0%", "5%", "10%", "15%", "20%", "自定义"],
@@ -83,7 +83,7 @@ struct RiskQuestionnaireSheet: View {
                     )
 
                     ThresholdPicker(
-                        title: localizedText("非基准币种资产最大占比", "Max non-base currency", language: store.appLanguage),
+                        title: localizedText("外币资产上限", "Max Non-Base Currency", language: store.appLanguage),
                         selection: $foreignCurrency,
                         customValue: $customForeignCurrency,
                         options: ["10%", "30%", "50%", "70%", "自定义"],
@@ -91,7 +91,7 @@ struct RiskQuestionnaireSheet: View {
                     )
 
                     ThresholdPicker(
-                        title: localizedText("最低流动资产占比", "Minimum liquidity", language: store.appLanguage),
+                        title: localizedText("最低现金比例", "Minimum Cash", language: store.appLanguage),
                         selection: $liquidAssets,
                         customValue: $customLiquidAssets,
                         options: ["0%", "5%", "10%", "20%", "自定义"],
@@ -110,7 +110,7 @@ struct RiskQuestionnaireSheet: View {
                 .buttonStyle(QuietButtonStyle())
                 .keyboardShortcut(.cancelAction)
 
-                Button(localizedText("保存为新版本", "Save Version", language: store.appLanguage)) {
+                Button(localizedText("保存评估", "Save Profile", language: store.appLanguage)) {
                     saveQuestionnaire()
                     dismiss()
                 }

@@ -28,7 +28,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
             switch self {
             case .overview: "Overview"
             case .positions: "Holdings"
-            case .report: "Smart Analysis"
+            case .report: "AI Insights"
             case .riskProfile: "Risk Profile"
             case .settings: "Settings"
             }
@@ -36,9 +36,9 @@ enum SidebarSection: String, CaseIterable, Identifiable {
             switch self {
             case .overview: "资产总览"
             case .positions: "持仓明细"
-            case .report: "智能分析"
+            case .report: "AI 投研"
             case .riskProfile: "风险偏好"
-            case .settings: "系统设置"
+            case .settings: "设置"
             }
         }
     }
@@ -194,7 +194,10 @@ enum AssetCategory: String, CaseIterable, Identifiable, Sendable {
             case .cash: "Cash"
             }
         } else {
-            rawValue
+            switch self {
+            case .crypto: "加密资产"
+            default: rawValue
+            }
         }
     }
 
@@ -354,7 +357,7 @@ struct Position: Identifiable, Sendable {
 
     func priceDateText(language: AppLanguage) -> String {
         guard freshness != .manual else {
-            return language == .english ? "Manual price" : "手工价格"
+            return language == .english ? "Manual" : "手动估值"
         }
         let trimmed = quoteTime.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "刚刚" else {
@@ -1912,15 +1915,15 @@ final class PortfolioStore {
     private func aiAPIConfigurationMessage(language: AppLanguage) -> String? {
         if !hasValidLLMAPIKey {
             return localizedText(
-                "DeepSeek API 未完成有效配置。请先在系统设置中配置并验证 API Key 后再使用智能分析。",
-                "The DeepSeek API is not validly configured. Configure and validate the API key in Settings before using smart analysis.",
+                "DeepSeek API 尚未完成配置，请先在设置中配置并验证 API Key 后再使用 AI 投研。",
+                "DeepSeek API is not configured yet. Configure and validate your API key in Settings before using AI Insights.",
                 language: language
             )
         }
         if searchConfiguration.isEnabled, !hasUsableSearchProvider {
             return localizedText(
-                "联网增强需要至少一个可用的搜索服务。请在系统设置中启用 Parallel Search，或配置 Tavily、博查。",
-                "Connected mode requires at least one available search service. Enable Parallel Search, or configure Tavily or Bocha in Settings.",
+                "联网研究需要至少一个可用的搜索服务，请在设置中启用搜索源并完成验证。",
+                "Web Research requires at least one available search provider. Enable and validate one in Settings.",
                 language: language
             )
         }
@@ -2449,8 +2452,8 @@ final class PortfolioStore {
         }
         if description.contains("json mode") || description.contains("response_format") || description.contains("json_object") {
             return localizedText(
-                "该模型可能不支持结构化输出参数，可切换兼容模型，或把这条诊断信息发给开发者确认适配。",
-                "This model may not support structured output parameters. Switch to a compatible model or share this diagnostic with the developer.",
+                "该模型可能不支持结构化输出参数，可切换兼容模型，或复制诊断信息反馈排查。",
+                "This model may not support structured output parameters. Switch to a compatible model or copy the diagnostic details for troubleshooting.",
                 language: appLanguage
             )
         }
@@ -2500,8 +2503,8 @@ final class PortfolioStore {
             || description.contains("invalid field")
             || description.contains("字段格式无效") {
             return localizedText(
-                "模型返回内容没有满足报告结构要求，建议重试一次；若持续出现，请把诊断信息发给开发者优化提示词或兼容逻辑。",
-                "The model response did not match the required report structure. Retry once; if it persists, share this diagnostic so prompts or compatibility handling can be improved.",
+                "模型返回内容未满足报告格式要求，建议重试一次；如持续出现，可复制诊断信息反馈排查。",
+                "The model response did not match the required report format. Retry once, or copy the diagnostic details if this persists.",
                 language: appLanguage
             )
         }
@@ -2523,8 +2526,8 @@ final class PortfolioStore {
             )
         }
         return localizedText(
-            "请检查 API 配置、网络连接和模型可用性；如果重复失败，把诊断信息发给开发者继续排查。",
-            "Check API configuration, connectivity, and model availability. If it keeps failing, share this diagnostic for further investigation.",
+            "请检查 API 配置、网络连接和模型可用性；如持续出现，可复制诊断信息反馈排查。",
+            "Check API configuration, connectivity, and model availability. If this persists, copy the diagnostic details for troubleshooting.",
             language: appLanguage
         )
     }
@@ -2817,8 +2820,8 @@ final class PortfolioStore {
 
     var investmentDistributionHelpText: String {
         localizedText(
-            "投资分布功能由AI分析计算，仅供参考。",
-            "Investment distribution is analyzed by AI and is for reference only.",
+            "投资分布由 AI 穿透分析生成，仅供参考。",
+            "Allocation breakdown is estimated by AI for reference only.",
             language: appLanguage
         )
     }

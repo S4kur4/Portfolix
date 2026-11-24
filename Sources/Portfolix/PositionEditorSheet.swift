@@ -185,8 +185,8 @@ struct PositionEditorSheet: View {
                     didAttemptSave = false
                 }
                 Section {
-                    LabeledContent(sheetText("实际操作时间", "Actual Trade Time")) {
-                        PortfolixDateTimePicker(title: localizedText("实际操作时间", "Actual Trade Time", language: language), selection: $actualTradeDate, language: language, isPresented: $isDatePickerPresented)
+                    LabeledContent(sheetText("成交时间", "Trade Time")) {
+                        PortfolixDateTimePicker(title: localizedText("成交时间", "Trade Time", language: language), selection: $actualTradeDate, language: language, isPresented: $isDatePickerPresented)
                     }
                     LabeledContent(sheetText("资产类别", "Asset Type")) {
                         PortfolixGlassMenuPicker(
@@ -203,13 +203,13 @@ struct PositionEditorSheet: View {
 
                     if !locksAssetIdentity, !isManualAssetEntry {
                         HStack(spacing: PortfolixSpacing.sm) {
-                            Label(sheetText("类型与计价币种由数据源确定", "Type and currency are set by the data source"), systemImage: "lock.fill")
+                            Label(sheetText("类别与币种已按行情源自动匹配", "Asset class and currency are matched automatically"), systemImage: "lock.fill")
                                 .font(PortfolixTypography.caption)
                                 .foregroundStyle(PortfolixTheme.secondary)
 
                             Spacer()
 
-                            Button(sheetText("改为手工录入", "Use Manual Entry")) {
+                            Button(sheetText("切换为手动录入", "Enter Manually")) {
                                 switchToManualEntry()
                             }
                             .buttonStyle(QuietButtonStyle())
@@ -244,7 +244,7 @@ struct PositionEditorSheet: View {
 
                     if !locksAssetIdentity, !assetCandidates.isEmpty {
                         VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                            Text(sheetText("数据候选", "Data Candidates"))
+                            Text(sheetText("行情匹配", "Matching Assets"))
                                 .font(PortfolixTypography.labelEmphasis)
                                 .foregroundStyle(PortfolixTheme.tertiary)
 
@@ -363,7 +363,7 @@ struct PositionEditorSheet: View {
                 .keyboardShortcut(isDatePickerPresented ? nil : .cancelAction)
                 .disabled(isSaving)
 
-                Button(sheetText("确认添加", "Add Asset")) {
+                Button(sheetText("添加资产", "Add Asset")) {
                     let window = NSApp.keyWindow
                     Task {
                         if await saveChanges(committing: window) {
@@ -463,7 +463,7 @@ struct PositionEditorSheet: View {
         defer { isSaving = false }
         focusedField = nil
         guard await SheetEditingCommit.commit(in: window) else {
-            validationMessage = sheetText("无法结束当前输入，请检查后重试。", "Unable to finish editing. Check the current field and try again.")
+            validationMessage = sheetText("当前输入格式有误，请核对后重试。", "Please check the current input and try again.")
             return false
         }
         if usesFixedCashPricing {
@@ -493,8 +493,8 @@ struct PositionEditorSheet: View {
         else {
             didAttemptSave = true
             validationMessage = sheetText(
-                "当前价格尚未获取，请先从数据候选中选择资产。",
-                "Current price is not available yet. Select an asset from data candidates first."
+                "尚未获取到最新价格，请先从行情匹配结果中选择资产。",
+                "Current price is not available yet. Select an asset from matching results first."
             )
             focusedField = nil
             return false

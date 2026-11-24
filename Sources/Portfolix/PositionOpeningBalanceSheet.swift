@@ -43,7 +43,7 @@ struct PositionOpeningBalanceSheet: View {
                 Button(text("取消", "Cancel")) { dismiss() }
                     .buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
                     .disabled(isSaving)
-                Button(text("确认期初", "Confirm Opening")) {
+                Button(text("保存期初", "Save Opening Balance")) {
                     let window = NSApp.keyWindow
                     Task { await save(in: window) }
                 }
@@ -68,7 +68,7 @@ struct PositionOpeningBalanceSheet: View {
         defer { isSaving = false }
         focusedField = nil
         guard await SheetEditingCommit.commit(in: window) else {
-            errorMessage = text("无法结束当前输入，请检查后重试。", "Unable to finish editing. Check the current field and try again.")
+            errorMessage = text("当前输入格式有误，请核对后重试。", "Please check the current input and try again.")
             return
         }
         do {

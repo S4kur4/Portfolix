@@ -509,10 +509,10 @@ enum SmartAnalysisMode: String, CaseIterable, Identifiable {
 
     func title(language: AppLanguage) -> String {
         switch (self, language) {
-        case (.basic, .chinese): "基础模式"
-        case (.connected, .chinese): "联网增强"
+        case (.basic, .chinese): "基础分析"
+        case (.connected, .chinese): "联网研究"
         case (.basic, .english): "Basic"
-        case (.connected, .english): "Connected"
+        case (.connected, .english): "Web Research"
         }
     }
 }

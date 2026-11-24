@@ -32,7 +32,7 @@ struct CashReductionSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SheetHeader(title: text("减少现金", "Reduce Cash"), symbol: "minus.circle")
+            SheetHeader(title: text("转出现金", "Cash Out"), symbol: "minus.circle")
             Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
@@ -47,12 +47,12 @@ struct CashReductionSheet: View {
                 Section {
                     LabeledContent {
                         HStack(spacing: PortfolixSpacing.sm) {
-                            AssetEntryTextField(title: text("减少金额", "Reduction Amount"), text: $amount,
+                            AssetEntryTextField(title: text("转出金额", "Amount"), text: $amount,
                                 field: .amount, focus: $focusedField,
-                                placeholder: text("填写减少金额", "Enter the reduction amount"),
+                                placeholder: text("填写转出金额", "Enter amount"),
                                 language: store.appLanguage, numeric: true, isInvalid: invalidAmount)
                             Button { amount = PositionClosureMath.string(cash.quantity) } label: {
-                                Text(text("全部减少", "Reduce All"))
+                                Text(text("全部转出", "Withdraw All"))
                                     .font(PortfolixTypography.captionEmphasis)
                                     .padding(.horizontal, PortfolixSpacing.sm)
                                     .portfolixGlassControl(height: AssetEntryLayout.inlineControlHeight)
@@ -61,9 +61,9 @@ struct CashReductionSheet: View {
                         }
                         .frame(width: AssetEntryLayout.valueFieldWidth, height: AssetEntryLayout.valueFieldHeight)
                     } label: {
-                        AssetEntryFieldLabel(title: text("减少金额", "Reduction Amount"), isInvalid: invalidAmount)
+                        AssetEntryFieldLabel(title: text("转出金额", "Amount"), isInvalid: invalidAmount)
                     }
-                    LabeledContent(text("减少后余额", "Remaining Balance")) {
+                    LabeledContent(text("转出后余额", "Remaining Balance")) {
                         let remaining = PositionClosureMath.decimal(amount).flatMap {
                             $0 >= 0 && $0 <= cash.quantity ? cash.quantity - $0 : nil
                         }
@@ -77,7 +77,7 @@ struct CashReductionSheet: View {
             SheetActionFooter(errorMessage: errorMessage) {
                 Button(text("取消", "Cancel")) { dismiss() }
                     .buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction).disabled(isSaving)
-                Button(text("确认减少", "Record Reduction")) {
+                Button(text("记录转出", "Record Cash Out")) {
                     let window = NSApp.keyWindow
                     Task { await save(in: window) }
                 }
@@ -97,7 +97,7 @@ struct CashReductionSheet: View {
         defer { isSaving = false }
         focusedField = nil
         guard await SheetEditingCommit.commit(in: window) else {
-            errorMessage = text("无法结束当前输入，请检查后重试。", "Unable to finish editing. Check the current field and try again.")
+            errorMessage = text("当前输入格式有误，请核对后重试。", "Please check the current input and try again.")
             return
         }
         do {

@@ -144,7 +144,7 @@ private struct PortfolioHeroCard: View {
                 ) {
                     HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
                         if store.isRefreshing {
-                            Text(localizedText("正在同步行情...", "Syncing prices...", language: store.appLanguage))
+                            Text(localizedText("同步行情中…", "Updating quotes…", language: store.appLanguage))
                                 .font(PortfolixTypography.caption)
                                 .foregroundStyle(PortfolixTheme.secondary)
                                 .lineLimit(1)
@@ -184,7 +184,7 @@ private struct PortfolioHeroCard: View {
                     .accessibilityValue(heroValueText)
 
                 HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.xs) {
-                    Text(localizedText("今日收益", "Today Return", language: store.appLanguage))
+                    Text(localizedText("今日盈亏", "Today's P&L", language: store.appLanguage))
                         .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.secondary)
                         .lineLimit(1)
@@ -1432,7 +1432,7 @@ private struct AssetMixBarCard: View {
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 HStack(alignment: .center, spacing: PortfolixSpacing.md) {
-                    SectionHeader(title: localizedText("持仓占比", "Holding Mix", language: store.appLanguage), symbol: "rectangle.split.3x1.fill")
+                    SectionHeader(title: localizedText("持仓占比", "Allocation", language: store.appLanguage), symbol: "rectangle.split.3x1.fill")
 
                     Spacer(minLength: PortfolixSpacing.sm)
 
@@ -1651,9 +1651,9 @@ enum PrimaryPositionDisplayLimit: String, CaseIterable, Identifiable {
     func title(language: AppLanguage) -> String {
         switch self {
         case .top5:
-            localizedText("市值前 5 项", "Top 5 by Market Value", language: language)
+            localizedText("前 5 大持仓", "Top 5", language: language)
         case .top10:
-            localizedText("市值前 10 项", "Top 10 by Market Value", language: language)
+            localizedText("前 10 大持仓", "Top 10", language: language)
         case .all:
             localizedText("全部持仓", "All Holdings", language: language)
         }
@@ -1841,7 +1841,7 @@ private struct PositionHeaderRow: View {
             )
             .frame(minWidth: PrimaryPositionColumnWidths.rateColumnWidth, maxWidth: .infinity, alignment: .trailing)
             SortablePositionHeader(
-                title: localizedText("今日收益", "Today", language: store.appLanguage),
+                title: localizedText("今日盈亏", "Today's P&L", language: store.appLanguage),
                 field: .todayProfit,
                 selectedField: $sortField,
                 direction: $sortDirection
@@ -2702,8 +2702,8 @@ private struct DailyProfitMonthCard: View {
     private var emptyStateTitle: String {
         if store.dailyProfitHistory.isEmpty {
             return localizedText(
-                "行情更新后开始记录每日盈亏",
-                "Daily P&L starts after the first quote update",
+                "首次同步行情后，将按日记录盈亏",
+                "Daily P&L begins after your first quote sync",
                 language: store.appLanguage
             )
         }
