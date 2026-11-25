@@ -53,13 +53,40 @@ enum AISearchFunctionCalling {
         }
     }
 
+    static func providerSpecialty(_ provider: SearchProviderOption) -> String {
+        switch provider {
+        case .parallel:
+            "General public web search (anonymous, no API key required); good for broad market context and bilingual coverage."
+        case .deepseek:
+            "DeepSeek authoritative bilingual web search; strong for recent news, official announcements, and both Chinese and English sources."
+        case .tavily:
+            "Global financial and English-language web search; best for US/HK equities, crypto, SEC filings, and international macro releases."
+        case .bocha:
+            "Chinese-language financial web search; best for A-shares, Chinese mutual funds, domestic exchange filings, and local policy."
+        case .exa:
+            "Semantic web research search; best for in-depth institutional analysis, research reports, and related articles."
+        case .anysearch:
+            "General public web search for news and open financial disclosures."
+        }
+    }
+
     static func definitions(providers: [SearchProviderOption]) -> [LLMFunctionTool] {
         SearchProviderOption.allCases.filter(providers.contains).map { provider in
-            LLMFunctionTool(name: toolName(provider), description: "Search public web sources using \(provider.rawValue). Independent searches run concurrently. For important current facts, request 2–3 distinct enabled providers in this response, using complementary queries. Never include account values, quantities, costs or credentials. A different search engine returning the same original page is not independent corroboration.", parameters: .object([
+            LLMFunctionTool(name: toolName(provider), description: "\(providerSpecialty(provider)) Multiple searches run concurrently; for important or contested facts, call 2–3 distinct enabled providers with complementary queries. Never include personal share counts, costs, account totals, or credentials.", parameters: .object([
                 "type": .string("object"), "additionalProperties": .bool(false),
                 "properties": .object([
-                    "query": .object(["type": .string("string"), "minLength": .number(8), "maxLength": .number(128)]),
-                    "position_refs": .object(["type": .string("array"), "items": .object(["type": .string("string"), "maxLength": .number(80)]), "maxItems": .number(3)])
+                    "query": .object([
+                        "type": .string("string"),
+                        "minLength": .number(8),
+                        "maxLength": .number(128),
+                        "description": .string("Public search query (8 to 128 chars). Include asset ticker/name or macro topic; calendar years, quarters (Q1-Q4), SEC forms (10-K), and index numbers are allowed. Never include personal portfolio amounts."),
+                    ]),
+                    "position_refs": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("string"), "maxLength": .number(80)]),
+                        "maxItems": .number(3),
+                        "description": .string("Related holding refs from allowed_positions (1 to 3 items for holding-specific searches, or [] for general market/macro queries in follow-ups)."),
+                    ])
                 ]), "required": .array([.string("query"), .string("position_refs")])
             ]))
         }

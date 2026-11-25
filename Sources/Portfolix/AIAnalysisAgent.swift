@@ -247,7 +247,7 @@ enum AIInformationSecurityGuardrail {
         "credential:", "credential=", "ignore previous instructions", "ignore all previous",
         "系统提示词：", "系统提示词=", "开发者消息：", "开发者消息=",
         "api 密钥：", "api 密钥=", "密码：", "密码=", "忽略之前的指令", "忽略以上指令",
-        "system prompt", "developer message", "api key", "apikey", "password", "credential",
+        "system prompt", "developer message",
         "系统提示词", "开发者消息", "api 密钥", "导出密钥",
     ]
 
@@ -416,7 +416,7 @@ struct AIAnalysisAgent: Sendable {
         runtimeRunID: UUID? = nil,
         progress: AIFollowUpProgressHandler? = nil
     ) async throws -> AIAnalysisFollowUpResult {
-        var (result, usage) = try await AIModelRun.tracked(kind: "follow_up", maximumCalls: 5) {
+        var (result, usage) = try await AIModelRun.tracked(kind: "follow_up", maximumCalls: 6) {
             try await answerFollowUpImpl(
                 question: question, report: report, artifacts: artifacts, chatHistory: chatHistory,
                 positions: positions, portfolioContext: portfolioContext, localToolHandler: localToolHandler, llmConfiguration: llmConfiguration,
@@ -547,9 +547,8 @@ struct AIAnalysisAgent: Sendable {
                 await progress?(.evaluatingEvidence(turn: 1, total: 1))
             }
         }
-        let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
-        let citationCatalog = AIMessageCitationResolver.catalog(from: toolResults)
-        let citationCatalogJSON = String(data: try Self.encoder.encode(citationCatalog), encoding: .utf8) ?? "[]"
+        let initialCitationCatalog = AIMessageCitationResolver.catalog(from: toolResults)
+        let citationCatalogJSON = String(data: try Self.encoder.encode(initialCitationCatalog), encoding: .utf8) ?? "[]"
         let toolPlanJSON = String(data: try Self.encoder.encode(followUpPlans), encoding: .utf8) ?? "[]"
         await progress?(.composing)
         let completionStartedAt = Date()
@@ -561,18 +560,27 @@ struct AIAnalysisAgent: Sendable {
                 "tool_result_count": String(toolResults.count),
             ]
         )
-        let answerPrompt = AIAnalysisPromptText.followUpUser(
+        let localDataAvailabilityJSON = "{\"holding_count\":\(positions.count),\"latest_report_available\":\(report != nil)}"
+        let hasNativeSearchContinuation = followUpPlans.first?.functionContext != nil
+        let answerPrompt: String = hasNativeSearchContinuation
+            ? AIAnalysisPromptText.followUpPostSearchUser(
+                question: normalizedQuestion,
+                searchMode: searchMode,
+                citationCatalogJSON: citationCatalogJSON,
+                responseLanguage: responseLanguage,
+                localDataAvailabilityJSON: localDataAvailabilityJSON
+            )
+            : AIAnalysisPromptText.followUpUser(
                 question: normalizedQuestion,
                 reportJSON: reportJSON,
                 conversationHistoryJSON: conversationHistoryJSON,
                 artifactSummary: artifactSummary,
                 portfolioContextJSON: portfolioContextJSON,
                 searchMode: searchMode,
-                toolResultsJSON: followUpPlans.first?.functionContext == nil
-                    ? "[" + AISearchFunctionCalling.resultOutputs(toolResults).joined(separator: ",") + "]" : "[]",
+                toolResultsJSON: "[" + AISearchFunctionCalling.resultOutputs(toolResults).joined(separator: ",") + "]",
                 citationCatalogJSON: citationCatalogJSON,
                 responseLanguage: responseLanguage,
-                localDataAvailabilityJSON: "{\"holding_count\":\(positions.count),\"latest_report_available\":\(report != nil)}"
+                localDataAvailabilityJSON: localDataAvailabilityJSON
             )
         let modelProgress: LLMWebSearchProgressHandler = { event in
                 switch event {
@@ -588,12 +596,26 @@ struct AIAnalysisAgent: Sendable {
                     await progress?(.outputStarted)
                 }
             }
-        let (completion, localToolCallCount, localToolRounds) = try await completeFollowUpWithDataTools(
+        let loopOutput = try await completeFollowUpWithDataTools(
             prompt: answerPrompt, configuration: followUpConfiguration, apiKey: llmKey,
             snapshot: AIPortfolioToolSnapshot(positions: positions, portfolioContext: portfolioContext, report: report),
-            handler: localToolHandler, runtimeRunID: runID, progress: progress, modelProgress: modelProgress,
+            handler: localToolHandler,
+            searchConfiguration: searchConfiguration,
+            searchKeys: usesConnectedSearch ? searchKeys : [:],
+            existingToolResults: toolResults,
+            runtimeRunID: runID, progress: progress, modelProgress: modelProgress,
             searchInput: followUpPlans.first?.functionContext?.inputItems(results: toolResults, finalPrompt: answerPrompt)
         )
+        let completion = loopOutput.completion
+        let localToolCallCount = loopOutput.localToolCallCount
+        let localToolRounds = loopOutput.rounds
+        if !loopOutput.extraSearchResults.isEmpty {
+            toolResults.append(contentsOf: loopOutput.extraSearchResults)
+            toolCallCount += loopOutput.extraSearchResults.count
+            searchMode = toolResults.contains(where: { !$0.sources.isEmpty }) ? "connected_search_completed" : searchMode
+        }
+        let toolResultsJSON = String(data: try Self.encoder.encode(toolResults), encoding: .utf8) ?? "[]"
+        let citationCatalog = AIMessageCitationResolver.catalog(from: toolResults)
         let raw = completion.content
         AIAgentRuntimeDiagnostics.event(
             "follow_up_completion_finished",
@@ -666,18 +688,31 @@ struct AIAnalysisAgent: Sendable {
 
     private func completeFollowUpWithDataTools(
         prompt: String, configuration: AIProviderConfiguration, apiKey: String,
-        snapshot: AIPortfolioToolSnapshot, handler: AIPortfolioToolHandler?, runtimeRunID: UUID,
+        snapshot: AIPortfolioToolSnapshot, handler: AIPortfolioToolHandler?,
+        searchConfiguration: SearchConfiguration,
+        searchKeys: [SearchProviderOption: String],
+        existingToolResults: [AIWebSearchToolResult],
+        runtimeRunID: UUID,
         progress: AIFollowUpProgressHandler?, modelProgress: LLMWebSearchProgressHandler?,
         searchInput: [AIJSONValue]? = nil
-    ) async throws -> (LLMCompletionResult, Int, Int) {
+    ) async throws -> (completion: LLMCompletionResult, localToolCallCount: Int, rounds: Int, extraSearchResults: [AIWebSearchToolResult]) {
         var items: [AIJSONValue] = searchInput ?? [.object(["role": .string("user"), "content": .string(prompt)])]
         var seenIDs = Set<String>()
-        var count = 0
+        var localToolCache: [String: String] = [:]
+        var localCount = 0
+        var totalToolCount = 0
+        var accumulatedSearchResults = existingToolResults
+        var extraSearchResults: [AIWebSearchToolResult] = []
+        let canUseSemanticSearch = searchConfiguration.isEnabled && !searchKeys.isEmpty
+        let availableDefinitions = canUseSemanticSearch
+            ? AIPortfolioDataToolExecutor.definitions + [AIPortfolioDataTool.semanticWebSearchDefinition]
+            : AIPortfolioDataToolExecutor.definitions
+
         for round in 0...AIFunctionCallPolicy.maximumRounds {
             try Task.checkCancellation()
-            let canCallTools = round < AIFunctionCallPolicy.maximumRounds && count < AIFunctionCallPolicy.maximumCalls
+            let canCallTools = round < AIFunctionCallPolicy.maximumRounds && totalToolCount < AIFunctionCallPolicy.maximumCalls
             let requestConfiguration = configuration.forStage("follow_up_answer").withFunctions(
-                canCallTools ? AIPortfolioDataToolExecutor.definitions : [],
+                canCallTools ? availableDefinitions : [],
                 inputItems: round == 0 && searchInput == nil ? nil : items,
                 choice: canCallTools ? nil : .string("none")
             )
@@ -686,8 +721,12 @@ struct AIAnalysisAgent: Sendable {
                 configuration: requestConfiguration, apiKey: apiKey, webSearchEnabled: false,
                 reasoningEffort: .low, webSearchProgress: modelProgress
             )
-            guard !completion.functionCalls.isEmpty else { return (completion, count, round) }
-            guard canCallTools, completion.functionCalls.count <= AIFunctionCallPolicy.maximumCalls - count else { throw AIModelBudgetError.exhausted }
+            guard !completion.functionCalls.isEmpty else {
+                return (completion, localCount, round, extraSearchResults)
+            }
+            guard canCallTools, completion.functionCalls.count <= AIFunctionCallPolicy.maximumCalls - totalToolCount else {
+                throw AIModelBudgetError.exhausted
+            }
             for call in completion.functionCalls {
                 guard !call.callID.isEmpty, seenIDs.insert(call.callID).inserted else { throw LLMClientError.invalidResponse }
             }
@@ -699,26 +738,199 @@ struct AIAnalysisAgent: Sendable {
             } else {
                 items += completion.continuationItems
             }
-            await progress?(.readingLocalData)
+            let hasLocalCall = completion.functionCalls.contains { $0.name != AIPortfolioDataTool.semanticWebSearchToolName }
+            if hasLocalCall {
+                await progress?(.readingLocalData)
+            }
             for call in completion.functionCalls {
                 try Task.checkCancellation()
-                count += 1
+                totalToolCount += 1
                 let output: String
-                if let request = try? AIPortfolioToolRequest(call: call) {
-                    output = await handler?(request) ?? AIPortfolioDataToolExecutor.execute(request, snapshot: snapshot)
+                if call.name == AIPortfolioDataTool.semanticWebSearchToolName, canUseSemanticSearch {
+                    let (searchOutput, newResults) = await executeInterleavedWebSearch(
+                        call: call,
+                        positions: snapshot.positions,
+                        searchConfiguration: searchConfiguration,
+                        searchKeys: searchKeys,
+                        existingResults: accumulatedSearchResults,
+                        progress: progress
+                    )
+                    output = searchOutput
+                    if !newResults.isEmpty {
+                        accumulatedSearchResults.append(contentsOf: newResults)
+                        extraSearchResults.append(contentsOf: newResults)
+                    }
+                    AIAgentRuntimeDiagnostics.event(
+                        "interleaved_web_search_completed",
+                        runID: runtimeRunID,
+                        metadata: ["result_count": String(newResults.count), "ordinal": String(totalToolCount)]
+                    )
                 } else {
-                    output = AIPortfolioDataToolExecutor.error("invalid_arguments_or_tool")
+                    localCount += 1
+                    do {
+                        let request = try AIPortfolioToolRequest(call: call)
+                        let cacheKey = "\(request.tool.rawValue)|\(request.query)|\(request.offset)|\(request.limit)|\(request.positionRefs.joined(separator: ","))|\(request.period)|\(request.days)"
+                        if let cached = localToolCache[cacheKey] {
+                            output = cached
+                        } else {
+                            let fresh = await handler?(request) ?? AIPortfolioDataToolExecutor.execute(request, snapshot: snapshot)
+                            localToolCache[cacheKey] = fresh
+                            output = fresh
+                        }
+                    } catch let toolError as AIPortfolioToolError {
+                        switch toolError {
+                        case let .invalidArguments(field, hint):
+                            output = AIPortfolioDataToolExecutor.error("invalid_arguments_or_tool", field: field, hint: hint)
+                        }
+                    } catch {
+                        output = AIPortfolioDataToolExecutor.error("invalid_arguments_or_tool")
+                    }
+                    AIAgentRuntimeDiagnostics.event("local_data_tool_completed", runID: runtimeRunID,
+                        metadata: ["tool": AIPortfolioDataTool(rawValue: call.name)?.rawValue ?? "rejected", "ordinal": String(localCount)])
                 }
                 try Task.checkCancellation()
                 let bounded = output.utf8.count <= AIFunctionCallPolicy.maximumResultBytes
-                    ? output : AIPortfolioDataToolExecutor.error("result_too_large_narrow_query")
+                    ? output
+                    : AIPortfolioDataToolExecutor.error(
+                        "result_too_large_narrow_query",
+                        hint: "Tool output was \(output.utf8.count) bytes (limit \(AIFunctionCallPolicy.maximumResultBytes)). Reduce limit/days or pass a narrower query."
+                    )
                 items.append(.object(["type": .string("function_call_output"), "call_id": .string(call.callID), "output": .string(bounded)]))
-                AIAgentRuntimeDiagnostics.event("local_data_tool_completed", runID: runtimeRunID,
-                    metadata: ["tool": AIPortfolioDataTool(rawValue: call.name)?.rawValue ?? "rejected", "ordinal": String(count)])
             }
             await progress?(.composing)
         }
         throw AIModelBudgetError.exhausted
+    }
+
+    private func executeInterleavedWebSearch(
+        call: LLMFunctionCall,
+        positions: [Position],
+        searchConfiguration: SearchConfiguration,
+        searchKeys: [SearchProviderOption: String],
+        existingResults: [AIWebSearchToolResult],
+        progress: AIFollowUpProgressHandler?
+    ) async -> (output: String, results: [AIWebSearchToolResult]) {
+        guard call.arguments.utf8.count <= 4_096,
+              let data = call.arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys).isSubset(of: ["query", "scope", "assets"]),
+              let rawQuery = object["query"] as? String
+        else {
+            return (
+                AIPortfolioDataToolExecutor.error(
+                    "invalid_arguments_or_tool",
+                    field: "query",
+                    hint: "web_search requires a 'query' string (8 to 128 chars) and optional 'scope' (auto|cn_domestic|global_en|deep_research) and 'assets' (up to 3 symbols or position_refs)."
+                ),
+                []
+            )
+        }
+        let cleanedQuery = rawQuery
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (8...128).contains(cleanedQuery.count) else {
+            return (
+                AIPortfolioDataToolExecutor.error(
+                    "invalid_arguments_or_tool",
+                    field: "query",
+                    hint: "query length must be between 8 and 128 characters (received \(cleanedQuery.count))."
+                ),
+                []
+            )
+        }
+        let scope = (object["scope"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "auto"
+        let rawAssets = (object["assets"] as? [String]) ?? []
+        let resolvedPositions = rawAssets.prefix(3).compactMap { AIPortfolioDataToolExecutor.resolvePosition($0, in: positions) }
+        let resolvedRefs = resolvedPositions.map { "position_\($0.id.uuidString)" }
+        let sensitiveNumbers = Self.sensitivePortfolioNumbers(positions: positions)
+        if let reason = Self.searchQueryPrivacyViolation(query: cleanedQuery, sensitiveNumbers: sensitiveNumbers) {
+            return (
+                AIPortfolioDataToolExecutor.error(
+                    "invalid_search_query",
+                    field: "query",
+                    hint: reason
+                ),
+                []
+            )
+        }
+        let enabledProviders = searchConfiguration.orderedEnabledProviders.filter { searchKeys[$0] != nil }
+        guard !enabledProviders.isEmpty else {
+            return (AIPortfolioDataToolExecutor.error("search_unavailable", hint: "No enabled search providers with valid credentials."), [])
+        }
+        let preferredProvider: SearchProviderOption? = {
+            switch scope {
+            case "cn_domestic":
+                return [.bocha, .deepseek, .parallel].first { enabledProviders.contains($0) }
+            case "global_en":
+                return [.tavily, .deepseek, .exa, .parallel].first { enabledProviders.contains($0) }
+            default:
+                return nil
+            }
+        }()
+        let ordered = SearchProviderRouter.orderedProviders(
+            requested: preferredProvider,
+            query: cleanedQuery,
+            positions: resolvedPositions,
+            configuration: searchConfiguration
+        ).filter { searchKeys[$0] != nil }
+        let targetProviders: [SearchProviderOption] = scope == "deep_research"
+            ? Array(ordered.prefix(2))
+            : Array(ordered.prefix(1))
+        let baseIndex = existingResults.count
+        let planCalls = targetProviders.enumerated().map { idx, provider in
+            AIWebSearchToolCall(
+                id: "web_search_\(baseIndex + idx + 1)",
+                query: cleanedQuery,
+                positionRefs: resolvedRefs,
+                provider: provider
+            )
+        }
+        let results = await executeToolCalls(
+            AIWebSearchToolPlan(toolCalls: planCalls, status: "continue", limitations: []),
+            positions: positions,
+            configuration: searchConfiguration,
+            apiKeys: searchKeys,
+            progress: nil,
+            followUpProgress: progress
+        )
+        let combined = existingResults + results
+        let catalog = AIMessageCitationResolver.catalog(from: combined)
+        let idByURL = Dictionary(
+            catalog.map { (AISearchSourceIdentity.key($0.url), $0.id) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let sourcesPayload: [[String: Any]] = results.flatMap(\.sources).compactMap { source in
+            let urlKey = AISearchSourceIdentity.key(source.url)
+            guard let citeID = idByURL[urlKey] else { return nil }
+            return [
+                "citation_id": citeID,
+                "title": source.title,
+                "domain": source.domain,
+                "published_date": source.publishedDate ?? "",
+                "snippet": String(source.snippet.prefix(360)),
+            ]
+        }
+        var seenCites = Set<String>()
+        let uniqueSources = sourcesPayload.filter { entry in
+            guard let id = entry["citation_id"] as? String else { return false }
+            return seenCites.insert(id).inserted
+        }
+        let responseObj: [String: Any] = [
+            "status": uniqueSources.isEmpty ? "empty" : "ok",
+            "query": cleanedQuery,
+            "sources": uniqueSources,
+            "limitations": results.flatMap(\.limitations),
+            "citation_hint": "Cite claims from these sources inline using [[cite:source_N]] with the matching citation_id.",
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: responseObj, options: [.sortedKeys]),
+           let text = String(data: data, encoding: .utf8)
+        {
+            return (text, results)
+        }
+        return (#"{"status":"empty","sources":[]}"#, results)
     }
 
     private func validatedFollowUpResponse(
@@ -818,7 +1030,8 @@ struct AIAnalysisAgent: Sendable {
             allowedSearchTerms: Self.allowedSearchTerms(positions: positions),
             allowsGeneralQueries: true,
             contextQuestion: question,
-            allowedProviders: Set(enabledProviders)
+            allowedProviders: Set(enabledProviders),
+            sensitiveNumbers: Self.sensitivePortfolioNumbers(positions: positions)
         )
     }
 
@@ -895,20 +1108,6 @@ struct AIAnalysisAgent: Sendable {
         return metadata
     }
 
-    private static func followUpConversationHistoryJSON(
-        _ items: [AIReportChatItem],
-        excludingCurrentQuestion question: String,
-        latestReportID: UUID
-    ) -> String {
-        AIFollowUpContextOrchestrator.encodedJSON(
-            AIFollowUpContextOrchestrator.make(
-                question: question,
-                items: items,
-                excludingItemIDs: [latestReportID]
-            )
-        )
-    }
-
     private static func isBriefSearchRequest(_ question: String) -> Bool {
         let compact = question.lowercased().replacingOccurrences(of: #"[\p{P}\s]+"#, with: "", options: .regularExpression)
         return ["查一下", "帮我查一下", "你帮我查一下", "好的帮我查一下", "请帮我查一下", "搜一下", "帮我搜一下",
@@ -934,11 +1133,13 @@ struct AIAnalysisAgent: Sendable {
         }
         let triggers = [
             "搜索", "搜一下", "查一下", "联网", "网上", "核验", "验证",
-            "最新", "近期", "最近", "今天", "昨日", "昨晚",
+            "最新", "近期", "最近", "当前", "今天", "昨日", "昨晚",
+            "催化剂", "深入分析", "基本面", "季报", "基金经理", "持仓变动",
             "公告", "新闻", "媒体", "报道", "监管", "政策", "财报",
             "市场表现", "行情", "走势", "净值", "涨跌", "上涨", "下跌", "回调",
             "价格", "现价", "实时报价",
-            "search", "latest", "recent", "today", "news", "announcement", "market performance",
+            "search", "latest", "recent", "current", "today", "news", "announcement",
+            "catalyst", "deep dive", "fundamental", "quarterly", "outlook", "market performance",
             "price", "quote", "performance",
         ]
         return triggers.contains { question.localizedCaseInsensitiveContains($0) }
@@ -1084,18 +1285,44 @@ struct AIAnalysisAgent: Sendable {
     }
 
     private static func searchIdentityTerms(for position: Position) -> [String] {
-        var terms = [position.name, position.symbol]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        searchIdentityTerms(
+            displayLabel: position.name,
+            symbol: position.symbol,
+            isCrypto: position.category == .crypto
+        )
+    }
+
+    private static func searchIdentityTerms(
+        displayLabel: String?,
+        symbol: String?,
+        isCrypto: Bool
+    ) -> [String] {
+        var terms = [displayLabel, symbol]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { $0.count >= 2 }
-        if let baseSymbol = position.symbol.split(separator: "/").first.map(String.init), baseSymbol.count >= 2 {
+        if let symbol = symbol?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let baseSymbol = symbol.split(separator: "/").first.map(String.init),
+           baseSymbol.count >= 2
+        {
             terms.append(baseSymbol)
         }
-        let identity = "\(position.name) \(position.symbol)".uppercased()
-        if position.category == .crypto {
-            if identity.contains("BTC") || identity.contains("XBT") || identity.contains("BITCOIN") || position.name.contains("比特币") {
+        if let label = displayLabel?.trimmingCharacters(in: .whitespacesAndNewlines), label.count >= 4 {
+            // Add natural shortened Chinese/global fund names (strip parenthetical tags and share-class suffixes).
+            let withoutParens = label
+                .replacingOccurrences(of: #"[（(][^）)]*[）)]"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if withoutParens.count >= 4 { terms.append(withoutParens) }
+            let strippedClass = withoutParens
+                .replacingOccurrences(of: #"(?:联接)?\s*(?:人民币|美元)?\s*[A-Za-z]\s*(?:类)?$"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if strippedClass.count >= 4 { terms.append(strippedClass) }
+        }
+        let identity = "\(displayLabel ?? "") \(symbol ?? "")".uppercased()
+        if isCrypto {
+            if identity.contains("BTC") || identity.contains("XBT") || identity.contains("BITCOIN") || (displayLabel?.contains("比特币") == true) {
                 terms.append(contentsOf: ["BTC", "比特币", "Bitcoin", "bitcoin"])
             }
-            if identity.contains("ETH") || identity.contains("ETHEREUM") || position.name.contains("以太坊") {
+            if identity.contains("ETH") || identity.contains("ETHEREUM") || (displayLabel?.contains("以太坊") == true) {
                 terms.append(contentsOf: ["ETH", "以太坊", "Ethereum", "ethereum"])
             }
         }
@@ -1158,16 +1385,37 @@ struct AIAnalysisAgent: Sendable {
             apiKey: apiKey, providers: enabledProviders
         )
         let searchTermsByRef = Dictionary(uniqueKeysWithValues: input.metrics.positions.map { position in
-            let terms = [position.symbol, position.displayLabel]
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { $0.count >= 2 }
+            let terms = Self.searchIdentityTerms(
+                displayLabel: position.displayLabel,
+                symbol: position.symbol,
+                isCrypto: position.assetType == AssetCategory.crypto.aiCode
+            )
             return (position.positionRef, Set(terms))
         })
+        let sensitiveNumbers: Set<String> = Set(
+            input.metrics.positions.flatMap { position -> [String] in
+                [position.quantity, position.totalCostQuote, position.marketValueCNY]
+                    .compactMap { $0 }
+                    .compactMap { Decimal(string: $0) }
+                    .filter { abs($0.doubleValue) >= 100 }
+                    .flatMap { value -> [String] in
+                        let intStr = String(Int(abs(value.doubleValue).rounded()))
+                        var result: [String] = []
+                        if !(1990...2099).contains(Int(intStr) ?? 0), !["100", "200", "300", "500", "1000", "2000"].contains(intStr) {
+                            result.append(intStr)
+                        }
+                        let raw = NSDecimalNumber(decimal: value).stringValue
+                        if raw.contains(".") { result.append(raw) }
+                        return result
+                    }
+            }
+        )
         return try Self.validatedToolPlan(
             decoded,
             allowedRefs: Set(input.metrics.positions.map(\.positionRef)),
             allowedSearchTerms: searchTermsByRef,
-            allowedProviders: Set(enabledProviders)
+            allowedProviders: Set(enabledProviders),
+            sensitiveNumbers: sensitiveNumbers
         )
     }
 
@@ -1192,9 +1440,21 @@ struct AIAnalysisAgent: Sendable {
     ) async throws -> AIReportPayloadResult {
         let inputJSON = String(data: try Self.inputEncoder.encode(input), encoding: .utf8) ?? "{}"
         let initialToolResultsJSON = AIContextProjection.searchSummaryJSON(toolResults)
-        let initialEvidenceLedgerJSON = AIContextProjection.evidenceJSON(evidenceLedger)
-        let reportPrompt = AIAnalysisPromptText.reportUser(inputJSON: inputJSON,
-            toolResultsJSON: initialToolResultsJSON, evidenceLedgerJSON: initialEvidenceLedgerJSON)
+        let hasNativeSearchContext = searchContext != nil
+        let initialEvidenceLedgerJSON = AIContextProjection.evidenceJSON(
+            evidenceLedger,
+            includeWebExcerpts: !hasNativeSearchContext
+        )
+        let reportPrompt = hasNativeSearchContext
+            ? AIAnalysisPromptText.reportPostSearchUser(
+                toolResultsJSON: initialToolResultsJSON,
+                evidenceLedgerJSON: initialEvidenceLedgerJSON
+            )
+            : AIAnalysisPromptText.reportUser(
+                inputJSON: inputJSON,
+                toolResultsJSON: initialToolResultsJSON,
+                evidenceLedgerJSON: initialEvidenceLedgerJSON
+            )
         let reportConfiguration = configuration
             .withRequestTimeout(LLMRequestTimeoutPolicy.reportGeneration)
             .withMaxOutputTokens(LLMOutputTokenPolicy.reportGeneration)
@@ -1874,6 +2134,7 @@ struct AIAnalysisAgent: Sendable {
         } catch {
             throw AIReportPayloadValidationError.invalidJSON(decodingFailureSummary(error))
         }
+        try AIAnalysisSchemaValidator.validateEnumsAndCounts(payload: payload)
         let normalizedPayload = AIReportPayloadNormalizer.normalize(payload)
 
         try AIAnalysisSchemaValidator.validate(payload: normalizedPayload)
@@ -1979,18 +2240,14 @@ struct AIAnalysisAgent: Sendable {
         allowedSearchTerms: [String: Set<String>] = [:],
         allowsGeneralQueries: Bool = false,
         contextQuestion: String? = nil,
-        allowedProviders: Set<SearchProviderOption> = Set(SearchProviderOption.allCases)
+        allowedProviders: Set<SearchProviderOption> = Set(SearchProviderOption.allCases),
+        sensitiveNumbers: Set<String> = []
     ) throws -> AIWebSearchToolPlan {
         guard plan.toolCalls.count <= 3 else { throw AIAnalysisAgentError.invalidReport }
-        let prohibitedQueryFragments = [
-            "http://", "https://", "api key", "apikey", "system prompt", "developer message",
-            "ignore previous", "忽略之前", "系统提示词", "开发者消息", "密钥", "凭据",
-            "持仓数量", "持仓成本", "持仓市值", "账户资产", "portfolio value", "holding quantity",
-            "cost basis", "market value",
-        ]
         var seenQueries = Set<String>()
         var normalizedCalls: [AIWebSearchToolCall] = []
-        for (index, call) in plan.toolCalls.enumerated() {
+        var droppedAnyCall = false
+        for call in plan.toolCalls {
             var query = call.query
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ")
@@ -2012,28 +2269,44 @@ struct AIAnalysisAgent: Sendable {
             }
             let queryNumbers = Self.numberTokens(in: query)
             let identityNumbers = Set(allowedTerms.flatMap { Self.numberTokens(in: $0) })
+            let holdingNumbersSafe = queryNumbers.allSatisfy { token in
+                identityNumbers.contains(token) || Self.isSafePublicQueryNumber(token, in: query)
+            }
+            let privacyViolation = Self.searchQueryPrivacyViolation(
+                query: query,
+                sensitiveNumbers: sensitiveNumbers.subtracting(identityNumbers)
+            )
+            // Hard security/provider/reference violations always reject the whole plan immediately.
             guard
-                (8...128).contains(query.count),
-                provider != .deepseek || query.unicodeScalars.count <= 128,
-                isGeneralQuery || (1...3).contains(refs.count),
+                privacyViolation == nil,
                 refs.allSatisfy({ allowedRefs.contains($0) }),
-                isGeneralQuery || queryNamesEveryRef,
-                isGeneralQuery || queryNumbers.isSubset(of: identityNumbers),
-                !isGeneralQuery || Self.isAcceptableGeneralMarketQuery(query),
-                prohibitedQueryFragments.allSatisfy({ !query.localizedCaseInsensitiveContains($0) }),
-                provider.map(allowedProviders.contains) ?? false,
-                seenQueries.insert("\(provider?.rawValue ?? "")|\(query.lowercased())").inserted
+                provider.map(allowedProviders.contains) ?? false
             else {
                 throw AIAnalysisAgentError.invalidReport
             }
+            let passesQualityChecks =
+                (8...128).contains(query.count)
+                && (provider != .deepseek || query.unicodeScalars.count <= 128)
+                && (isGeneralQuery || (1...3).contains(refs.count))
+                && (isGeneralQuery || queryNamesEveryRef)
+                && (isGeneralQuery || holdingNumbersSafe)
+                && (!isGeneralQuery || Self.isAcceptableGeneralMarketQuery(query))
+                && seenQueries.insert("\(provider?.rawValue ?? "")|\(query.lowercased())").inserted
+            guard passesQualityChecks else {
+                droppedAnyCall = true
+                continue
+            }
             normalizedCalls.append(
                 AIWebSearchToolCall(
-                    id: "web_search_\(index + 1)",
+                    id: "web_search_\(normalizedCalls.count + 1)",
                     query: query,
                     positionRefs: refs,
                     provider: provider
                 )
             )
+        }
+        if !plan.toolCalls.isEmpty && normalizedCalls.isEmpty {
+            throw AIAnalysisAgentError.invalidReport
         }
         let requestedStatus = plan.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedStatus: String
@@ -2047,8 +2320,108 @@ struct AIAnalysisAgent: Sendable {
             status: normalizedStatus,
             limitations: plan.limitations ?? []
         )
-        validated.functionContext = plan.functionContext
+        validated.functionContext = droppedAnyCall ? nil : plan.functionContext
         return validated
+    }
+
+    static func sensitivePortfolioNumbers(positions: [Position]) -> Set<String> {
+        var tokens = Set<String>()
+        func addDecimal(_ value: Decimal) {
+            let absVal = abs(value.doubleValue)
+            guard absVal >= 100 else { return }
+            let intStr = String(Int(absVal.rounded()))
+            if !(1990...2099).contains(Int(intStr) ?? 0), !["100", "200", "300", "500", "1000", "2000"].contains(intStr) {
+                tokens.insert(intStr)
+            }
+            let raw = NSDecimalNumber(decimal: value).stringValue
+            if raw.contains(".") {
+                tokens.insert(raw)
+            }
+        }
+        let total = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
+        addDecimal(total)
+        for position in positions {
+            addDecimal(position.quantity)
+            addDecimal(position.totalCost)
+            addDecimal(position.marketValueCNY)
+        }
+        return tokens
+    }
+
+    static func searchQueryPrivacyViolation(query: String, sensitiveNumbers: Set<String>) -> String? {
+        let prohibitedQueryFragments = [
+            "http://", "https://", "api key", "apikey", "system prompt", "developer message",
+            "ignore previous", "忽略之前", "系统提示词", "开发者消息", "密钥", "凭据",
+            "持仓数量", "持仓成本", "持仓市值", "账户资产", "portfolio value", "holding quantity",
+            "cost basis", "market value",
+        ]
+        if prohibitedQueryFragments.contains(where: { query.localizedCaseInsensitiveContains($0) }) {
+            return "Query contains prohibited private, URL, or instruction text. Search only public market or asset facts."
+        }
+        let queryNumbers = Self.numberTokens(in: query)
+        if !sensitiveNumbers.isEmpty,
+           let leaked = queryNumbers.first(where: { sensitiveNumbers.contains($0) && !Self.isSafePublicQueryNumber($0, in: query) })
+        {
+            _ = leaked
+            return "Query appears to contain a private portfolio amount. Remove personal share counts, costs, or account values."
+        }
+        return nil
+    }
+
+    static func isSafePublicQueryNumber(_ token: String, in query: String) -> Bool {
+        if let year = Int(token), (1990...2099).contains(year) {
+            return true
+        }
+        let upper = query.uppercased()
+        if ["1", "2", "3", "4"].contains(token),
+           upper.contains("Q\(token)") || upper.contains("\(token)Q") || upper.contains("\(token)季") || upper.contains("第\(token)季")
+        {
+            return true
+        }
+        // Allow calendar months/days (e.g., 11月, 25日, 2026-11-25, 11/25) and public lookback horizons (e.g., 7日, 30天, 3个月, 1年, 52周).
+        if let num = Int(token) {
+            if (1...12).contains(num),
+               query.contains("\(token)月")
+                || query.contains("-\(token)")
+                || query.contains("/\(token)")
+            {
+                return true
+            }
+            if (1...31).contains(num),
+               query.contains("\(token)日")
+                || query.contains("\(token)号")
+                || query.contains("-\(token)")
+                || query.contains("/\(token)")
+            {
+                return true
+            }
+            if (1...365).contains(num),
+               query.contains("\(token)天")
+                || query.contains("\(token)日")
+                || query.contains("\(token)周")
+                || query.contains("\(token)个月")
+                || query.contains("\(token)年")
+                || upper.contains("\(token)D")
+                || upper.contains("\(token)W")
+                || upper.contains("\(token)M")
+                || upper.contains("\(token)Y")
+            {
+                return true
+            }
+        }
+        if ["10", "8", "20", "6", "13"].contains(token),
+           upper.contains("10-K") || upper.contains("10-Q") || upper.contains("8-K")
+            || upper.contains("20-F") || upper.contains("6-K") || upper.contains("13F")
+        {
+            return true
+        }
+        if ["30", "50", "100", "200", "225", "300", "500", "1000", "2000"].contains(token) {
+            let indexHints = ["S&P", "SP500", "标普", "沪深", "中证", "纳斯达克", "NASDAQ", "FTSE", "RUSSELL", "NIKKEI", "日经", "恒生", "上证", "科创", "创业板", "ETF", "INDEX", "指数", "债", "滚动"]
+            if indexHints.contains(where: { upper.contains($0) }) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func allowedSearchTerms(positions: [Position]) -> [String: Set<String>] {
@@ -3290,6 +3663,34 @@ enum AIAnalysisSchemaValidator {
             }
             guard flag.relatedRefs.allSatisfy({ refs.contains($0) }) else {
                 throw AIAnalysisAgentError.invalidReport
+            }
+        }
+    }
+
+    static func validateEnumsAndCounts(payload: LLMReportPayload) throws {
+        guard payload.riskItems.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("risk_items") }
+        guard payload.assetAlerts.count <= 12 else { throw AIReportPayloadValidationError.invalidListCount("asset_alerts") }
+        guard payload.rebalanceActions.count <= 6 else { throw AIReportPayloadValidationError.invalidListCount("rebalance_actions") }
+        guard payload.questionsToConsider.count <= 8, payload.dataQualityNotes.count <= 8, payload.limitations.count <= 8 else {
+            throw AIReportPayloadValidationError.invalidListCount("questions_to_consider/data_quality_notes/limitations")
+        }
+        let severities = Set(["info", "warning", "high"])
+        let categories = Set(["concentration", "asset_type_diversification", "data_quality", "volatility", "currency_exposure", "external_event", "risk_profile"])
+        for item in payload.riskItems {
+            guard severities.contains(item.severity) else {
+                throw AIReportPayloadValidationError.invalidEnum("risk_items.severity")
+            }
+            guard categories.contains(item.category) else {
+                throw AIReportPayloadValidationError.invalidEnum("risk_items.category")
+            }
+        }
+        let actions = Set([
+            "observe", "maintain", "hold", "buy", "increase", "reduce", "sell", "exit",
+            "review_reduce", "review_replenish", "rebalance",
+        ])
+        for action in payload.rebalanceActions {
+            guard actions.contains(action.action) else {
+                throw AIReportPayloadValidationError.invalidEnum("rebalance_actions.action")
             }
         }
     }

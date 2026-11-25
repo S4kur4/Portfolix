@@ -5,8 +5,10 @@ enum AIContextProjection {
     _ question: String, positions: [Position], chatHistory: [AIReportChatItem] = []
   ) -> Bool {
     let hints = [
-      "持仓", "组合", "报告", "收益", "盈亏", "赚", "亏", "回撤", "成本", "份额", "市值", "仓位", "我的", "我该", "我应该",
-      "该基金", "这只", "这些", "继续", "portfolio", "holding", "report", "profit", "loss", "my ", "our ",
+      "持仓", "组合", "报告", "收益", "盈亏", "赚", "亏", "回撤", "成本", "份额", "市值", "仓位",
+      "集中度", "现金", "敞口", "重仓", "配置", "清仓", "买入", "卖出", "调仓", "定投", "风险偏好", "我的", "我该", "我应该",
+      "该基金", "这只", "这些", "继续",
+      "portfolio", "holding", "report", "profit", "loss", "allocation", "concentration", "exposure", "rebalance", "cash", "my ", "our ",
       "that ", "continue",
     ]
     if hints.contains(where: { question.localizedCaseInsensitiveContains($0) })
@@ -66,7 +68,7 @@ enum AIContextProjection {
     return json(object)
   }
 
-  static func evidenceJSON(_ ledger: AIEvidenceLedger) -> String {
+  static func evidenceJSON(_ ledger: AIEvidenceLedger, includeWebExcerpts: Bool = true) -> String {
     guard let data = try? AIAnalysisAgent.encoder.encode(ledger),
       var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
       var items = object["items"] as? [[String: Any]]
@@ -77,6 +79,8 @@ enum AIContextProjection {
       if items[index]["kind"] as? String == "calculation" {
         items[index]["source"] = nil
         items[index]["as_of"] = nil
+      } else if !includeWebExcerpts, items[index]["kind"] as? String == "web_source" {
+        items[index]["source_excerpt"] = nil
       }
     }
     object["items"] = items

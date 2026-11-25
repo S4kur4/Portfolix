@@ -19,47 +19,63 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       properties = [:]
       required = []
       description =
-        "Read-only: current local portfolio value, cost, unrealized P&L, today's recorded performance and holding count. Use for portfolio follow-ups, including accepting an earlier offer to review holdings. Does not fetch live quotes."
+        "Read-only: current local portfolio value, cost, unrealized P&L, realized P&L, today's recorded performance, and holding count. Use for portfolio overview questions or accepting an offer to review holdings. Does not fetch live quotes."
     case .holdings, .closedHoldings, .transactions:
+      let queryDesc: String = switch self {
+      case .holdings: "Optional case-insensitive substring filter matching holding name or ticker symbol."
+      case .closedHoldings: "Optional case-insensitive substring filter matching closed asset name or ticker symbol."
+      case .transactions: "Optional case-insensitive substring filter matching asset name or ticker symbol across trades, openings, withdrawals, and checkpoints."
+      default: ""
+      }
       properties = [
-        "query": .object(["type": .string("string"), "maxLength": .number(80)]),
-        "offset": Self.integer(0, 100_000), "limit": Self.integer(1, 25),
+        "query": .object([
+          "type": .string("string"),
+          "maxLength": .number(80),
+          "description": .string(queryDesc),
+        ]),
+        "offset": Self.integer(0, 100_000, description: "Pagination start row index (0-based). Pass next_offset from a previous response to read the next page."),
+        "limit": Self.integer(1, 25, description: "Maximum number of rows to return per call (1 to 25, default 20)."),
       ]
       required = []
       description = self == .transactions
-        ? "Read-only: balance checkpoints, opening balances, additions, sales and external cash withdrawals. Reconciliations set balances without cash flow or realized profit; missing trades are not reconstructed and unknown cost is unavailable. Opening balances are migrated starting balances, not purchases or cash flows. External additions do not debit cash; cash-funded additions do. Cash withdrawals reduce portfolio cash, are not sales or investment losses, and have no realized P&L. Cash cannot be sold. Optional name/code query and pagination, default 20 rows. Cannot execute or modify records."
+        ? "Read-only: ledger records including additions, buys/sells, cash withdrawals, opening balances, and balance checkpoints. Note: reconciliations set balances without cash flow/realized P&L; openings are migrated starting balances; cash withdrawals are not sales or losses. Supports optional name/symbol filter and pagination."
         : self == .closedHoldings
-        ? "Read-only: sale records for assets no longer held, including current partial/full sales and legacy closures. Multiple sales can belong to one asset. Includes quantities, prices, fees, net proceeds, destination cash and realized P&L. Optional name/code query and pagination, default 20 rows. No trading or writes."
-        : "Read-only: current holdings with asset refs, quantities, costs, market values, weights, unrealized P&L and quote dates. Optional name/code query; paginated, default 20 rows. Use next_offset until omitted_count is zero when the complete list is needed."
+        ? "Read-only: sale records for assets no longer held (including partial/full sales and legacy closures), with quantities, prices, fees, net proceeds, destination cash, and realized P&L. Supports optional name/symbol filter and pagination."
+        : "Read-only: current open holdings with position_ref, symbol, quantities, recorded costs, market values, weights, unrealized P&L, and quote dates. Paginated (default 20); check omitted_count and follow next_offset when full coverage is needed."
     case .performance:
       properties = [
         "position_refs": .object([
           "type": .string("array"),
           "items": .object(["type": .string("string"), "maxLength": .number(80)]),
           "minItems": .number(1), "maxItems": .number(10),
+          "description": .string("1 to 10 holding identifiers: accepts position_ref (from list_holdings), ticker symbol (e.g. AAPL, 000218), or exact holding name."),
         ]),
         "period": .object([
-          "type": .string("string"), "enum": .array([.string("one_week"), .string("one_month")]),
+          "type": .string("string"),
+          "enum": .array([.string("one_week"), .string("one_month")]),
+          "description": .string("Observation window: one_week (7 days) or one_month (30 days)."),
         ]),
       ]
       required = ["position_refs", "period"]
       description =
-        "Read-only: recorded one-week or one-month price-change observations for up to 10 holding refs from list_holdings. These use current quantities, exclude trades/fees/FX and are not true account returns or NAV drawdowns. Missing history is explicitly marked."
+        "Read-only: recorded 1-week or 1-month price-change observations for up to 10 holdings (identified by position_ref, symbol, or name). Uses current quantities and excludes trades/fees/FX; not true account return or NAV drawdown."
     case .constraints:
       properties = [:]
       required = []
       description =
-        "Read-only: whether risk preferences are configured, current allocation limits and their local evaluation. Passing limits is not a safety or return guarantee."
+        "Read-only: whether risk preferences are configured, current allocation limits (single position, crypto, foreign currency, minimum cash) and current breach evaluation. Passing limits does not guarantee safety or returns."
     case .history:
-      properties = ["days": Self.integer(1, 90)]
+      properties = [
+        "days": Self.integer(1, 90, description: "Number of recent calendar days to return (1 to 90, default 30).")
+      ]
       required = []
       description =
-        "Read-only: up to 90 days of recorded portfolio values and daily price-based P&L. Default 30 days. Values may include deposits/withdrawals and holding changes; do not treat their changes as time-weighted returns or NAV drawdowns."
+        "Read-only: up to 90 days of recorded portfolio values and daily price-based P&L. Values include deposits/withdrawals and holding changes; do not treat changes as time-weighted return or NAV drawdown."
     case .report:
       properties = [:]
       required = []
       description =
-        "Read-only: dated digest of the most recent saved analysis report. Use only when relevant; current holdings tools override stale report facts. An absent report does not prevent reading holdings."
+        "Read-only: dated digest of the most recent saved analysis report. Current holdings tools override stale report facts; an absent report does not prevent reading holdings."
     }
     return LLMFunctionTool(
       name: rawValue, description: description,
@@ -69,10 +85,45 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       ]))
   }
 
-  private static func integer(_ minimum: Int, _ maximum: Int) -> AIJSONValue {
+  static let semanticWebSearchToolName = "web_search"
+
+  static var semanticWebSearchDefinition: LLMFunctionTool {
+    LLMFunctionTool(
+      name: semanticWebSearchToolName,
+      description: "Read-only public web search (available in Web Research mode). Use after inspecting local holdings/transactions or whenever up-to-date market news, filings, macro events, or fund announcements are needed. Returns verified public sources with citation IDs (cite inline as [[cite:source_N]]). Never include personal share counts, costs, or account values in query.",
+      parameters: .object([
+        "type": .string("object"),
+        "additionalProperties": .bool(false),
+        "properties": .object([
+          "query": .object([
+            "type": .string("string"),
+            "minLength": .number(8),
+            "maxLength": .number(128),
+            "description": .string("Public search query (8 to 128 chars). Include ticker/asset name or market topic; years/quarters/form numbers like 2026 Q3 or 10-K are allowed. Never include personal amounts or credentials."),
+          ]),
+          "scope": .object([
+            "type": .string("string"),
+            "enum": .array([.string("auto"), .string("cn_domestic"), .string("global_en"), .string("deep_research")]),
+            "description": .string("Optional routing hint: cn_domestic (A-shares/CN funds/domestic policy), global_en (US/HK/crypto/global macro), deep_research (multi-provider corroboration), or auto."),
+          ]),
+          "assets": .object([
+            "type": .string("array"),
+            "items": .object(["type": .string("string"), "maxLength": .number(80)]),
+            "maxItems": .number(3),
+            "description": .string("Optional list of up to 3 related asset symbols or position_refs. Omit or pass [] for general market/macro queries."),
+          ]),
+        ]),
+        "required": .array([.string("query")]),
+      ])
+    )
+  }
+
+  private static func integer(_ minimum: Int, _ maximum: Int, description: String) -> AIJSONValue {
     .object([
-      "type": .string("integer"), "minimum": .number(Double(minimum)),
+      "type": .string("integer"),
+      "minimum": .number(Double(minimum)),
       "maximum": .number(Double(maximum)),
+      "description": .string(description),
     ])
   }
 }
@@ -87,60 +138,95 @@ struct AIPortfolioToolRequest: Sendable {
   var days = 30
 
   init(call: LLMFunctionCall) throws {
-    guard let tool = AIPortfolioDataTool(rawValue: call.name), call.arguments.utf8.count <= 16_000
-    else { throw AIPortfolioToolError.invalidArguments }
+    guard let tool = AIPortfolioDataTool(rawValue: call.name) else {
+      throw AIPortfolioToolError.invalidArguments(
+        field: "name",
+        hint: "Unknown read-only tool '\(call.name)'. Allowed tools: \(AIPortfolioDataTool.allCases.map(\.rawValue).joined(separator: ", "))."
+      )
+    }
+    guard call.arguments.utf8.count <= 16_000 else {
+      throw AIPortfolioToolError.invalidArguments(field: nil, hint: "Arguments payload exceeds 16,000 bytes.")
+    }
     self.tool = tool
     guard
-      case .object(let arguments) = try JSONDecoder().decode(
+      case .object(let arguments) = try? JSONDecoder().decode(
         AIJSONValue.self, from: Data(call.arguments.utf8))
-    else { throw AIPortfolioToolError.invalidArguments }
+    else {
+      throw AIPortfolioToolError.invalidArguments(field: nil, hint: "Arguments must be a valid JSON object.")
+    }
     let allowed: Set<String>
     switch tool {
     case .holdings, .closedHoldings, .transactions:
       allowed = ["query", "offset", "limit"]
       if let value = arguments["query"] {
         guard case .string(let text) = value, text.count <= 80 else {
-          throw AIPortfolioToolError.invalidArguments
+          throw AIPortfolioToolError.invalidArguments(field: "query", hint: "query must be a string of at most 80 characters.")
         }
         query = text.trimmingCharacters(in: .whitespacesAndNewlines)
       }
-      offset = try Self.integer(arguments["offset"], default: 0, range: 0...100_000)
-      limit = try Self.integer(arguments["limit"], default: 20, range: 1...25)
+      offset = try Self.integer(arguments["offset"], field: "offset", default: 0, range: 0...100_000)
+      limit = try Self.integer(arguments["limit"], field: "limit", default: 20, range: 1...25)
     case .performance:
       allowed = ["position_refs", "period"]
-      guard case .array(let refs) = arguments["position_refs"], (1...10).contains(refs.count),
-        case .string(let period) = arguments["period"], ["one_week", "one_month"].contains(period)
-      else { throw AIPortfolioToolError.invalidArguments }
+      guard case .array(let refs) = arguments["position_refs"], (1...10).contains(refs.count) else {
+        throw AIPortfolioToolError.invalidArguments(
+          field: "position_refs",
+          hint: "position_refs must be a non-empty array of 1 to 10 holding refs, symbols, or names."
+        )
+      }
+      guard case .string(let period) = arguments["period"], ["one_week", "one_month"].contains(period) else {
+        throw AIPortfolioToolError.invalidArguments(
+          field: "period",
+          hint: "period must be either 'one_week' or 'one_month'."
+        )
+      }
       self.period = period
       positionRefs = try refs.map { value in
         guard case .string(let ref) = value, !ref.isEmpty, ref.count <= 80 else {
-          throw AIPortfolioToolError.invalidArguments
+          throw AIPortfolioToolError.invalidArguments(
+            field: "position_refs",
+            hint: "Each element in position_refs must be a non-empty string up to 80 characters."
+          )
         }
         return ref
       }
     case .history:
       allowed = ["days"]
-      days = try Self.integer(arguments["days"], default: 30, range: 1...90)
+      days = try Self.integer(arguments["days"], field: "days", default: 30, range: 1...90)
     default:
       allowed = []
     }
-    guard Set(arguments.keys).isSubset(of: allowed) else {
-      throw AIPortfolioToolError.invalidArguments
+    let unexpected = Set(arguments.keys).subtracting(allowed)
+    guard unexpected.isEmpty else {
+      throw AIPortfolioToolError.invalidArguments(
+        field: unexpected.sorted().first,
+        hint: "Unexpected argument(s): \(unexpected.sorted().joined(separator: ", ")). Allowed keys: \(allowed.sorted().joined(separator: ", "))."
+      )
     }
   }
 
-  private static func integer(_ value: AIJSONValue?, default fallback: Int, range: ClosedRange<Int>)
-    throws -> Int
-  {
+  private static func integer(
+    _ value: AIJSONValue?,
+    field: String,
+    default fallback: Int,
+    range: ClosedRange<Int>
+  ) throws -> Int {
     guard let value else { return fallback }
     guard case .number(let number) = value, number.isFinite, number.rounded() == number,
       number >= Double(range.lowerBound), number <= Double(range.upperBound)
-    else { throw AIPortfolioToolError.invalidArguments }
+    else {
+      throw AIPortfolioToolError.invalidArguments(
+        field: field,
+        hint: "\(field) must be an integer between \(range.lowerBound) and \(range.upperBound)."
+      )
+    }
     return Int(number)
   }
 }
 
-enum AIPortfolioToolError: Error { case invalidArguments }
+enum AIPortfolioToolError: Error {
+  case invalidArguments(field: String?, hint: String)
+}
 typealias AIPortfolioToolHandler = @Sendable (AIPortfolioToolRequest) async -> String
 
 struct AIPortfolioToolSnapshot {
@@ -161,7 +247,30 @@ struct AIPortfolioToolSnapshot {
 enum AIPortfolioDataToolExecutor {
   static let definitions = AIPortfolioDataTool.allCases.map(\.definition)
 
-  static func error(_ code: String) -> String { json(["status": "error", "code": code]) }
+  static func error(_ code: String, field: String? = nil, hint: String? = nil) -> String {
+    var payload: [String: Any] = ["status": "error", "code": code]
+    if let field, !field.isEmpty { payload["field"] = field }
+    if let hint, !hint.isEmpty { payload["hint"] = hint }
+    return json(payload)
+  }
+
+  static func resolvePosition(_ identifier: String, in positions: [Position]) -> Position? {
+    let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if let exactRef = positions.first(where: { "position_\($0.id.uuidString)" == trimmed }) {
+      return exactRef
+    }
+    if let bySymbol = positions.first(where: { $0.symbol.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+      return bySymbol
+    }
+    return positions.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame })
+  }
+
+  private static func rounded(_ value: Double, digits: Int = 2) -> Double {
+    guard value.isFinite else { return 0 }
+    let factor = pow(10.0, Double(digits))
+    return (value * factor).rounded() / factor
+  }
 
   static func execute(_ request: AIPortfolioToolRequest, snapshot: AIPortfolioToolSnapshot)
     -> String
@@ -231,7 +340,7 @@ enum AIPortfolioDataToolExecutor {
           "unrealized_profit_quote": position.costIsKnown ? decimal(quoteValue - quoteCost) as Any : NSNull(),
           "unrealized_profit_rate_pct": position.costIsKnown ? decimal(position.profitRate) as Any : NSNull(),
           "allocation_pct": totalValue > 0
-            ? position.marketValueCNY.doubleValue / totalValue * 100 : 0,
+            ? rounded(position.marketValueCNY.doubleValue / totalValue * 100, digits: 2) : 0,
           "today": todayByRef["position_\(position.id.uuidString)"].map(encoded) ?? [
             "status": "unavailable"
           ],
@@ -305,16 +414,20 @@ enum AIPortfolioDataToolExecutor {
       result["limitation"] = "Realized P&L is net proceeds minus recorded cost; it is not the trade day's price-change P&L."
     case .performance:
       var missing: [String] = []
-      result["data"] = request.positionRefs.compactMap { ref -> [String: Any]? in
-        guard let position = positions.first(where: { "position_\($0.id.uuidString)" == ref })
+      result["data"] = request.positionRefs.compactMap { identifier -> [String: Any]? in
+        guard let position = resolvePosition(identifier, in: positions)
         else {
-          missing.append(ref)
+          missing.append(identifier)
           return nil
         }
+        let resolvedRef = "position_\(position.id.uuidString)"
         let performance = snapshot.performance[position.id]
         let window = request.period == "one_month" ? performance?.oneMonth : performance?.oneWeek
         return [
-          "position_ref": ref, "period": request.period,
+          "position_ref": resolvedRef,
+          "symbol": position.symbol,
+          "name": String(position.name.prefix(120)),
+          "period": request.period,
           "observation": window.map(encoded) ?? ["status": "insufficient_history"],
         ]
       }
@@ -327,14 +440,14 @@ enum AIPortfolioDataToolExecutor {
       result["data"] =
         [
           "configured": context.riskProfileConfigured, "risk_level": context.riskLevel,
-          "single_position_limit_pct": context.positionLimit,
-          "crypto_limit_pct": context.cryptoLimit,
-          "foreign_currency_limit_pct": context.foreignCurrencyLimit,
-          "liquidity_minimum_pct": context.liquidityMinimum,
-          "largest_position_pct": evaluation.largestPositionPercent,
-          "crypto_allocation_pct": evaluation.cryptoAllocationPercent,
-          "non_cny_allocation_pct": evaluation.nonCNYAllocationPercent,
-          "cash_allocation_pct": evaluation.cashAllocationPercent,
+          "single_position_limit_pct": rounded(context.positionLimit),
+          "crypto_limit_pct": rounded(context.cryptoLimit),
+          "foreign_currency_limit_pct": rounded(context.foreignCurrencyLimit),
+          "liquidity_minimum_pct": rounded(context.liquidityMinimum),
+          "largest_position_pct": rounded(evaluation.largestPositionPercent),
+          "crypto_allocation_pct": rounded(evaluation.cryptoAllocationPercent),
+          "non_cny_allocation_pct": rounded(evaluation.nonCNYAllocationPercent),
+          "cash_allocation_pct": rounded(evaluation.cashAllocationPercent),
           "breach_count": evaluation.breachCount,
         ] as [String: Any]
       result["limitation"] = "Constraint fit does not measure investment safety or future returns."
@@ -353,7 +466,7 @@ enum AIPortfolioDataToolExecutor {
       result["data"] = snapshot.history.filter {
         $0.date >= start && $0.date < end && $0.totalValueCNY.isFinite
       }.sorted { $0.date < $1.date }.suffix(90).map {
-        ["date": formatter.string(from: $0.date), "total_value_cny": $0.totalValueCNY]
+        ["date": formatter.string(from: $0.date), "total_value_cny": rounded($0.totalValueCNY)]
           as [String: Any]
       }
       result["daily_profit"] = snapshot.dailyProfit.filter { $0.date >= start && $0.date < end }
@@ -371,8 +484,13 @@ enum AIPortfolioDataToolExecutor {
         "This is a dated report, not the current holdings snapshot. Prefer current holdings for up-to-date quantities and prices."
     }
     let response = json(result)
-    return response.utf8.count <= AIFunctionCallPolicy.maximumResultBytes
-      ? response : error("result_too_large_narrow_query")
+    if response.utf8.count <= AIFunctionCallPolicy.maximumResultBytes {
+      return response
+    }
+    return error(
+      "result_too_large_narrow_query",
+      hint: "Result was \(response.utf8.count) bytes (limit \(AIFunctionCallPolicy.maximumResultBytes)). Reduce limit (e.g. 10) or days (e.g. 30), or pass a narrower query filter."
+    )
   }
 
   private static func decimal(_ value: Decimal) -> String {

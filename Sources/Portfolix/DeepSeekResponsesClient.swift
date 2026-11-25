@@ -93,8 +93,16 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
 
     private let session: URLSession
     private let maximumResponseBytes = 8 * 1024 * 1024
+    private let maxTransientRetries: Int
+    private let retryDelay: Duration
 
-    init(session: URLSession? = nil) {
+    init(
+        session: URLSession? = nil,
+        maxTransientRetries: Int = 1,
+        retryDelay: Duration? = nil
+    ) {
+        self.maxTransientRetries = max(0, maxTransientRetries)
+        self.retryDelay = retryDelay ?? (session == nil ? .milliseconds(800) : .milliseconds(50))
         if let session {
             self.session = session
         } else {
@@ -167,25 +175,47 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
 
         let requestStartedAt = Date()
         do {
-            let (bytes, response) = try await session.bytes(for: request)
-            defer { bytes.task.cancel() }
-            let responseHeaderAt = Date()
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw LLMClientError.invalidResponse
+            for attempt in 0...maxTransientRetries {
+                try Task.checkCancellation()
+                do {
+                    let (bytes, response) = try await session.bytes(for: request)
+                    defer { bytes.task.cancel() }
+                    let responseHeaderAt = Date()
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw LLMClientError.invalidResponse
+                    }
+                    if attempt < maxTransientRetries,
+                       [408, 429, 500, 502, 503, 504].contains(httpResponse.statusCode)
+                    {
+                        bytes.task.cancel()
+                        try await Task.sleep(for: retryDelay)
+                        continue
+                    }
+                    guard httpResponse.statusCode == 200 else {
+                        let body = await responseBodyText(from: bytes)
+                        throw Self.httpError(statusCode: httpResponse.statusCode, body: body)
+                    }
+                    return try await parseStreamingResponse(
+                        bytes,
+                        requestStartedAt: requestStartedAt,
+                        responseHeaderAt: responseHeaderAt,
+                        progress: webSearchProgress
+                    )
+                } catch let urlError as URLError
+                    where attempt < maxTransientRetries
+                    && [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(urlError.code)
+                {
+                    try await Task.sleep(for: retryDelay)
+                    continue
+                }
             }
-            guard httpResponse.statusCode == 200 else {
-                let body = await responseBodyText(from: bytes)
-                throw Self.httpError(statusCode: httpResponse.statusCode, body: body)
-            }
-            return try await parseStreamingResponse(
-                bytes,
-                requestStartedAt: requestStartedAt,
-                responseHeaderAt: responseHeaderAt,
-                progress: webSearchProgress
-            )
+            throw LLMClientError.invalidResponse
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as LLMClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw LLMClientError.requestFailed(error.localizedDescription)
         }
     }

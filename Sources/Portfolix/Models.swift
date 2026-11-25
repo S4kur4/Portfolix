@@ -814,6 +814,7 @@ final class PortfolioStore {
     private(set) var isAnsweringAIAnalysisFollowUp = false
     private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
     private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
+    private(set) var aiAnalysisActivitySteps: [AIAgentActivityStep] = []
     @ObservationIgnored private var isAIAnalysisGenerationInFlight = false
     @ObservationIgnored private var analysisGenerationTask: Task<Void, Never>?
     @ObservationIgnored private var analysisFollowUpTask: Task<Void, Never>?
@@ -1795,6 +1796,7 @@ final class PortfolioStore {
         aiAnalysisRun = AIAnalysisRun()
         aiAnalysisFollowUpProgress = nil
         aiAnalysisActivityLines = []
+        aiAnalysisActivitySteps = []
         if usesLegacyAIReportCache { UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey) }
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
     }
@@ -1822,6 +1824,7 @@ final class PortfolioStore {
         isAnsweringAIAnalysisFollowUp = true
         aiAnalysisFollowUpProgress = .analyzing
         aiAnalysisActivityLines = []
+        aiAnalysisActivitySteps = []
         recordAIAnalysisActivity(.analyzing)
         AIAgentRuntimeDiagnostics.event("follow_up_ui_state_finished", runID: runtimeRunID)
 
@@ -1835,6 +1838,10 @@ final class PortfolioStore {
                 runtimeRunID: runtimeRunID
             )
             guard !Task.isCancelled, activeFollowUpRequestID == runtimeRunID else { return }
+            let finishedSteps = AIAgentActivityStepPolicy.finishing(
+                aiAnalysisActivitySteps,
+                failed: answer.didFail
+            )
             AIAgentRuntimeDiagnostics.event(
                 "follow_up_answer_ready",
                 runID: runtimeRunID,
@@ -1849,7 +1856,9 @@ final class PortfolioStore {
                     answer.text,
                     followUpRunSnapshot: answer.runSnapshot,
                     citations: answer.citations,
-                    modelUsage: answer.modelUsage
+                    modelUsage: answer.modelUsage,
+                    activitySteps: finishedSteps,
+                    retryQuestion: answer.didFail ? trimmed : nil
                 ),
                 runtimeRunID: runtimeRunID
             )
@@ -1859,6 +1868,7 @@ final class PortfolioStore {
                 metadata: ["history_count": String(aiAnalysisChatItems.count)]
             )
             aiAnalysisFollowUpProgress = nil
+            aiAnalysisActivitySteps = []
             isAnsweringAIAnalysisFollowUp = false
             activeFollowUpRequestID = nil
             watchdog?.cancel()
@@ -1874,6 +1884,7 @@ final class PortfolioStore {
         isAnsweringAIAnalysisFollowUp = false
         aiAnalysisFollowUpProgress = nil
         aiAnalysisActivityLines = []
+        aiAnalysisActivitySteps = []
         aiAnalysisRun.status = .idle
     }
 
@@ -1934,7 +1945,7 @@ final class PortfolioStore {
         _ question: String,
         chatHistory: [AIReportChatItem],
         runtimeRunID: UUID
-    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?, modelUsage: AIModelUsageSummary?) {
+    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?, modelUsage: AIModelUsageSummary?, didFail: Bool) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
             ? .english
@@ -1945,11 +1956,12 @@ final class PortfolioStore {
                 localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: responseAppLanguage),
                 [],
                 nil,
-                AIModelUsageSummary(kind: "follow_up", calls: [])
+                AIModelUsageSummary(kind: "follow_up", calls: []),
+                false
             )
         }
         if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []))
+            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []), false)
         }
 
         do {
@@ -1982,7 +1994,7 @@ final class PortfolioStore {
                 }
             )
             recordAIModelUsage(result.modelUsage)
-            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result), nil)
+            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result), nil, false)
         } catch {
             if let failure = error as? AIModelRunFailure { recordAIModelUsage(failure.usage) }
             let stage: String
@@ -2000,18 +2012,111 @@ final class PortfolioStore {
                 ]
             )
             return (
-                localizedText(
-                    "这次追问未通过信息安全或模型返回结构校验，请稍后重试。",
-                    "This follow-up did not pass information security or response-structure validation. Please try again.",
-                    language: responseAppLanguage
-                ),
+                Self.localizedFollowUpFailureMessage(for: error, language: responseAppLanguage),
                 [],
                 nil,
                 (error as? AIModelRunFailure)?.usage
                     ?? (error as? AIAnalysisPipelineError)?.modelUsage
-                    ?? AIModelUsageSummary(kind: "follow_up", calls: [])
+                    ?? AIModelUsageSummary(kind: "follow_up", calls: []),
+                true
             )
         }
+    }
+
+    static func localizedFollowUpFailureMessage(for error: Error, language: AppLanguage) -> String {
+        let root: Error = {
+            if let runFailure = error as? AIModelRunFailure { return runFailure.underlying }
+            return error
+        }()
+        if root is AIModelBudgetError {
+            return localizedText(
+                "本次追问达到了上下文或调用上限，请缩小问题范围后重试。",
+                "This follow-up reached the context or tool-call limit. Narrow the question and try again.",
+                language: language
+            )
+        }
+        if let llmError = root as? LLMClientError {
+            switch llmError {
+            case .missingAPIKey, .unauthorized:
+                return localizedText(
+                    "DeepSeek API Key 无效或已失效，请在设置中重新检查并验证。",
+                    "Your DeepSeek API key is invalid or expired. Check and re-validate it in Settings.",
+                    language: language
+                )
+            case .rateLimited:
+                return localizedText(
+                    "DeepSeek 请求频率受限或额度不足，请稍后重试。",
+                    "DeepSeek rate limit or quota was reached. Please wait a moment and try again.",
+                    language: language
+                )
+            case .endpointOrModelNotFound:
+                return localizedText(
+                    "当前配置的模型或服务地址不可用，请在设置中核对模型名称。",
+                    "The configured model or endpoint was not found. Check your model selection in Settings.",
+                    language: language
+                )
+            case let .serverError(status):
+                return localizedText(
+                    "模型服务暂时不可用（HTTP \(status)），请稍后重试。",
+                    "The model service is temporarily unavailable (HTTP \(status)). Please try again shortly.",
+                    language: language
+                )
+            case .emptyFinalContent, .truncatedFinalContent, .invalidResponse:
+                return localizedText(
+                    "模型本次未返回完整回答，请重试。",
+                    "The model returned an incomplete response. Please try again.",
+                    language: language
+                )
+            case .requestFailed:
+                return localizedText(
+                    "网络连接超时或中断，未能收到模型回复，请检查网络后重试。",
+                    "The request timed out or lost connection before completing. Check your network and try again.",
+                    language: language
+                )
+            case .invalidBaseURL, .badRequest, .unsupportedJSONMode, .webSearchUnavailable:
+                return localizedText(
+                    "模型请求配置存在异常，请在设置中核对 API 配置后重试。",
+                    "There is an issue with the model request configuration. Verify your API settings and try again.",
+                    language: language
+                )
+            }
+        }
+        if let agentError = root as? AIAnalysisAgentError {
+            switch agentError {
+            case .timedOut:
+                return localizedText(
+                    "本次追问等待时间过长已超时，请稍后重试。",
+                    "This follow-up timed out. Please try again.",
+                    language: language
+                )
+            case .missingLLMKey, .llmDisabled:
+                return localizedText(
+                    "DeepSeek API 尚未完成配置，请先在设置中启用并验证 API Key。",
+                    "DeepSeek API is not configured yet. Enable and validate your API key in Settings.",
+                    language: language
+                )
+            case .missingSearchKey, .searchDisabled:
+                return localizedText(
+                    "联网研究需要至少一个可用的搜索服务，请在设置中启用搜索源并完成验证。",
+                    "Web Research requires at least one enabled and validated search provider in Settings.",
+                    language: language
+                )
+            case .emptyPortfolio, .invalidReport:
+                break
+            }
+        }
+        if root is URLError {
+            return localizedText(
+                "网络连接异常，未能完成本次追问，请检查网络后重试。",
+                "A network error interrupted this follow-up. Check your connection and try again.",
+                language: language
+            )
+        }
+        return localizedText(
+            "这次追问未通过安全或输出结构校验，请换种方式提问或稍后重试。",
+            "This follow-up did not pass safety or response-format validation. Please rephrase or try again.",
+            language: language
+        )
     }
 
     private func readAIAnalysisData(_ request: AIPortfolioToolRequest, runtimeRunID: UUID) async -> String {
@@ -2138,6 +2243,7 @@ final class PortfolioStore {
             model: aiConfiguration.model
         )
         aiAnalysisActivityLines = []
+        aiAnalysisActivitySteps = []
         recordAIAnalysisActivity(.preflight)
         Self.aiAnalysisLogger.info("Agent run started")
 
@@ -2177,14 +2283,27 @@ final class PortfolioStore {
                 usedFallback: false,
                 errorCode: nil
             )
+            let qualitySummary = result.artifacts.decodedQualitySummary()
+            let finishedSteps = AIAgentActivityStepPolicy.finishing(aiAnalysisActivitySteps)
             aiAnalysisRun = AIAnalysisRun(
                 status: .completed,
                 startedAt: startedAt,
                 finishedAt: finishedAt,
                 model: aiConfiguration.model,
-                searchCount: report.sources.count
+                searchCount: report.sources.count,
+                qualityStatus: qualitySummary.status,
+                evidenceCoveragePct: qualitySummary.evidenceCoveragePct,
+                numericGroundingPct: qualitySummary.numericGroundingPct
             )
-            appendAIAnalysisChatItem(.report(report, aiAnalysisRun, modelUsage: result.artifacts.modelUsage))
+            appendAIAnalysisChatItem(
+                .report(
+                    report,
+                    aiAnalysisRun,
+                    modelUsage: result.artifacts.modelUsage,
+                    activitySteps: finishedSteps
+                )
+            )
+            aiAnalysisActivitySteps = []
             Self.aiAnalysisLogger.info("Agent run completed without fallback")
         } catch let error as AIAnalysisAgentError {
             guard !Task.isCancelled else { return }
@@ -2257,10 +2376,24 @@ final class PortfolioStore {
 
     private func recordAIAnalysisActivity(_ progress: AIAnalysisProgress) {
         appendAIAnalysisActivity(progress.title(language: appLanguage))
+        let spec = progress.activityStepSpec(language: appLanguage)
+        aiAnalysisActivitySteps = AIAgentActivityStepPolicy.recording(
+            kind: spec.kind,
+            title: spec.title,
+            detail: spec.detail,
+            into: aiAnalysisActivitySteps
+        )
     }
 
     private func recordAIAnalysisActivity(_ progress: AIFollowUpProgress) {
         appendAIAnalysisActivity(progress.title(language: appLanguage))
+        let spec = progress.activityStepSpec(language: appLanguage)
+        aiAnalysisActivitySteps = AIAgentActivityStepPolicy.recording(
+            kind: spec.kind,
+            title: spec.title,
+            detail: spec.detail,
+            into: aiAnalysisActivitySteps
+        )
     }
 
     private func appendAIAnalysisActivity(_ text: String) {
@@ -2322,7 +2455,16 @@ final class PortfolioStore {
             fallbackReason: fallbackReason,
             diagnostic: diagnostic
         )
-        appendAIAnalysisChatItem(.report(fallback, aiAnalysisRun, modelUsage: artifacts.modelUsage))
+        let failedSteps = AIAgentActivityStepPolicy.finishing(aiAnalysisActivitySteps, failed: true)
+        appendAIAnalysisChatItem(
+            .report(
+                fallback,
+                aiAnalysisRun,
+                modelUsage: artifacts.modelUsage,
+                activitySteps: failedSteps
+            )
+        )
+        aiAnalysisActivitySteps = []
 
         let stageID = (error as? AIAnalysisPipelineError)?.stage.telemetryID ?? "unknown"
         Self.aiAnalysisLogger.error(

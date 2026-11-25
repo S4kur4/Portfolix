@@ -42,10 +42,13 @@ private final class RoseOrbitLayerView: NSView {
     private var renderedAnimation = false
     private var renderedDarkMode = false
 
+    override var isOpaque: Bool { false }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer = CALayer()
+        layer?.backgroundColor = nil
         layer?.masksToBounds = false
     }
 
@@ -55,6 +58,12 @@ private final class RoseOrbitLayerView: NSView {
 
     override func layout() {
         super.layout()
+        rebuildIfNeeded()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        renderedSize = .zero
         rebuildIfNeeded()
     }
 
@@ -117,11 +126,8 @@ private final class RoseOrbitLayerView: NSView {
         pathLayer.frame = parent.bounds
         pathLayer.path = path
         pathLayer.fillColor = nil
-        pathLayer.strokeColor = RoseOrbitPalette.violet(
-            isDarkMode: isDarkMode,
-            alpha: isDarkMode ? 0.34 : 0.30
-        )
-        pathLayer.lineWidth = max(1, min(size.width, size.height) * 0.047)
+        pathLayer.strokeColor = RoseOrbitPalette.track(isDarkMode: isDarkMode)
+        pathLayer.lineWidth = max(0.85, min(size.width, size.height) * 0.032)
         pathLayer.lineCap = .round
         pathLayer.lineJoin = .round
         parent.addSublayer(pathLayer)
@@ -278,40 +284,47 @@ private enum RoseOrbitGeometry {
     }
 }
 
-private enum RoseParticleFamily: Int, CaseIterable {
+enum RoseParticleFamily: Int, CaseIterable {
     case highlight
     case light
     case brand
     case deep
 }
 
-private enum RoseOrbitPalette {
+enum RoseOrbitPalette {
     static func color(
         family: RoseParticleFamily,
         isDarkMode: Bool,
         alpha: Double
     ) -> CGColor {
         let token: Color = switch family {
-        case .highlight: PortfolixTheme.brandWashText
-        case .light: PortfolixTheme.brandText
-        case .brand: PortfolixTheme.brandChart
+        case .highlight: isDarkMode ? PortfolixTheme.brandText : PortfolixTheme.brandWashText
+        case .light: isDarkMode ? PortfolixTheme.brandChart : PortfolixTheme.brandText
+        case .brand: isDarkMode ? PortfolixTheme.brandSolid : PortfolixTheme.brandChart
         case .deep: PortfolixTheme.brandSolidPressed
         }
         return resolvedCGColor(token, isDarkMode: isDarkMode, alpha: alpha)
     }
 
-    static func violet(isDarkMode: Bool, alpha: Double) -> CGColor {
-        resolvedCGColor(PortfolixTheme.brandChart, isDarkMode: isDarkMode, alpha: alpha)
+    static func track(isDarkMode: Bool) -> CGColor {
+        // Use deep saturated amethyst at low alpha in dark mode so the guide track
+        // blends naturally into the dark card without a pale/white outline halo.
+        let token = isDarkMode ? PortfolixTheme.brandSolidPressed : PortfolixTheme.brandChart
+        let alpha = isDarkMode ? 0.16 : 0.22
+        return resolvedCGColor(token, isDarkMode: isDarkMode, alpha: alpha)
     }
 
-    private static func resolvedCGColor(_ color: Color, isDarkMode: Bool, alpha: Double) -> CGColor {
+    static func resolvedCGColor(_ color: Color, isDarkMode: Bool, alpha: Double) -> CGColor {
         let appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
         var resolved: CGColor?
         if let appearance {
             appearance.performAsCurrentDrawingAppearance {
-                resolved = NSColor(color).withAlphaComponent(alpha).cgColor
+                let srgb = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+                resolved = srgb.withAlphaComponent(alpha).cgColor
             }
         }
-        return resolved ?? NSColor(color).withAlphaComponent(alpha).cgColor
+        if let resolved { return resolved }
+        let fallback = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        return fallback.withAlphaComponent(alpha).cgColor
     }
 }

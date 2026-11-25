@@ -38,8 +38,11 @@ final class AdditionalSearchAPIClient: WebSearching, @unchecked Sendable {
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieStorage = nil
+            configuration.httpCookieAcceptPolicy = .never
+            configuration.httpShouldSetCookies = false
             configuration.urlCredentialStorage = nil
             configuration.urlCache = nil
+            configuration.timeoutIntervalForResource = 30
             self.session = URLSession(configuration: configuration)
         }
     }

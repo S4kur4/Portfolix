@@ -55,7 +55,8 @@ struct AIMessageMarkdownRendererTests {
         for word in ["核对持仓", "看清费用", "保留余地", "不追涨", "分步调整"] {
             let style = try #require(result.attribute(.paragraphStyle, at: range(word, in: result).location, effectiveRange: nil) as? NSParagraphStyle)
             #expect(style.headIndent > style.firstLineHeadIndent)
-            #expect(style.lineSpacing == 3)
+            #expect(style.lineSpacing == AIMessageMarkdownRenderer.listLineSpacing)
+            #expect(style.paragraphSpacing == AIMessageMarkdownRenderer.listParagraphSpacing)
             #expect(style.tabStops.first?.location == style.headIndent)
         }
         let nested = try #require(result.attribute(.paragraphStyle, at: range("看清费用", in: result).location, effectiveRange: nil) as? NSParagraphStyle)
@@ -133,6 +134,23 @@ struct AIMessageMarkdownRendererTests {
         })
         #expect(result.string == "重点\u{FFFC}\u{FFFC}\u{FFFC}")
         #expect(!result.string.contains("PFLC"))
+    }
+
+    @Test
+    func subheadingsAndBlockquotesRenderWithComfortableHierarchy() throws {
+        let result = render("## 核心判断\n\n> 风险控制优先于收益追逐。\n\n### 具体依据\n\n正文段落。")
+        #expect(!result.string.contains("## "))
+        #expect(!result.string.contains("### "))
+        #expect(result.string.contains("▎\t风险控制优先于收益追逐。"))
+        let h2Font = try #require(result.attribute(.font, at: range("核心判断", in: result).location, effectiveRange: nil) as? NSFont)
+        #expect(h2Font.pointSize == 15)
+        let h3Font = try #require(result.attribute(.font, at: range("具体依据", in: result).location, effectiveRange: nil) as? NSFont)
+        #expect(h3Font.pointSize == 13)
+        let quoteStyle = try #require(result.attribute(.paragraphStyle, at: range("风险控制", in: result).location, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(quoteStyle.headIndent > quoteStyle.firstLineHeadIndent)
+        let bodyStyle = try #require(result.attribute(.paragraphStyle, at: range("正文段落", in: result).location, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(bodyStyle.lineSpacing == AIMessageMarkdownRenderer.bodyLineSpacing)
+        #expect(bodyStyle.paragraphSpacing == AIMessageMarkdownRenderer.bodyParagraphSpacing)
     }
 
     @Test

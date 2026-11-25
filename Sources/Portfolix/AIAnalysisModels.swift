@@ -156,6 +156,55 @@ enum AIAnalysisProgress: Equatable, Sendable {
     private func shortened(_ value: String) -> String {
         String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
     }
+    func activityStepSpec(language: AppLanguage) -> (kind: AIAgentActivityStep.Kind, title: String, detail: String?) {
+        switch self {
+        case .preflight, .buildingInput:
+            return (.localData, localizedText("核对组合与风险约束", "Reviewing portfolio & constraints", language: language), nil)
+        case let .loadingMarketData(assetCount):
+            return (
+                .localData,
+                localizedText("同步持仓行情", "Updating holding quotes", language: language),
+                localizedText("\(assetCount) 项持仓", "\(assetCount) holdings", language: language)
+            )
+        case let .marketDataLoaded(total):
+            return (
+                .localData,
+                localizedText("核对组合与行情", "Reviewed portfolio & quotes", language: language),
+                localizedText("已同步 \(total) 项持仓", "\(total) holdings synced", language: language)
+            )
+        case .planningToolCalls, .replanningToolCalls:
+            return (.plan, localizedText("规划公开资料检索", "Planning web research", language: language), nil)
+        case let .callingWebSearch(query, _, _):
+            return (
+                .webSearch,
+                localizedText("检索公开资料", "Searching public sources", language: language),
+                shortened(query)
+            )
+        case let .webSearchResultsReady(callCount, sourceCount):
+            return (
+                .webSearch,
+                localizedText("检索公开资料", "Searched public sources", language: language),
+                localizedText("\(callCount) 次检索 · \(sourceCount) 条来源", "\(callCount) searches · \(sourceCount) sources", language: language)
+            )
+        case .evaluatingEvidence:
+            return (.webSearch, localizedText("交叉核验公开来源", "Cross-checking sources", language: language), nil)
+        case .generatingReport:
+            return (.compose, localizedText("深度分析与撰写报告", "Analyzing & drafting report", language: language), nil)
+        case let .modelReasoning(_, elapsedSeconds):
+            let detail = elapsedSeconds.map { localizedText("深度推理 · \($0) 秒", "Reasoning · \($0)s", language: language) }
+            return (.compose, localizedText("深度分析与撰写报告", "Analyzing & drafting report", language: language), detail)
+        case .modelOutputStarted:
+            return (.compose, localizedText("深度分析与撰写报告", "Analyzing & drafting report", language: language), localizedText("输出报告正文", "Writing report", language: language))
+        case .validatingModelOutput, .validatingReport, .preparingArtifacts, .savingReport:
+            return (.verify, localizedText("核验数据与生成报告", "Verifying & saving report", language: language), nil)
+        case let .repairingReport(attempt, total, _):
+            return (
+                .verify,
+                localizedText("核验并修正报告格式", "Refining report format", language: language),
+                localizedText("第 \(attempt)/\(total) 次", "Attempt \(attempt)/\(total)", language: language)
+            )
+        }
+    }
 }
 
 typealias AIAnalysisProgressHandler = @Sendable (AIAnalysisProgress) async -> Void
@@ -228,6 +277,33 @@ enum AIFollowUpProgress: Equatable, Sendable {
     private func shortened(_ value: String) -> String {
         String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
     }
+    func activityStepSpec(language: AppLanguage) -> (kind: AIAgentActivityStep.Kind, title: String, detail: String?) {
+        switch self {
+        case .analyzing:
+            return (.plan, localizedText("理解问题与制定步骤", "Understanding question", language: language), nil)
+        case .replanning:
+            return (.plan, localizedText("规划公开资料检索", "Planning web search", language: language), nil)
+        case .readingLocalData:
+            return (.localData, localizedText("核对本地持仓与记录", "Checking local portfolio records", language: language), nil)
+        case let .searching(query, _, _):
+            return (
+                .webSearch,
+                localizedText("检索公开资料", "Searching public sources", language: language),
+                shortened(query)
+            )
+        case .evaluatingEvidence:
+            return (.webSearch, localizedText("核验外部来源", "Verifying external sources", language: language), nil)
+        case .composing:
+            return (.compose, localizedText("整理分析回复", "Drafting response", language: language), nil)
+        case let .reasoning(elapsedSeconds):
+            let detail = elapsedSeconds.map { localizedText("深度推理 · \($0) 秒", "Reasoning · \($0)s", language: language) }
+            return (.compose, localizedText("整理分析回复", "Drafting response", language: language), detail)
+        case .outputStarted:
+            return (.compose, localizedText("整理分析回复", "Drafting response", language: language), localizedText("输出回复正文", "Writing response", language: language))
+        case .repairingResponse:
+            return (.verify, localizedText("核验回复格式", "Verifying response format", language: language), nil)
+        }
+    }
 }
 
 typealias AIFollowUpProgressHandler = @Sendable (AIFollowUpProgress) async -> Void
@@ -275,6 +351,150 @@ enum AIAnalysisRunStatus: Equatable {
     }
 }
 
+struct AIAgentActivityStep: Identifiable, Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        case plan
+        case localData
+        case webSearch
+        case verify
+        case compose
+    }
+
+    enum Status: String, Codable, Sendable {
+        case pending
+        case running
+        case completed
+        case failed
+    }
+
+    let id: UUID
+    let kind: Kind
+    var title: String
+    var detail: String?
+    var status: Status
+
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        title: String,
+        detail: String? = nil,
+        status: Status = .running
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.detail = detail
+        self.status = status
+    }
+}
+
+enum AIAgentActivityStepPolicy {
+    static let maximumStoredSteps = 8
+
+    static func recording(
+        kind: AIAgentActivityStep.Kind,
+        title: String,
+        detail: String? = nil,
+        into steps: [AIAgentActivityStep]
+    ) -> [AIAgentActivityStep] {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTitle.isEmpty else { return steps }
+        let normalizedDetail = detail?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDetail = (normalizedDetail?.isEmpty == false) ? normalizedDetail : nil
+
+        var updated = steps
+        // If the immediately active step has the same kind, update it in place without creating duplicates.
+        if let last = updated.last, last.status == .running, last.kind == kind {
+            updated[updated.count - 1].title = normalizedTitle
+            if let cleanDetail {
+                updated[updated.count - 1].detail = cleanDetail
+            }
+            return updated
+        }
+        // Collapse repeated compose phases (e.g., compose -> localData -> compose) into a single canonical compose step at the tail.
+        if kind == .compose, let existingIndex = updated.lastIndex(where: { $0.kind == .compose }) {
+            for index in updated.indices where updated[index].status == .running {
+                updated[index].status = .completed
+            }
+            var existing = updated.remove(at: existingIndex)
+            existing.title = normalizedTitle
+            if let cleanDetail { existing.detail = cleanDetail }
+            existing.status = .running
+            updated.append(existing)
+            return updated
+        }
+        for index in updated.indices where updated[index].status == .running {
+            updated[index].status = .completed
+        }
+        // Avoid duplicating consecutive identical (kind, title, detail) steps.
+        if let last = updated.last,
+           last.kind == kind,
+           last.title == normalizedTitle,
+           last.detail == cleanDetail
+        {
+            updated[updated.count - 1].status = .running
+            return updated
+        }
+        updated.append(
+            AIAgentActivityStep(kind: kind, title: normalizedTitle, detail: cleanDetail, status: .running)
+        )
+        if updated.count > maximumStoredSteps {
+            updated = Array(updated.suffix(maximumStoredSteps))
+        }
+        return updated
+    }
+
+    static func liveStepsWithPending(
+        _ recorded: [AIAgentActivityStep],
+        isReport: Bool,
+        usesConnectedSearch: Bool,
+        language: AppLanguage
+    ) -> [AIAgentActivityStep] {
+        let planned: [(AIAgentActivityStep.Kind, String)] = isReport
+            ? (usesConnectedSearch
+                ? [
+                    (.localData, localizedText("核对组合与行情", "Review portfolio & quotes", language: language)),
+                    (.webSearch, localizedText("检索公开资料", "Search public sources", language: language)),
+                    (.compose, localizedText("深度分析与撰写报告", "Analyze & draft report", language: language)),
+                    (.verify, localizedText("核验数据与生成报告", "Verify & save report", language: language)),
+                ]
+                : [
+                    (.localData, localizedText("核对组合与行情", "Review portfolio & quotes", language: language)),
+                    (.compose, localizedText("深度分析与撰写报告", "Analyze & draft report", language: language)),
+                    (.verify, localizedText("核验数据与生成报告", "Verify & save report", language: language)),
+                ])
+            : (usesConnectedSearch
+                ? [
+                    (.plan, localizedText("理解问题与制定步骤", "Understand question", language: language)),
+                    (.webSearch, localizedText("检索公开资料", "Search public sources", language: language)),
+                    (.compose, localizedText("整理分析回复", "Draft response", language: language)),
+                ]
+                : [
+                    (.plan, localizedText("理解问题与制定步骤", "Understand question", language: language)),
+                    (.compose, localizedText("整理分析回复", "Draft response", language: language)),
+                ])
+
+        let seenKinds = Set(recorded.map(\.kind))
+        let lastRecordedOrder = planned.lastIndex(where: { seenKinds.contains($0.0) }) ?? -1
+        var result = recorded
+        for (idx, item) in planned.enumerated() where idx > lastRecordedOrder && !seenKinds.contains(item.0) {
+            result.append(AIAgentActivityStep(kind: item.0, title: item.1, detail: nil, status: .pending))
+        }
+        return result
+    }
+
+    static func finishing(_ steps: [AIAgentActivityStep], failed: Bool = false) -> [AIAgentActivityStep] {
+        steps.compactMap { step in
+            guard step.status != .pending else { return nil }
+            var copy = step
+            if copy.status == .running {
+                copy.status = failed ? .failed : .completed
+            }
+            return copy
+        }
+    }
+}
+
 struct AIAnalysisRun: Equatable {
     var status: AIAnalysisRunStatus = .idle
     var startedAt: Date?
@@ -284,6 +504,9 @@ struct AIAnalysisRun: Equatable {
     var usedFallback = false
     var fallbackReason: String?
     var diagnostic: AIAnalysisDiagnostic?
+    var qualityStatus: String? = nil
+    var evidenceCoveragePct: Double? = nil
+    var numericGroundingPct: Double? = nil
 }
 
 struct AIAgentExecutionBudget: Codable, Equatable, Sendable {
@@ -563,12 +786,18 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         let usedFallback: Bool
         let fallbackReason: String?
         let diagnostic: AIAnalysisDiagnostic?
+        var qualityStatus: String? = nil
+        var evidenceCoveragePct: Double? = nil
+        var numericGroundingPct: Double? = nil
 
         init(run: AIAnalysisRun) {
             model = run.model
             usedFallback = run.usedFallback
             fallbackReason = run.fallbackReason
             diagnostic = run.diagnostic
+            qualityStatus = run.qualityStatus
+            evidenceCoveragePct = run.evidenceCoveragePct
+            numericGroundingPct = run.numericGroundingPct
         }
 
         var run: AIAnalysisRun {
@@ -577,7 +806,10 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
                 model: model,
                 usedFallback: usedFallback,
                 fallbackReason: fallbackReason,
-                diagnostic: diagnostic
+                diagnostic: diagnostic,
+                qualityStatus: qualityStatus,
+                evidenceCoveragePct: evidenceCoveragePct,
+                numericGroundingPct: numericGroundingPct
             )
         }
     }
@@ -615,6 +847,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     let followUpRunSnapshot: FollowUpRunSnapshot?
     let citations: [AIMessageCitation]?
     let modelUsage: AIModelUsageSummary?
+    var activitySteps: [AIAgentActivityStep]? = nil
+    var retryQuestion: String? = nil
 
     var responseModelUsage: AIModelUsageSummary? {
         modelUsage ?? followUpRunSnapshot?.modelUsage
@@ -643,7 +877,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         runSnapshot: RunSnapshot?,
         followUpRunSnapshot: FollowUpRunSnapshot? = nil,
         citations: [AIMessageCitation]? = nil,
-        modelUsage: AIModelUsageSummary? = nil
+        modelUsage: AIModelUsageSummary? = nil,
+        activitySteps: [AIAgentActivityStep]? = nil,
+        retryQuestion: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -654,6 +890,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         self.followUpRunSnapshot = followUpRunSnapshot
         self.citations = citations
         self.modelUsage = modelUsage
+        self.activitySteps = activitySteps
+        self.retryQuestion = retryQuestion
     }
 
     var content: AIReportChatContent {
@@ -675,7 +913,12 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         AIReportChatItem(id: UUID(), createdAt: createdAt, kind: .user, text: text, report: nil, runSnapshot: nil)
     }
 
-    static func report(_ report: AIAnalysisReport, _ run: AIAnalysisRun, modelUsage: AIModelUsageSummary? = nil) -> AIReportChatItem {
+    static func report(
+        _ report: AIAnalysisReport,
+        _ run: AIAnalysisRun,
+        modelUsage: AIModelUsageSummary? = nil,
+        activitySteps: [AIAgentActivityStep]? = nil
+    ) -> AIReportChatItem {
         AIReportChatItem(
             id: report.id,
             createdAt: report.generatedAt,
@@ -683,7 +926,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             text: nil,
             report: report,
             runSnapshot: RunSnapshot(run: run),
-            modelUsage: modelUsage
+            modelUsage: modelUsage,
+            activitySteps: activitySteps?.isEmpty == false ? activitySteps : nil
         )
     }
 
@@ -692,7 +936,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         createdAt: Date = .now,
         followUpRunSnapshot: FollowUpRunSnapshot? = nil,
         citations: [AIMessageCitation] = [],
-        modelUsage: AIModelUsageSummary? = nil
+        modelUsage: AIModelUsageSummary? = nil,
+        activitySteps: [AIAgentActivityStep]? = nil,
+        retryQuestion: String? = nil
     ) -> AIReportChatItem {
         AIReportChatItem(
             id: UUID(),
@@ -703,7 +949,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             runSnapshot: nil,
             followUpRunSnapshot: followUpRunSnapshot,
             citations: citations.isEmpty ? nil : citations,
-            modelUsage: modelUsage
+            modelUsage: modelUsage,
+            activitySteps: activitySteps?.isEmpty == false ? activitySteps : nil,
+            retryQuestion: retryQuestion
         )
     }
 
@@ -807,6 +1055,17 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
             copy = copy.withTrace(trace)
         }
         return copy
+    }
+
+    func decodedQualitySummary() -> (status: String?, evidenceCoveragePct: Double?, numericGroundingPct: Double?) {
+        guard let data = guardrailResultJSON.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return (nil, nil, nil) }
+        let status = object["status"] as? String
+        let scorecard = object["scorecard"] as? [String: Any]
+        let evidencePct = scorecard?["evidence_coverage_pct"] as? Double
+        let numericPct = scorecard?["numeric_grounding_pct"] as? Double
+        return (status, evidencePct, numericPct)
     }
 }
 

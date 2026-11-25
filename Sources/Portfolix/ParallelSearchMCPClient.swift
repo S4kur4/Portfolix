@@ -46,6 +46,7 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
             configuration.httpShouldSetCookies = false
             configuration.urlCredentialStorage = nil
             configuration.urlCache = nil
+            configuration.timeoutIntervalForResource = 30
             self.session = URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
         }
     }

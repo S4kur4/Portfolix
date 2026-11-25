@@ -314,13 +314,12 @@ struct AIOptimizationTests {
       rootView: AIReportComposerTextInput(placeholder: "Test", text: .constant(""))
         .frame(width: 320, height: 32))
     input.layoutSubtreeIfNeeded()
-    func field(in view: NSView) -> NSTextField? {
-      if let field = view as? NSTextField { return field }
-      return view.subviews.lazy.compactMap { field(in: $0) }.first
+    func textView(in view: NSView) -> NSTextView? {
+      if let tv = view as? NSTextView { return tv }
+      return view.subviews.lazy.compactMap { textView(in: $0) }.first
     }
-    let textField = try #require(field(in: input))
-    if #available(macOS 15.2, *) { #expect(!textField.allowsWritingTools) }
-    if #available(macOS 15.4, *) { #expect(!textField.allowsWritingToolsAffordance) }
+    let editor = try #require(textView(in: input))
+    if #available(macOS 15.2, *) { #expect(editor.writingToolsBehavior == .none) }
     for scheme: ColorScheme in [.light, .dark] {
       let sizes = ["DeepSeek 推理仍在进行 · 8 秒", "正在整理回答", "DeepSeek 推理仍在进行 · 120 秒"].map { text in
         NSHostingView(

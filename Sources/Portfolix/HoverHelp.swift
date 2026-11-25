@@ -66,6 +66,7 @@ final class HoverHelpView: NSView {
     private var pendingShow: DispatchWorkItem?
     private var tooltipWindow: NSPanel?
     private var observers: [NSObjectProtocol] = []
+    private var eventMonitor: Any?
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -83,10 +84,22 @@ final class HoverHelpView: NSView {
         super.viewWillMove(toWindow: newWindow)
     }
 
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        dismissTooltip()
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    override func viewDidHide() {
+        dismissTooltip()
+        super.viewDidHide()
+    }
+
     override func mouseEntered(with event: NSEvent) {
         dismissTooltip()
         guard isHelpEnabled else { return }
-        let work = DispatchWorkItem { [weak self] in self?.showTooltip() }
+        let work = DispatchWorkItem { [weak self] in
+            self?.showTooltip(requirePointerInside: true)
+        }
         pendingShow = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
@@ -95,10 +108,16 @@ final class HoverHelpView: NSView {
         dismissTooltip()
     }
 
-    func showTooltip() {
+    private func isPointerInsideVisibleBounds(in window: NSWindow) -> Bool {
+        let localPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return !visibleRect.isEmpty && visibleRect.contains(localPoint)
+    }
+
+    func showTooltip(requirePointerInside: Bool = false) {
         pendingShow = nil
         guard isHelpEnabled, tooltipWindow == nil, let window, window.isKeyWindow,
               !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
+              !requirePointerInside || isPointerInsideVisibleBounds(in: window),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let appearance = NSApp.appearance ?? window.effectiveAppearance
         let colorScheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
@@ -130,11 +149,44 @@ final class HoverHelpView: NSView {
                 MainActor.assumeIsolated { self?.dismissTooltip() }
             })
         }
+        // Dismiss immediately whenever any enclosing scroll view scrolls (manual or programmatic).
+        var ancestor = superview
+        while let current = ancestor {
+            if let scrollView = current as? NSScrollView {
+                observers.append(center.addObserver(
+                    forName: NSScrollView.willStartLiveScrollNotification,
+                    object: scrollView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.dismissTooltip() }
+                })
+                let clipView = scrollView.contentView
+                clipView.postsBoundsChangedNotifications = true
+                observers.append(center.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.dismissTooltip() }
+                })
+            }
+            ancestor = current.superview
+        }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated { self?.dismissTooltip() }
+            return event
+        }
     }
 
     func dismissTooltip() {
         pendingShow?.cancel()
         pendingShow = nil
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         if let panel = tooltipWindow {
