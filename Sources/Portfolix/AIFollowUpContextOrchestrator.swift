@@ -65,20 +65,31 @@ enum AIFollowUpContextOrchestrator {
         characterBudget: Int = maximumEncodedCharacterCount,
         tokenBudget: Int = maximumEstimatedTokenCount
     ) -> AIFollowUpConversationContext {
+        var contentByID: [UUID: String] = [:]
+        contentByID.reserveCapacity(items.count)
+        for item in items where !excludingItemIDs.contains(item.id) {
+            contentByID[item.id] = content(for: item)
+        }
         var candidates = items
-            .filter { !excludingItemIDs.contains($0.id) && shouldInclude($0) }
+            .filter { !excludingItemIDs.contains($0.id) && shouldInclude($0, resolvedContent: contentByID[$0.id] ?? "") }
             .sorted { $0.createdAt < $1.createdAt }
         removeDuplicatedCurrentQuestion(question, from: &candidates)
 
         let sourceItemCount = candidates.count
-        candidates = deduplicated(candidates)
+        candidates = deduplicated(candidates, contentByID: contentByID)
         let recentStart = max(0, candidates.count - max(1, recentLimit))
         let recentItems = recentStart < candidates.count ? Array(candidates[recentStart...]) : []
         let earlierItems = Array(candidates[..<recentStart])
         let questionTokens = relevanceTokens(question)
+        let normalizedQuestion = normalizedText(question)
         let rankedEarlierItems = earlierItems
             .map { item in
-                (item: item, score: relevanceScore(for: item, question: question, questionTokens: questionTokens))
+                (item: item, score: relevanceScore(
+                    for: item,
+                    resolvedContent: contentByID[item.id] ?? "",
+                    normalizedQuestion: normalizedQuestion,
+                    questionTokens: questionTokens
+                ))
             }
             .filter { $0.score > 0 }
             .sorted {
@@ -91,9 +102,9 @@ enum AIFollowUpContextOrchestrator {
         let relevantItems = earlierItems.filter { relevantIDs.contains($0.id) }
         let omittedItems = earlierItems.filter { !relevantIDs.contains($0.id) }
 
-        var recentEntries = recentItems.map { entry(for: $0, contentLimit: 1_200) }
-        var relevantEntries = relevantItems.map { entry(for: $0, contentLimit: 900) }
-        var summary = summary(for: omittedItems)
+        var recentEntries = recentItems.map { entry(for: $0, resolvedContent: contentByID[$0.id] ?? "", contentLimit: 1_200) }
+        var relevantEntries = relevantItems.map { entry(for: $0, resolvedContent: contentByID[$0.id] ?? "", contentLimit: 900) }
+        var summary = summary(for: omittedItems, contentByID: contentByID)
         var context = buildContext(
             sourceItemCount: sourceItemCount,
             recentEntries: recentEntries,
@@ -192,22 +203,23 @@ enum AIFollowUpContextOrchestrator {
         characterBudget: Int,
         tokenBudget: Int
     ) -> Bool {
-        encodedCharacterCount(context) > characterBudget || estimatedTokenCount(context) > tokenBudget
+        let encoded = encodedJSON(context)
+        return encoded.utf8.count > characterBudget || estimatedTokenCount(encoded) > tokenBudget
     }
 
-    private static func deduplicated(_ items: [AIReportChatItem]) -> [AIReportChatItem] {
+    private static func deduplicated(_ items: [AIReportChatItem], contentByID: [UUID: String]) -> [AIReportChatItem] {
         var seen = Set<String>()
         return Array(items.reversed().filter { item in
-            let key = "\(item.kind)|\(normalizedText(content(for: item)))"
+            let key = "\(item.kind)|\(normalizedText(contentByID[item.id] ?? ""))"
             return seen.insert(key).inserted
         }.reversed())
     }
 
-    private static func shouldInclude(_ item: AIReportChatItem) -> Bool {
+    private static func shouldInclude(_ item: AIReportChatItem, resolvedContent: String) -> Bool {
         guard item.kind != .assistant || AIChatDisclosurePolicy.shouldShowDisclosure(for: item.text ?? "") else {
             return false
         }
-        return !content(for: item).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.report != nil
+        return !resolvedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.report != nil
     }
 
     private static func removeDuplicatedCurrentQuestion(
@@ -225,13 +237,14 @@ enum AIFollowUpContextOrchestrator {
 
     private static func entry(
         for item: AIReportChatItem,
+        resolvedContent: String,
         contentLimit: Int
     ) -> AIFollowUpConversationEntry {
         AIFollowUpConversationEntry(
             id: item.id,
             kind: item.kind.rawValue,
             createdAt: item.createdAt,
-            content: truncate(content(for: item), limit: contentLimit)
+            content: truncate(resolvedContent, limit: contentLimit)
         )
     }
 
@@ -256,14 +269,13 @@ enum AIFollowUpContextOrchestrator {
 
     private static func relevanceScore(
         for item: AIReportChatItem,
-        question: String,
+        resolvedContent: String,
+        normalizedQuestion: String,
         questionTokens: Set<String>
     ) -> Int {
-        let content = content(for: item)
-        let contentTokens = relevanceTokens(content)
+        let contentTokens = relevanceTokens(resolvedContent)
         var score = questionTokens.intersection(contentTokens).count
-        let normalizedQuestion = normalizedText(question)
-        let normalizedContent = normalizedText(content)
+        let normalizedContent = normalizedText(resolvedContent)
         if normalizedContent.contains(normalizedQuestion) || normalizedQuestion.contains(normalizedContent) {
             score += 4
         }
@@ -290,20 +302,20 @@ enum AIFollowUpContextOrchestrator {
         return tokens
     }
 
-    private static func summary(for items: [AIReportChatItem]) -> AIFollowUpConversationSummary? {
+    private static func summary(for items: [AIReportChatItem], contentByID: [UUID: String]) -> AIFollowUpConversationSummary? {
         guard !items.isEmpty else { return nil }
         let userTopics = items
             .filter { $0.kind == .user }
             .suffix(4)
-            .map { truncate(content(for: $0), limit: 240) }
+            .map { truncate(contentByID[$0.id] ?? "", limit: 240) }
         let assistantConclusions = items
             .filter { $0.kind == .assistant }
             .suffix(4)
-            .map { truncate(content(for: $0), limit: 280) }
+            .map { truncate(contentByID[$0.id] ?? "", limit: 280) }
         let reportSummaries = items
             .filter { $0.kind == .report }
             .suffix(3)
-            .map { truncate(content(for: $0), limit: 320) }
+            .map { truncate(contentByID[$0.id] ?? "", limit: 320) }
         return AIFollowUpConversationSummary(
             omittedItemCount: items.count,
             periodStart: items.first?.createdAt,

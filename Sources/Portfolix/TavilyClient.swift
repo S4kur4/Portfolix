@@ -91,8 +91,8 @@ final class SearchProviderClient: WebSearching, @unchecked Sendable {
         bocha: BochaAIClient = .shared,
         parallel: ParallelSearchMCPClient = .shared,
         deepseek: DeepSeekSearchClient = .shared,
-        exa: AdditionalSearchAPIClient = AdditionalSearchAPIClient(provider: .exa),
-        anysearch: AdditionalSearchAPIClient = AdditionalSearchAPIClient(provider: .anysearch)
+        exa: AdditionalSearchAPIClient = .sharedExa,
+        anysearch: AdditionalSearchAPIClient = .sharedAnySearch
     ) {
         self.tavily = tavily
         self.bocha = bocha
@@ -146,9 +146,17 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
 
     private let endpoint = URL(string: "https://api.tavily.com/search")!
     private let session: URLSession
+    private let ownsSession: Bool
 
     init(session: URLSession? = nil) {
+        self.ownsSession = session == nil
         self.session = session ?? Self.makeDefaultSession()
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
+        }
     }
 
     static func makeDefaultSession() -> URLSession {
@@ -233,9 +241,12 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
             default:
                 throw TavilyClientError.serverError(httpResponse.statusCode)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as TavilyClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw TavilyClientError.requestFailed(error.localizedDescription)
         }
     }
@@ -381,7 +392,8 @@ final class TavilyClient: WebSearching, @unchecked Sendable {
     private static func containsInstructionLikeContent(_ value: String) -> Bool {
         let markers = [
             "ignore previous", "ignore all previous", "system prompt", "developer message",
-            "you are chatgpt", "api key", "忽略之前", "忽略以上", "系统提示词", "开发者消息",
+            "you are chatgpt", "api key:", "api key=", "reveal api key", "output api key",
+            "忽略之前", "忽略以上", "系统提示词", "开发者消息",
             "泄露密钥", "输出凭据",
         ]
         return markers.contains { value.localizedCaseInsensitiveContains($0) }
@@ -428,9 +440,17 @@ final class BochaAIClient: WebSearching, @unchecked Sendable {
 
     static let endpoint = URL(string: "https://api.bochaai.com/v1/web-search")!
     private let session: URLSession
+    private let ownsSession: Bool
 
     init(session: URLSession? = nil) {
+        self.ownsSession = session == nil
         self.session = session ?? TavilyClient.makeDefaultSession()
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
+        }
     }
 
     func search(
@@ -462,11 +482,14 @@ final class BochaAIClient: WebSearching, @unchecked Sendable {
             default:
                 throw BochaAIClientError.serverError(httpResponse.statusCode)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as BochaAIClientError {
             throw error
         } catch is DecodingError {
             throw BochaAIClientError.invalidResponse
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw BochaAIClientError.requestFailed(error.localizedDescription)
         }
     }

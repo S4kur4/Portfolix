@@ -52,7 +52,9 @@ enum AIFollowUpResponseParser {
             return .invalid(readablePrefix: nil)
         }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let payload = try? JSONDecoder().decode(LLMFollowUpPayload.self, from: Data(text.utf8)) {
+        let decoder = JSONDecoder()
+        if text.hasPrefix("{"),
+           let payload = try? decoder.decode(LLMFollowUpPayload.self, from: Data(text.utf8)) {
             return normalized(payload, depth: depth)
         }
         if let result = inspectTaggedAnswer(in: text, depth: depth) { return result }
@@ -68,7 +70,7 @@ enum AIFollowUpResponseParser {
         for span in spans.reversed() {
             let candidate = text[span.range]
             let payload = span.isComplete
-                ? try? JSONDecoder().decode(LLMFollowUpPayload.self, from: Data(candidate.utf8)) : nil
+                ? try? decoder.decode(LLMFollowUpPayload.self, from: Data(candidate.utf8)) : nil
             guard payload != nil || startsWithEnvelopeKey(candidate) else { continue }
             let suffix = text[span.range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
             let lineStart = text[..<span.range.lowerBound].lastIndex(of: "\n")
@@ -91,7 +93,7 @@ enum AIFollowUpResponseParser {
         ) != nil
         let beginsWithJSONKeyOrString = text.hasPrefix("\"") && (
             text.range(of: #"^"(?:answer|limitations)"\s*:"#, options: .regularExpression) != nil
-            || (try? JSONDecoder().decode(String.self, from: Data(text.utf8))) != nil
+            || (try? decoder.decode(String.self, from: Data(text.utf8))) != nil
         )
         guard beginsWithLink || (!["{", "[", "```json"].contains(where: { text.lowercased().hasPrefix($0) }) && !beginsWithJSONKeyOrString) else {
             return .invalid(readablePrefix: nil)

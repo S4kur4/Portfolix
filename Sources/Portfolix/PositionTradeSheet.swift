@@ -176,7 +176,7 @@ struct PositionTradeDetailSheet: View {
                 Section {
                     LabeledContent(text("资产", "Asset"), value: "\(record.asset.name) · \(record.asset.symbol)")
                     LabeledContent(text("交易类型", "Type"), value: record.side.title(language: store.appLanguage))
-                    LabeledContent(text("成交时间", "Trade Time"), value: record.effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
+                    LabeledContent(text("成交时间", "Trade Time"), value: record.effectiveAt.flatMap { PositionClosureMath.isoDate($0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
                     LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
                     LabeledContent(text("成交份额", "Quantity"), value: record.quantity)
                     LabeledContent(text("成交均价", "Trade Price"), value: formatMoney(record.price, currency: record.currency))

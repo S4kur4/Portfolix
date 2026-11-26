@@ -249,7 +249,7 @@ enum InvestmentDistributionEngine {
             for allocation in asset.allocations {
                 let domain = allocation.domain
                 guard allocation.weight.isFinite, allocation.weight > 0, allocation.weight <= 1,
-                      domain.id.range(of: #"^[a-z][a-z0-9_]{0,63}$"#, options: .regularExpression) != nil,
+                      Self.domainIDRegex.firstMatch(in: domain.id, range: NSRange(domain.id.startIndex..., in: domain.id)) != nil,
                       !domain.id.hasPrefix("category_"),
                       !isAssetType(domain), domain.id != unclassifiedDomain.id,
                       validTitle(domain.titleChinese), validTitle(domain.titleEnglish) else {
@@ -277,10 +277,14 @@ enum InvestmentDistributionEngine {
             && !AIFollowUpResponseParser.containsResponseEnvelope(title)
     }
 
+    private static let domainIDRegex = try! NSRegularExpression(pattern: #"^[a-z][a-z0-9_]{0,63}$"#)
+    private static let assetTypeLabels: Set<String> = Set(
+        AssetCategory.allCases.flatMap { [$0.title(language: .chinese).lowercased(), $0.title(language: .english).lowercased()] }
+            + ["基金", "股票", "债券基金", "fund", "funds", "etf", "cryptocurrency", "digital currency"]
+    )
+
     private static func isAssetType(_ domain: InvestmentDomain) -> Bool {
-        let types = Set(AssetCategory.allCases.flatMap { [$0.title(language: .chinese).lowercased(), $0.title(language: .english).lowercased()] }
-            + ["基金", "股票", "债券基金", "fund", "funds", "etf", "cryptocurrency", "digital currency"])
-        return types.contains(domain.titleChinese.lowercased()) || types.contains(domain.titleEnglish.lowercased())
+        assetTypeLabels.contains(domain.titleChinese.lowercased()) || assetTypeLabels.contains(domain.titleEnglish.lowercased())
     }
 
     private static func digest(_ components: [String]) -> String {
@@ -304,7 +308,7 @@ enum HoldingShareEngine {
         }
         let total = sorted.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
         guard total > 0 else { return [] }
-        let threshold = total * Decimal(string: "0.9")!
+        let threshold = total * Decimal(sign: .plus, exponent: -1, significand: 9)
         var covered: Decimal = 0
         var groups: [HoldingShareGroup] = []
         for position in sorted where covered < threshold {

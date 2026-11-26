@@ -68,14 +68,25 @@ actor MarketDataAdapter: AssetMarketDataProviding {
 
         if let cash = CashAssetLookup.stablecoins(keyword: keyword).first { return [cash] }
 
-        var candidates = try await native.searchAssets(keyword: keyword)
+        let searchOKX = Self.shouldSearchOKXAssets(keyword: keyword)
+        async let nativeTask: [AssetLookupCandidate] = native.searchAssets(keyword: keyword)
+        async let okxTask: Result<[AssetLookupCandidate], Error>? = {
+            guard searchOKX else { return nil }
+            do {
+                return .success(try await okx.searchAssets(keyword: keyword))
+            } catch {
+                return .failure(error)
+            }
+        }()
 
+        var candidates = try await nativeTask
         var errors: [Error] = []
 
-        if Self.shouldSearchOKXAssets(keyword: keyword) {
-            do {
-                candidates = try await okx.searchAssets(keyword: keyword) + candidates
-            } catch {
+        if let okxResult = await okxTask {
+            switch okxResult {
+            case let .success(okxCandidates):
+                candidates = okxCandidates + candidates
+            case let .failure(error):
                 errors.append(error)
             }
         }
@@ -183,16 +194,28 @@ actor NativeMarketDataAdapter: AssetMarketDataProviding {
         var candidates = Self.directSymbolCandidates(keyword: keyword)
         var errors: [Error] = []
 
-        do {
-            candidates.append(contentsOf: try await eastmoneySuggestCandidates(keyword: keyword))
-        } catch {
-            errors.append(error)
-        }
+        async let stockTask: Result<[AssetLookupCandidate], Error> = {
+            do {
+                return .success(try await eastmoneySuggestCandidates(keyword: keyword))
+            } catch {
+                return .failure(error)
+            }
+        }()
+        async let fundTask: Result<[AssetLookupCandidate], Error> = {
+            do {
+                return .success(try await fundSuggestCandidates(keyword: keyword))
+            } catch {
+                return .failure(error)
+            }
+        }()
 
-        do {
-            candidates.append(contentsOf: try await fundSuggestCandidates(keyword: keyword))
-        } catch {
-            errors.append(error)
+        switch await stockTask {
+        case let .success(items): candidates.append(contentsOf: items)
+        case let .failure(error): errors.append(error)
+        }
+        switch await fundTask {
+        case let .success(items): candidates.append(contentsOf: items)
+        case let .failure(error): errors.append(error)
         }
 
         let merged = Self.deduplicated(candidates).prefix(12).map { $0 }

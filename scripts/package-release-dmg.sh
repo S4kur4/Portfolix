@@ -56,6 +56,7 @@ if [[ ! -f "$BRAND_GLYPH_SOURCE" ]]; then
 fi
 
 rm -rf "$STAGING_DIR" "$APP_BUNDLE" "$TEMP_DMG_PATH" "$TEMP_DMG_PATH.sha256"
+trap 'rm -rf "$STAGING_DIR" "$TEMP_DMG_PATH"' EXIT
 mkdir -p "$MODULE_CACHE_DIR" "$SWIFTPM_CACHE_DIR"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES" "$APP_FRAMEWORKS" "$HELPER_MACOS" "$HELPER_RESOURCES" "$STAGING_DIR"
 
@@ -78,7 +79,7 @@ elif [[ "$SKIP_SWIFT_BUILD" == "1" ]]; then
     "$BUILD_DIR/x86_64-apple-macosx/release" \
     "$BUILD_DIR/release"
   do
-    if [[ -x "$candidate/$EXECUTABLE_NAME" && -x "$candidate/PortfolixPriceUpdater" ]]; then
+    if [[ -x "$candidate/$EXECUTABLE_NAME" && -x "$candidate/PortfolixPriceUpdater" && -x "$candidate/PortfolixMCP" ]]; then
       BIN_DIR="$candidate"
       break
     fi
@@ -118,7 +119,7 @@ xcrun actool \
   --platform macosx \
   --minimum-deployment-target "$MIN_SYSTEM_VERSION" \
   --app-icon "$ICON_NAME" \
-  --output-partial-info-plist "$APP_CONTENTS/Info.plist" \
+  --output-partial-info-plist "$STAGING_DIR/assetcatalog_generated_info.plist" \
   "$ICON_SOURCE"
 
 if [[ ! -s "$APP_RESOURCES/Assets.car" || ! -s "$APP_RESOURCES/$ICON_NAME.icns" ]]; then
@@ -218,6 +219,7 @@ sign_sparkle_framework() {
   sign_path "$version_dir/Autoupdate"
   sign_path "$version_dir/Updater.app"
   for xpc in "$version_dir"/XPCServices/*.xpc; do
+    [[ -e "$xpc" ]] || continue
     sign_path "$xpc"
   done
   sign_path "$framework"

@@ -48,7 +48,7 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
 
     var isReversed: Bool { reversedAt != nil }
     var actualDate: Date {
-        effectiveAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? PositionClosureMath.date(tradeDate) ?? .distantPast
+        effectiveAt.flatMap { PositionClosureMath.isoDate($0) } ?? PositionClosureMath.date(tradeDate) ?? .distantPast
     }
     static func precedes(_ lhs: Self, _ rhs: Self) -> Bool {
         lhs.actualDate == rhs.actualDate ? lhs.sequence < rhs.sequence : lhs.actualDate < rhs.actualDate
@@ -91,9 +91,9 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
         }
         guard sequence > 0, sequence < Int.max,
               PositionClosureMath.date(tradeDate) != nil,
-              let timestamp = ISO8601DateFormatter().date(from: recordedAt),
+              let timestamp = PositionClosureMath.isoDate(recordedAt),
               tradeDate <= PositionClosureMath.day(timestamp),
-              reversedAt == nil || ISO8601DateFormatter().date(from: reversedAt!) != nil,
+              reversedAt == nil || PositionClosureMath.isoDate(reversedAt!) != nil,
               let units = PositionClosureMath.decimal(quantity), units > 0,
               let price = PositionClosureMath.decimal(executionPrice), price >= 0,
               let fee = PositionClosureMath.decimal(fees), fee >= 0,
@@ -108,9 +108,9 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
             throw PositionTradeError.invalidInput
         }
         if let effectiveAt {
-            guard let effective = ISO8601DateFormatter().date(from: effectiveAt),
+            guard let effective = PositionClosureMath.isoDate(effectiveAt),
                   PositionClosureMath.day(effective) == tradeDate,
-                  let recorded = ISO8601DateFormatter().date(from: recordedAt), effective <= recorded else {
+                  effective <= timestamp else {
                 throw PositionTradeError.invalidInput
             }
         }
@@ -321,11 +321,18 @@ struct PositionTransactionRow: Identifiable {
     @MainActor var recordedClockText: String { recordedAt.map(Self.clockFormatter.string(from:)) ?? "—" }
     @MainActor var recordedTimeText: String { "\(recordedDateText) \(recordedClockText)" }
 
-    private static func recordedDate(_ value: String) -> Date? {
+    private static let isoLock = NSLock()
+    private nonisolated(unsafe) static let isoFractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: value) { return date }
         formatter.formatOptions.insert(.withFractionalSeconds)
-        return formatter.date(from: value)
+        return formatter
+    }()
+
+    private static func recordedDate(_ value: String) -> Date? {
+        if let date = PositionClosureMath.isoDate(value) { return date }
+        isoLock.lock()
+        defer { isoLock.unlock() }
+        return isoFractionalFormatter.date(from: value)
     }
 
     @MainActor private static let dayFormatter = formatter("yyyy-MM-dd")

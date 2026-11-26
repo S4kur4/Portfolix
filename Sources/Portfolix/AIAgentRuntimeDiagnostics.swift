@@ -3,7 +3,7 @@ import OSLog
 
 enum AIAgentRuntimeDiagnostics {
     private static let debugLogURL = URL(fileURLWithPath: "/private/tmp/portfolix-agent-runtime.log")
-    private static let debugLogLock = NSLock()
+    private static let debugLogQueue = DispatchQueue(label: "app.portfolix.agent-runtime-log", qos: .utility)
     private static let logger = Logger(
         subsystem: "app.portfolix.mac",
         category: "AgentRuntime"
@@ -30,19 +30,17 @@ enum AIAgentRuntimeDiagnostics {
 
 #if DEBUG
     private static func appendDebugLog(_ message: String) {
-        debugLogLock.lock()
-        defer { debugLogLock.unlock() }
-
-        let timestamp = ISO8601DateFormatter().string(from: .now)
+        let timestamp = PositionClosureMath.isoTimestamp(.now)
         guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
-        if !FileManager.default.fileExists(atPath: debugLogURL.path) {
-            FileManager.default.createFile(atPath: debugLogURL.path, contents: nil)
+        debugLogQueue.async {
+            if !FileManager.default.fileExists(atPath: debugLogURL.path) {
+                FileManager.default.createFile(atPath: debugLogURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: debugLogURL) else { return }
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
         }
-        guard let handle = try? FileHandle(forWritingTo: debugLogURL) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: data)
-        try? handle.synchronize()
     }
 #endif
 

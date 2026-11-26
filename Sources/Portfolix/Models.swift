@@ -378,10 +378,6 @@ struct Position: Identifiable, Sendable {
         return calendar.isDate(fetchedDate, inSameDayAs: date)
     }
 
-    private var fetchedDateText: String? {
-        fetchedDateText(language: .chinese)
-    }
-
     private func fetchedDateText(language: AppLanguage) -> String? {
         guard let date = Self.isoDate(from: fetchedAt) else { return nil }
         return language == .english
@@ -840,12 +836,10 @@ final class PortfolioStore {
             pruneAIAnalysisChatHistory()
         }
     }
-    @ObservationIgnored var investmentProfileExposureCache: [AssetExposureProfile] = []
     private var aiInvestmentDistribution: AIInvestmentDistribution?
     private(set) var isUpdatingInvestmentDistribution = false
     @ObservationIgnored private var investmentDistributionTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledDistributionRefresh: Task<Void, Never>?
-    @ObservationIgnored private var activeDistributionRequest: String?
     @ObservationIgnored private var activeDistributionRequestID: UUID?
 
     var positions: [Position] {
@@ -886,7 +880,6 @@ final class PortfolioStore {
     private static let riskLiquidityMinimumSettingKey = RiskProfilePersistence.liquidityMinimumKey
     private static let riskProfileUpdatedAtSettingKey = RiskProfilePersistence.updatedAtKey
     private static let latestAIReportDefaultsKey = "portfolix.ai.latestReport"
-    private static let latestAIInvestmentProfileDefaultsKey = "portfolix.ai.latestInvestmentProfile"
     private static let aiChatRetentionDefaultsKey = "portfolix.ai.chatRetention"
     private static let aiAnalysisGenerationTimeoutNanoseconds = UInt64(
         AIAgentExecutionBudget.production.totalSeconds * 1_000_000_000
@@ -1005,8 +998,9 @@ final class PortfolioStore {
             let repository = try positionRepository ?? PositionRepository()
             if positionRepository == nil {
                 try repository.initializeStarterPortfolioIfNeeded(language: resolvedLanguage)
+            } else {
+                try repository.migrateOpeningBalances()
             }
-            try repository.migrateOpeningBalances()
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
             loadedDailyProfitHistory = try repository.fetchDailyProfitPoints()
@@ -1020,8 +1014,11 @@ final class PortfolioStore {
             try repository.deleteExpiredAIAnalysisContent(before: cutoff)
             let storedChatItems = try repository.fetchAIAnalysisChatItems(since: cutoff)
             loadedChatItems = storedChatItems.map { $0.migratingLegacyPromptText() }
-            for (stored, migrated) in zip(storedChatItems, loadedChatItems) where stored != migrated {
-                try repository.upsertAIAnalysisChatItem(migrated)
+            let migratedItems = zip(storedChatItems, loadedChatItems).compactMap { stored, migrated in
+                stored != migrated ? migrated : nil
+            }
+            if !migratedItems.isEmpty {
+                try repository.upsertAIAnalysisChatItems(migratedItems)
             }
             activeRepository = repository
         } catch {
@@ -1058,8 +1055,6 @@ final class PortfolioStore {
         }
         removePersistedAIAnalysisReportIfExpired(cutoff: savedChatRetentionPeriod.cutoffDate())
         bootstrapAIChatThreads(loadedChatItems: loadedChatItems, cutoff: savedChatRetentionPeriod.cutoffDate())
-        // Reuse only historical asset exposure evidence; the retired radar scores are never requested.
-        investmentProfileExposureCache = usesLegacyAIReportCache ? Self.savedAIInvestmentProfile()?.assetExposures ?? [] : []
         if let json = try? activeRepository?.appSetting(for: InvestmentDistributionEngine.cacheKey),
            json.utf8.count <= 10_000_000, let data = json.data(using: .utf8) {
             let decoder = JSONDecoder()
@@ -1624,8 +1619,6 @@ final class PortfolioStore {
             positions = try positionRepository.fetchPositions()
             positionOpeningBalances = try positionRepository.fetchOpeningBalances()
             starterPositionIDs = try positionRepository.starterPositionIDs()
-            snapshotHistory = try positionRepository.fetchPortfolioSnapshots()
-            dailyProfitHistory = try positionRepository.fetchDailyProfitPoints()
         } else {
             positions.removeAll { positionIDs.contains($0.id) }
         }
@@ -1918,10 +1911,7 @@ final class PortfolioStore {
         let parsedItems = AIMemoryPolicy.items(fromSummary: sanitized)
         aiMemoryItems = parsedItems
         do {
-            try positionRepository?.deleteAllAIMemoryItems()
-            for item in parsedItems {
-                try positionRepository?.upsertAIMemoryItem(item)
-            }
+            try positionRepository?.replaceAIMemoryItems(parsedItems)
         } catch {
             persistenceErrorMessage = "保存投研记忆失败：\(error.localizedDescription)"
         }
@@ -1982,9 +1972,13 @@ final class PortfolioStore {
         aiMemoryItems = []
         aiMemorySummary = ""
         persistAppSetting(key: Self.aiMemorySummarySettingKey, value: "")
+        var updatedChatItems: [AIReportChatItem] = []
         for index in aiAnalysisChatItems.indices where aiAnalysisChatItems[index].extractedMemories != nil {
             aiAnalysisChatItems[index].extractedMemories = nil
-            try? positionRepository?.upsertAIAnalysisChatItem(aiAnalysisChatItems[index], threadID: activeAIChatThreadID)
+            updatedChatItems.append(aiAnalysisChatItems[index])
+        }
+        if !updatedChatItems.isEmpty {
+            try? positionRepository?.upsertAIAnalysisChatItems(updatedChatItems, threadID: activeAIChatThreadID)
         }
         do {
             try positionRepository?.deleteAllAIMemoryItems()
@@ -3327,7 +3321,6 @@ final class PortfolioStore {
         let requestPositions = InvestmentDistributionEngine.pendingPositions(positions, cache: aiInvestmentDistribution, force: force)
         guard !requestPositions.isEmpty else { return }
         let requestID = UUID()
-        activeDistributionRequest = fingerprint
         activeDistributionRequestID = requestID
         isUpdatingInvestmentDistribution = true
         let configuration = aiConfiguration
@@ -3402,7 +3395,6 @@ final class PortfolioStore {
 
     private func finishInvestmentDistributionRequest(_ requestID: UUID) {
         guard activeDistributionRequestID == requestID else { return }
-        activeDistributionRequest = nil
         activeDistributionRequestID = nil
         isUpdatingInvestmentDistribution = false
     }
@@ -3411,7 +3403,6 @@ final class PortfolioStore {
         scheduledDistributionRefresh?.cancel()
         scheduledDistributionRefresh = nil
         investmentDistributionTask?.cancel()
-        activeDistributionRequest = nil
         activeDistributionRequestID = nil
         isUpdatingInvestmentDistribution = false
     }
@@ -3421,15 +3412,6 @@ final class PortfolioStore {
             await scheduledDistributionRefresh?.value
             await investmentDistributionTask?.value
         } while scheduledDistributionRefresh != nil || activeDistributionRequestID != nil
-    }
-
-    private static func savedAIInvestmentProfile() -> AIInvestmentProfile? {
-        guard let data = UserDefaults.standard.data(forKey: latestAIInvestmentProfileDefaultsKey) else {
-            return nil
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(AIInvestmentProfile.self, from: data)
     }
 
     func synchronizePersistedMarketDataIfNeeded() {
@@ -3561,10 +3543,15 @@ final class PortfolioStore {
     private func prepareMarketDataForAIAnalysis() async {
         if isRefreshing {
             let deadline = Date().addingTimeInterval(30)
-            while isRefreshing, Date() < deadline {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+            while isRefreshing, !Task.isCancelled, Date() < deadline {
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    return
+                }
             }
         }
+        guard !Task.isCancelled else { return }
         synchronizePersistedMarketDataIfNeeded()
     }
 

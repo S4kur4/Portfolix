@@ -248,7 +248,6 @@ struct AIAdvisorPersonaSheet: View {
         }
         .frame(width: sheetWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .environment(\.portfolixFormGlass, true)
         .background { PortfolixSheetBackground() }
         .onExitCommand { dismiss() }
         .onAppear {
@@ -329,7 +328,6 @@ struct AIMemoryManagerSheet: View {
         }
         .frame(width: sheetWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .environment(\.portfolixFormGlass, true)
         .background { PortfolixSheetBackground() }
         .onExitCommand { dismiss() }
         .onAppear {
@@ -465,11 +463,22 @@ struct AIReportThreadsPopover: View {
         .frame(width: 300)
     }
 
-    private func relativeDateText(_ date: Date) -> String {
+    private static let todayFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: language == .english ? "en_US_POSIX" : "zh_CN")
-        formatter.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "MM/dd"
-        return formatter.string(from: date)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    private static let monthDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MM/dd"
+        return formatter
+    }()
+
+    private func relativeDateText(_ date: Date) -> String {
+        (Calendar.current.isDateInToday(date) ? Self.todayFormatter : Self.monthDayFormatter).string(from: date)
     }
 }
 

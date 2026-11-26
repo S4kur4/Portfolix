@@ -8,12 +8,10 @@ BUILD_NUMBER="27"
 COPYRIGHT_TEXT="Copyright © 2026 S4kur4. All rights reserved."
 SPARKLE_FEED_URL="${PORTFOLIX_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/S4kur4/Portfolix/main/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${PORTFOLIX_SPARKLE_PUBLIC_ED_KEY:-BX7U6Nmwk+IBB5lluFk8rJ3KFopJfeYJS7DFOR+wqZM=}"
-EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/Portfolix"
-HELPER_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixPriceUpdater"
-MCP_EXECUTABLE="$BUILD_DIR/arm64-apple-macosx/debug/PortfolixMCP"
 APP_DIR="$BUILD_DIR/Portfolix.app"
 APP_FRAMEWORKS_DIR="$APP_DIR/Contents/Frameworks"
 HELPER_APP_DIR="$APP_DIR/Contents/Library/LoginItems/PortfolixPriceUpdater.app"
+BRAND_GLYPH_SOURCE="$ROOT_DIR/Resources/PortfolixBrandGlyph.svg"
 SPARKLE_FRAMEWORK_SOURCE="$BUILD_DIR/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 
 if [[ "${1:-}" != "--skip-build" ]]; then
@@ -25,6 +23,24 @@ if [[ "${1:-}" != "--skip-build" ]]; then
       --scratch-path "$BUILD_DIR" \
       --cache-path "$BUILD_DIR/SwiftPMCache"
 fi
+
+BIN_DIR=""
+for candidate in \
+  "$BUILD_DIR/arm64-apple-macosx/debug" \
+  "$BUILD_DIR/x86_64-apple-macosx/debug" \
+  "$BUILD_DIR/debug"
+do
+  if [[ -x "$candidate/Portfolix" && -x "$candidate/PortfolixPriceUpdater" && -x "$candidate/PortfolixMCP" ]]; then
+    BIN_DIR="$candidate"
+    break
+  fi
+done
+if [[ -z "$BIN_DIR" ]]; then
+  BIN_DIR="$(swift build --package-path "$ROOT_DIR" --scratch-path "$BUILD_DIR" --show-bin-path 2>/dev/null || print "$BUILD_DIR/arm64-apple-macosx/debug")"
+fi
+EXECUTABLE="$BIN_DIR/Portfolix"
+HELPER_EXECUTABLE="$BIN_DIR/PortfolixPriceUpdater"
+MCP_EXECUTABLE="$BIN_DIR/PortfolixMCP"
 
 if [[ ! -x "$EXECUTABLE" ]]; then
   print -u2 "Missing executable: $EXECUTABLE"
@@ -44,6 +60,9 @@ mkdir -p "$HELPER_APP_DIR/Contents/MacOS" "$HELPER_APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/Support/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Portfolix"
 cp "$MCP_EXECUTABLE" "$APP_DIR/Contents/MacOS/PortfolixMCP"
+if [[ -f "$BRAND_GLYPH_SOURCE" ]]; then
+  cp "$BRAND_GLYPH_SOURCE" "$APP_DIR/Contents/Resources/PortfolixBrandGlyph.svg"
+fi
 /usr/bin/install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/Portfolix" 2>/dev/null || true
 
 if [[ -d "$SPARKLE_FRAMEWORK_SOURCE" ]]; then
@@ -106,6 +125,7 @@ sign_sparkle_framework() {
   sign_path "$version_dir/Autoupdate"
   sign_path "$version_dir/Updater.app"
   for xpc in "$version_dir"/XPCServices/*.xpc; do
+    [[ -e "$xpc" ]] || continue
     sign_path "$xpc"
   done
   sign_path "$framework"

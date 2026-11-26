@@ -86,9 +86,7 @@ struct DeepSeekSearchTests {
     func plannersIncludeNewSearchAndExcludeRetiredRadarTask() throws {
         #expect(AIAnalysisPromptText.followUpToolPlanningSystem.contains("deepseek_search"))
         #expect(AIAnalysisPromptText.toolPlanningSystem.contains("deepseek_search"))
-        #expect(AIAnalysisPromptText.investmentProfilePlanningSystem.contains("DeepSeek"))
-        #expect(!AIAnalysisPromptText.investmentProfilePlanningSystem.contains("投资画像"))
-        #expect(!AIAnalysisPromptText.investmentProfileExposureSystem.contains("投资画像"))
+        #expect(!AIAnalysisPromptText.investmentDistributionSystem.contains("投资画像"))
         let plan = AIWebSearchToolPlan(toolCalls: [AIWebSearchToolCall(id: "search_1", query: "gold market latest news", positionRefs: [], provider: .deepseek)], status: "continue", limitations: [])
         let validated = try AIAnalysisAgent.validatedToolPlan(plan, allowedRefs: [], allowsGeneralQueries: true, allowedProviders: [.deepseek])
         #expect(validated.toolCalls.first?.provider == .deepseek)

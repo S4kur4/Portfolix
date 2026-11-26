@@ -68,6 +68,10 @@ final class HoverHelpView: NSView {
     private var observers: [NSObjectProtocol] = []
     private var eventMonitor: Any?
 
+    isolated deinit {
+        dismissTooltip()
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func updateTrackingAreas() {
@@ -119,7 +123,7 @@ final class HoverHelpView: NSView {
               !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
               !requirePointerInside || isPointerInsideVisibleBounds(in: window),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let appearance = NSApp.appearance ?? window.effectiveAppearance
+        let appearance = NSApp?.appearance ?? window.effectiveAppearance
         let colorScheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
         let host = NSHostingView(rootView: HelpTooltipBubble(text: text).environment(\.colorScheme, colorScheme))
         host.appearance = appearance

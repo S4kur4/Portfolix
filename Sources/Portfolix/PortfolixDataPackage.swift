@@ -381,22 +381,21 @@ enum PortfolixDataPackageService {
         let immutableArchiveURL = temporaryDirectory.appendingPathComponent("import.zip")
         try archiveData.write(to: immutableArchiveURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: immutableArchiveURL.path)
-        _ = try runArchiveTool(
-            executable: "/usr/bin/unzip",
-            arguments: ["-qq", immutableArchiveURL.path] + archiveEntryNames.sorted() + ["-d", temporaryDirectory.path]
-        )
 
         var fileData: [String: Data] = [:]
+        var totalExtractedBytes = 0
         for entry in archiveEntries {
-            let fileURL = temporaryDirectory.appendingPathComponent(entry.name)
-            let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true,
-                  values.isSymbolicLink != true,
-                  values.fileSize == entry.uncompressedSize
-            else {
+            let remainingBudget = maximumUncompressedSize - totalExtractedBytes
+            guard entry.uncompressedSize <= remainingBudget else {
                 throw PortfolixDataPackageError.invalidPackage("压缩包包含无效文件")
             }
-            fileData[entry.name] = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+            let extracted = try extractArchiveEntryBounded(
+                archiveURL: immutableArchiveURL,
+                entryName: entry.name,
+                expectedSize: entry.uncompressedSize
+            )
+            totalExtractedBytes += extracted.count
+            fileData[entry.name] = extracted
         }
 
         let manifest: PortfolixDataPackage.ArchiveManifest
@@ -701,6 +700,64 @@ enum PortfolixDataPackageService {
         return data
     }
 
+    private static let validationLock = NSLock()
+    private nonisolated(unsafe) static let isoTimestampValidator = ISO8601DateFormatter()
+    private static let gregorianCalendar = Calendar(identifier: .gregorian)
+
+    private static func extractArchiveEntryBounded(
+        archiveURL: URL,
+        entryName: String,
+        expectedSize: Int
+    ) throws -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-p", "-qq", archiveURL.path, entryName]
+        process.environment = archiveToolEnvironment()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+        } catch {
+            throw PortfolixDataPackageError.archiveOperationFailed(error.localizedDescription)
+        }
+
+        let reader = outputPipe.fileHandleForReading
+        var data = Data()
+        data.reserveCapacity(min(expectedSize, 4 * 1024 * 1024))
+        var exceededLimit = false
+        while true {
+            let chunk = try reader.read(upToCount: 65_536) ?? Data()
+            if chunk.isEmpty { break }
+            if data.count + chunk.count > expectedSize {
+                exceededLimit = true
+                process.terminate()
+                break
+            }
+            data.append(chunk)
+        }
+        try? reader.close()
+        process.waitUntilExit()
+
+        if exceededLimit {
+            throw PortfolixDataPackageError.invalidPackage("压缩包包含无效文件")
+        }
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: errorData.prefix(4_096), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw PortfolixDataPackageError.archiveOperationFailed(
+                message?.isEmpty == false ? message! : "系统压缩工具返回错误"
+            )
+        }
+        guard data.count == expectedSize else {
+            throw PortfolixDataPackageError.invalidPackage("压缩包包含无效文件")
+        }
+        return data
+    }
+
     @discardableResult
     private static func runArchiveTool(
         executable: String,
@@ -772,23 +829,32 @@ enum PortfolixDataPackageService {
     }
 
     private static func validateTimestamp(_ value: String, field: String) throws {
-        guard ISO8601DateFormatter().date(from: value) != nil else {
+        let valid = validationLock.withLock {
+            isoTimestampValidator.date(from: value) != nil
+        }
+        guard valid else {
             throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效时间")
         }
     }
 
     private static func validateDay(_ value: String, field: String) throws {
-        let components = value.split(separator: "-").compactMap { Int($0) }
-        guard components.count == 3,
-              let date = Calendar(identifier: .gregorian).date(
-                  from: DateComponents(year: components[0], month: components[1], day: components[2])
-              )
-        else {
+        guard value.utf8.count == 10 else {
             throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效日期")
         }
-        let normalized = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
-        let formatted = String(format: "%04d-%02d-%02d", normalized.year ?? 0, normalized.month ?? 0, normalized.day ?? 0)
-        guard formatted == value else {
+        let components = value.split(separator: "-").compactMap { Int($0) }
+        guard components.count == 3 else {
+            throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效日期")
+        }
+        let valid = validationLock.withLock {
+            guard let date = gregorianCalendar.date(
+                from: DateComponents(year: components[0], month: components[1], day: components[2])
+            ) else { return false }
+            let normalized = gregorianCalendar.dateComponents([.year, .month, .day], from: date)
+            return normalized.year == components[0]
+                && normalized.month == components[1]
+                && normalized.day == components[2]
+        }
+        guard valid else {
             throw PortfolixDataPackageError.invalidPackage("\(field) 不是有效日期")
         }
     }

@@ -64,22 +64,35 @@ final class PositionRepository {
 
         database = handle
         try configure()
-        try transaction {
-            let schemaStatement = try prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
-            let schemaStatus = sqlite3_step(schemaStatement)
-            sqlite3_finalize(schemaStatement)
-            guard schemaStatus == SQLITE_ROW || schemaStatus == SQLITE_DONE else {
-                throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+        let currentVersion = try readSchemaVersion()
+        if currentVersion < Self.currentSchemaVersion {
+            try transaction {
+                let schemaStatement = try prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
+                let schemaStatus = sqlite3_step(schemaStatement)
+                sqlite3_finalize(schemaStatement)
+                guard schemaStatus == SQLITE_ROW || schemaStatus == SQLITE_DONE else {
+                    throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+                }
+                let hasExistingSchema = schemaStatus == SQLITE_ROW
+                try migrate()
+                // Persist eligibility before the UI starts, including when a helper opens the file first.
+                if isNewDatabase && !hasExistingSchema {
+                    try setAppSetting(key: StarterPortfolio.stateKey, value: "pending")
+                }
+                try execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
-            let hasExistingSchema = schemaStatus == SQLITE_ROW
-            try migrate()
-            // Persist eligibility before the UI starts, including when a helper opens the file first.
-            if isNewDatabase && !hasExistingSchema {
-                try setAppSetting(key: StarterPortfolio.stateKey, value: "pending")
-            }
+            try applyDatabaseFilePermissions()
         }
         try migrateOpeningBalances()
-        try applyDatabaseFilePermissions()
+    }
+
+    private static let currentSchemaVersion: Int32 = 2
+
+    private func readSchemaVersion() throws -> Int32 {
+        let statement = try prepare("PRAGMA user_version")
+        defer { sqlite3_finalize(statement) }
+        guard try stepRow(statement) else { return 0 }
+        return sqlite3_column_int(statement, 0)
     }
 
     deinit {
@@ -117,6 +130,7 @@ final class PositionRepository {
     }
 
     func fetchPositions() throws -> [Position] {
+        let now = Date()
         let statement = try prepare(
             """
             SELECT
@@ -132,8 +146,7 @@ final class PositionRepository {
                 q.source,
                 q.quote_time,
                 q.fetched_at,
-                q.freshness,
-                q.weekly_trend_json
+                q.freshness
             FROM positions p
             JOIN assets a ON a.id = p.asset_id
             JOIN latest_quotes q ON q.asset_id = a.id
@@ -142,10 +155,28 @@ final class PositionRepository {
         )
         defer { sqlite3_finalize(statement) }
 
-        let costStates = Dictionary(grouping: try fetchReconciliations().filter { !$0.isReversed }, by: { $0.asset.id }).mapValues { $0.max { $0.sequence < $1.sequence }!.costKnown }
+        let activeReconciliations = try fetchReconciliations().filter { !$0.isReversed }
+        var costStates: [String: Bool] = [:]
+        var costSequences: [String: Int] = [:]
+        for record in activeReconciliations {
+            if record.sequence > (costSequences[record.asset.id] ?? Int.min) {
+                costSequences[record.asset.id] = record.sequence
+                costStates[record.asset.id] = record.costKnown
+            }
+        }
+        let weeklyTrends = try fetchWeeklyTrendsByAsset(asOf: now)
+        let dailyBaselines = try fetchDailyPriceBaselinesByAsset(asOf: now)
+
         var positions: [Position] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            positions.append(try position(from: statement, knownCost: costStates[text(at: 0, in: statement)] ?? true))
+        while try stepRow(statement) {
+            let assetID = text(at: 0, in: statement)
+            positions.append(try position(
+                from: statement,
+                knownCost: costStates[assetID] ?? true,
+                preloadedWeeklyTrend: weeklyTrends[assetID],
+                preloadedBaseline: dailyBaselines[assetID],
+                usesPreloadedLookups: true
+            ))
         }
         return positions
     }
@@ -1411,7 +1442,7 @@ final class PositionRepository {
         try bind(Self.timestamp(from: cutoff), to: 1, in: statement)
 
         var threads: [AIChatThread] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try stepRow(statement) {
             guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
             let title = text(at: 1, in: statement)
             let createdAt = Self.date(from: text(at: 2, in: statement)) ?? .now
@@ -1471,7 +1502,7 @@ final class PositionRepository {
         )
         defer { sqlite3_finalize(statement) }
         var items: [AIMemoryItem] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try stepRow(statement) {
             guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
             let category = AIMemoryCategory(rawValue: text(at: 1, in: statement)) ?? .preference
             let content = text(at: 2, in: statement)
@@ -1525,6 +1556,47 @@ final class PositionRepository {
 
     func deleteAllAIMemoryItems() throws {
         try execute("DELETE FROM ai_memory_items")
+    }
+
+    func replaceAIMemoryItems(_ items: [AIMemoryItem]) throws {
+        try transaction {
+            try execute("DELETE FROM ai_memory_items")
+            guard !items.isEmpty else { return }
+            let statement = try prepare(
+                """
+                INSERT INTO ai_memory_items (id, category, content, related_asset, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    category = excluded.category,
+                    content = excluded.content,
+                    related_asset = excluded.related_asset,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """
+            )
+            defer { sqlite3_finalize(statement) }
+            for item in items {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try bind(item.id.uuidString, to: 1, in: statement)
+                try bind(item.category.rawValue, to: 2, in: statement)
+                try bind(item.content, to: 3, in: statement)
+                try bindOptional(item.relatedAsset, to: 4, in: statement)
+                try bind(item.source.rawValue, to: 5, in: statement)
+                try bind(Self.timestamp(from: item.createdAt), to: 6, in: statement)
+                try bind(Self.timestamp(from: item.updatedAt), to: 7, in: statement)
+                try stepDone(statement)
+            }
+        }
+    }
+
+    func upsertAIAnalysisChatItems(_ items: [AIReportChatItem], threadID: UUID? = nil) throws {
+        guard !items.isEmpty else { return }
+        try transaction {
+            for item in items {
+                try upsertAIAnalysisChatItem(item, threadID: threadID ?? item.threadID)
+            }
+        }
     }
 
     func deleteAIAnalysisChatItems(before cutoff: Date) throws {
@@ -2070,6 +2142,36 @@ final class PositionRepository {
             ON ai_analysis_chat_messages(created_at)
             """
         )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_started
+            ON ai_analysis_runs(started_at)
+            """
+        )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_reports_run
+            ON ai_analysis_reports(run_id)
+            """
+        )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_sources_run
+            ON ai_analysis_sources(run_id)
+            """
+        )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_sources_report
+            ON ai_analysis_sources(report_id)
+            """
+        )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_guardrail_results_run
+            ON ai_guardrail_results(run_id)
+            """
+        )
     }
 
     private func save(_ position: Position, operation: String) throws {
@@ -2310,11 +2412,17 @@ final class PositionRepository {
         )
         defer { sqlite3_finalize(statement) }
         try bind(id.uuidString, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        guard try stepRow(statement) else { return nil }
         return try position(from: statement)
     }
 
-    private func position(from statement: OpaquePointer, knownCost: Bool? = nil) throws -> Position {
+    private func position(
+        from statement: OpaquePointer,
+        knownCost: Bool? = nil,
+        preloadedWeeklyTrend: [Double]? = nil,
+        preloadedBaseline: PositionDailyPriceBaseline? = nil,
+        usesPreloadedLookups: Bool = false
+    ) throws -> Position {
         guard
             let id = UUID(uuidString: text(at: 0, in: statement)),
             let category = AssetCategory(rawValue: text(at: 3, in: statement)),
@@ -2328,7 +2436,16 @@ final class PositionRepository {
             throw PositionRepositoryError.invalidStoredData("无法解析持仓记录")
         }
 
-        let weeklyTrend = try weeklyTrend(for: id, latestPrice: latestPrice)
+        let resolvedWeeklyTrend: [Double]
+        if usesPreloadedLookups {
+            resolvedWeeklyTrend = (preloadedWeeklyTrend?.isEmpty == false) ? preloadedWeeklyTrend! : [latestPrice.doubleValue]
+        } else {
+            resolvedWeeklyTrend = try weeklyTrend(for: id, latestPrice: latestPrice)
+        }
+        let resolvedBaseline: PositionDailyPriceBaseline? = usesPreloadedLookups
+            ? preloadedBaseline
+            : try dailyPriceBaseline(for: id)
+
         return Position(
             id: id,
             name: text(at: 1, in: statement),
@@ -2346,14 +2463,83 @@ final class PositionRepository {
                 quoteCurrency: currency
             ),
             profitRate: averageCost == 0 ? 0 : (latestPrice - averageCost) / averageCost * 100,
-            weeklyTrend: weeklyTrend,
+            weeklyTrend: resolvedWeeklyTrend,
             source: normalizedQuoteSource(text(at: 9, in: statement), category: category),
             quoteTime: text(at: 10, in: statement),
             fetchedAt: text(at: 11, in: statement),
             freshness: freshness,
-            dailyPriceBaseline: try dailyPriceBaseline(for: id),
+            dailyPriceBaseline: resolvedBaseline,
             costIsKnown: try knownCost ?? costIsKnown(for: id)
         )
+    }
+
+    private func fetchDailyPriceBaselinesByAsset(asOf date: Date) throws -> [String: PositionDailyPriceBaseline] {
+        let day = Self.dayString(from: date)
+        let statement = try prepare(
+            """
+            SELECT s.asset_id, s.latest_price, s.quantity, s.market_value_cny
+            FROM (
+                SELECT asset_id, MAX(snapshot_date) AS prev_date
+                FROM asset_price_snapshots
+                WHERE snapshot_date < ?
+                  AND asset_id IN (SELECT asset_id FROM positions)
+                GROUP BY asset_id
+            ) prev
+            JOIN asset_price_snapshots s
+              ON s.asset_id = prev.asset_id AND s.snapshot_date = prev.prev_date
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(day, to: 1, in: statement)
+
+        var baselines: [String: PositionDailyPriceBaseline] = [:]
+        while try stepRow(statement) {
+            let assetID = text(at: 0, in: statement)
+            guard let price = Decimal(string: text(at: 1, in: statement)) else {
+                throw PositionRepositoryError.invalidStoredData("无法解析当日收益参考价格")
+            }
+            let quantity = Decimal(string: text(at: 2, in: statement)) ?? 0
+            let value = Decimal(string: text(at: 3, in: statement)) ?? 0
+            baselines[assetID] = PositionDailyPriceBaseline(
+                day: day,
+                price: price,
+                unitValueCNY: quantity > 0 ? value / quantity : nil
+            )
+        }
+        return baselines
+    }
+
+    private func fetchWeeklyTrendsByAsset(asOf date: Date) throws -> [String: [Double]] {
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -6, to: date) ?? date
+        let cutoffDay = Self.dayString(from: cutoffDate)
+        let statement = try prepare(
+            """
+            SELECT asset_id, latest_price
+            FROM asset_price_snapshots
+            WHERE snapshot_date >= ?
+              AND asset_id IN (SELECT asset_id FROM positions)
+            ORDER BY asset_id ASC, snapshot_date ASC
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(cutoffDay, to: 1, in: statement)
+
+        var trends: [String: [Double]] = [:]
+        while try stepRow(statement) {
+            let assetID = text(at: 0, in: statement)
+            guard let price = Decimal(string: text(at: 1, in: statement)) else {
+                throw PositionRepositoryError.invalidStoredData("无法解析资产价格快照")
+            }
+            trends[assetID, default: []].append(price.doubleValue)
+        }
+        return trends
+    }
+
+    private func stepRow(_ statement: OpaquePointer) throws -> Bool {
+        let status = sqlite3_step(statement)
+        if status == SQLITE_ROW { return true }
+        if status == SQLITE_DONE { return false }
+        throw currentError()
     }
 
     private func dailyPriceBaseline(for assetID: UUID, asOf date: Date = .now) throws -> PositionDailyPriceBaseline? {

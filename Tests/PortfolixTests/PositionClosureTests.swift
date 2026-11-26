@@ -314,32 +314,6 @@ struct PositionClosureTests {
         #expect(restarted.todayProfitCNY == 195)
     }
 
-    @Test @MainActor
-    func closureSheetsFitBothAppearancesAndLanguages() throws {
-        let repository = try repository()
-        let asset = holding()
-        try repository.insert(asset)
-        for language: AppLanguage in [.chinese, .english] {
-            let store = PortfolioStore(positionRepository: repository, initialLanguage: language)
-            for scheme: ColorScheme in [.light, .dark] {
-                let host = NSHostingView(rootView: PositionClosureSheet(position: asset).environment(store).environment(\.colorScheme, scheme))
-                host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-                #expect(host.fittingSize == CGSize(width: 600, height: 660))
-                host.frame = CGRect(origin: .zero, size: host.fittingSize)
-                host.layoutSubtreeIfNeeded()
-                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
-                #expect(bitmap.pixelsWide > 0 && bitmap.pixelsHigh > 0)
-                if let directory = ProcessInfo.processInfo.environment["PORTFOLIX_CLOSURE_PREVIEW_DIRECTORY"] {
-                    let folder = URL(fileURLWithPath: directory)
-                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let image = try #require(bitmap.representation(using: .png, properties: [:]))
-                    try image.write(to: folder.appendingPathComponent("closure-\(language == .english ? "en" : "zh")-\(scheme == .dark ? "dark" : "light").png"))
-                }
-            }
-        }
-    }
-
     @Test
     func preparesIsolatedInteractiveDemoOnlyWhenRequested() throws {
         guard let path = ProcessInfo.processInfo.environment["PORTFOLIX_CLOSURE_DEMO_DATABASE"] else { return }

@@ -78,6 +78,8 @@ private final class BackgroundPriceUpdater {
     private let databaseURL: URL
     private let maximumResponseBytes = 512 * 1024
     private let session: URLSession
+    private let jsonEncoder = JSONEncoder()
+    private let jsonDecoder = JSONDecoder()
 
     init(databaseURL: URL = BackgroundPriceUpdater.defaultDatabaseURL()) throws {
         self.databaseURL = databaseURL
@@ -86,6 +88,8 @@ private final class BackgroundPriceUpdater {
         configuration.httpCookieAcceptPolicy = .never
         configuration.urlCache = nil
         configuration.urlCredentialStorage = nil
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 15
         self.session = URLSession(configuration: configuration)
 
         var handle: OpaquePointer?
@@ -305,13 +309,13 @@ private final class BackgroundPriceUpdater {
         let statement = try prepare("SELECT value FROM app_settings WHERE key = ?")
         defer { sqlite3_finalize(statement) }
         try bind(key, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        guard try stepRow(statement) else { return nil }
         return text(at: 0, in: statement)
     }
 
     private func settingDate(for key: String) throws -> Date? {
         guard let value = try appSettingValue(for: key) else { return nil }
-        return ISO8601DateFormatter().date(from: value)
+        return Self.parseTimestamp(value)
     }
 
     private func setAppSetting(key: String, value: String) throws {
@@ -346,7 +350,7 @@ private final class BackgroundPriceUpdater {
         defer { sqlite3_finalize(statement) }
 
         var positions: [StoredPosition] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try stepRow(statement) {
             positions.append(
                 StoredPosition(
                     id: text(at: 0, in: statement),
@@ -372,15 +376,16 @@ private final class BackgroundPriceUpdater {
 
     private func updateLatestQuote(_ position: StoredPosition) throws -> StoredPosition {
         let fetchedAt = Date()
-        let previousFetchedAt = ISO8601DateFormatter().date(from: position.fetchedAt)
-        let existingTrend = (try? JSONDecoder().decode([Double].self, from: Data(position.weeklyTrendJSON.utf8))) ?? []
+        let fetchedTimestamp = Self.timestamp(from: fetchedAt)
+        let previousFetchedAt = Self.parseTimestamp(position.fetchedAt)
+        let existingTrend = (try? jsonDecoder.decode([Double].self, from: Data(position.weeklyTrendJSON.utf8))) ?? []
         let trend = DailyPriceTrend.merging(
             existing: existingTrend,
             latestPrice: NSDecimalNumber(decimal: position.latestPrice).doubleValue,
             previousFetchedAt: previousFetchedAt,
             fetchedAt: fetchedAt
         )
-        let trendJSON = String(data: try JSONEncoder().encode(trend), encoding: .utf8) ?? "[]"
+        let trendJSON = String(data: try jsonEncoder.encode(trend), encoding: .utf8) ?? "[]"
         let statement = try prepare(
             """
             UPDATE latest_quotes
@@ -392,26 +397,31 @@ private final class BackgroundPriceUpdater {
         try bind(Self.decimalString(position.latestPrice), to: 1, in: statement)
         try bind(position.source, to: 2, in: statement)
         try bind(position.quoteTime, to: 3, in: statement)
-        try bind(Self.timestamp(from: fetchedAt), to: 4, in: statement)
+        try bind(fetchedTimestamp, to: 4, in: statement)
         try bind(position.freshness, to: 5, in: statement)
         try bind(trendJSON, to: 6, in: statement)
         try bind(position.assetID, to: 7, in: statement)
         try stepDone(statement)
 
         var persisted = position
-        persisted.fetchedAt = Self.timestamp(from: fetchedAt)
+        persisted.fetchedAt = fetchedTimestamp
         persisted.weeklyTrendJSON = trendJSON
         return persisted
     }
 
     private func replaceDailySnapshots(now: Date = .now) throws {
         let day = Self.dayString(from: now)
+        let nowTimestamp = Self.timestamp(from: now)
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -365, to: now) ?? now
         let cutoffDay = Self.dayString(from: cutoffDate)
         try execute("BEGIN IMMEDIATE TRANSACTION")
         defer { applyDatabaseFilePermissions() }
         do {
             let positions = try fetchPositions()
+            guard !positions.isEmpty else {
+                try execute("ROLLBACK")
+                return
+            }
             let totalValue = positions.reduce(Decimal.zero) { $0 + $1.marketValueCNY }
             let totalCost = positions.reduce(Decimal.zero) { $0 + $1.totalCostCNY }
             let profit = totalValue - totalCost
@@ -435,35 +445,38 @@ private final class BackgroundPriceUpdater {
             try bind(Self.decimalString(totalCost), to: 3, in: statement)
             try bind(Self.decimalString(profit), to: 4, in: statement)
             try bind(Self.decimalString(profitRate), to: 5, in: statement)
-            try bind(Self.timestamp(from: now), to: 6, in: statement)
+            try bind(nowTimestamp, to: 6, in: statement)
             try stepDone(statement)
 
+            let assetStatement = try prepare(
+                """
+                INSERT INTO asset_price_snapshots (
+                    id, asset_id, snapshot_date, name, symbol, category, quote_currency,
+                    quantity, average_cost, latest_price, market_value_cny,
+                    source, quote_time, freshness, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(asset_id, snapshot_date) DO UPDATE SET
+                    name = excluded.name,
+                    symbol = excluded.symbol,
+                    category = excluded.category,
+                    quote_currency = excluded.quote_currency,
+                    quantity = excluded.quantity,
+                    average_cost = excluded.average_cost,
+                    latest_price = excluded.latest_price,
+                    market_value_cny = excluded.market_value_cny,
+                    source = excluded.source,
+                    quote_time = excluded.quote_time,
+                    freshness = excluded.freshness,
+                    updated_at = excluded.updated_at
+                """
+            )
+            defer { sqlite3_finalize(assetStatement) }
+
             for position in positions {
-                let assetStatement = try prepare(
-                    """
-                    INSERT INTO asset_price_snapshots (
-                        id, asset_id, snapshot_date, name, symbol, category, quote_currency,
-                        quantity, average_cost, latest_price, market_value_cny,
-                        source, quote_time, freshness, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(asset_id, snapshot_date) DO UPDATE SET
-                        name = excluded.name,
-                        symbol = excluded.symbol,
-                        category = excluded.category,
-                        quote_currency = excluded.quote_currency,
-                        quantity = excluded.quantity,
-                        average_cost = excluded.average_cost,
-                        latest_price = excluded.latest_price,
-                        market_value_cny = excluded.market_value_cny,
-                        source = excluded.source,
-                        quote_time = excluded.quote_time,
-                        freshness = excluded.freshness,
-                        updated_at = excluded.updated_at
-                    """
-                )
-                defer { sqlite3_finalize(assetStatement) }
-                try bind("\(position.id)-\(day)", to: 1, in: assetStatement)
-                try bind(position.id, to: 2, in: assetStatement)
+                sqlite3_reset(assetStatement)
+                sqlite3_clear_bindings(assetStatement)
+                try bind("\(position.assetID)-\(day)", to: 1, in: assetStatement)
+                try bind(position.assetID, to: 2, in: assetStatement)
                 try bind(day, to: 3, in: assetStatement)
                 try bind(position.name, to: 4, in: assetStatement)
                 try bind(position.symbol, to: 5, in: assetStatement)
@@ -476,7 +489,7 @@ private final class BackgroundPriceUpdater {
                 try bind(position.source, to: 12, in: assetStatement)
                 try bind(position.quoteTime, to: 13, in: assetStatement)
                 try bind(position.freshness, to: 14, in: assetStatement)
-                try bind(Self.timestamp(from: now), to: 15, in: assetStatement)
+                try bind(nowTimestamp, to: 15, in: assetStatement)
                 try stepDone(assetStatement)
             }
             let prunePortfolio = try prepare("DELETE FROM portfolio_snapshots WHERE snapshot_date < ?")
@@ -556,14 +569,18 @@ private final class BackgroundPriceUpdater {
     }
 
     private func resolveFundQuote(symbol: String, fallbackName: String) async throws -> (price: Decimal, quoteTime: String?, source: String) {
-        if let quote = try? await resolveFundLatestNetValueQuote(symbol: symbol, fallbackName: fallbackName) {
+        let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.range(of: #"^\d{6}$"#, options: .regularExpression) != nil else {
+            throw UpdaterError.invalidResponse
+        }
+        if let quote = try? await resolveFundLatestNetValueQuote(symbol: normalized, fallbackName: fallbackName) {
             return quote
         }
 
         var components = URLComponents()
         components.scheme = "https"
         components.host = "fundgz.1234567.com.cn"
-        components.path = "/js/\(symbol).js"
+        components.path = "/js/\(normalized).js"
         guard let url = components.url else { throw UpdaterError.invalidResponse }
         let data = try await request(url: url, failureMessage: "东方财富基金净值请求失败")
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -637,7 +654,7 @@ private final class BackgroundPriceUpdater {
         case "A 股":
             guard normalized.range(of: #"^\d{6}$"#, options: .regularExpression) != nil else { return nil }
             if isExchangeTradedFundSymbol(normalized) {
-                return "\(normalized.hasPrefix("5") || normalized.hasPrefix("588") || normalized.hasPrefix("589") ? "1" : "0").\(normalized)"
+                return "\(normalized.hasPrefix("5") ? "1" : "0").\(normalized)"
             }
             if normalized.hasPrefix("6") {
                 return "1.\(normalized)"
@@ -650,7 +667,9 @@ private final class BackgroundPriceUpdater {
             guard normalized.range(of: #"^(900|200)\d{3}$"#, options: .regularExpression) != nil else { return nil }
             return "\(normalized.hasPrefix("900") ? "1" : "0").\(normalized)"
         case "港股":
-            let code = leadingZeroTrimmed(normalized.replacingOccurrences(of: ".HK", with: ""))
+            let rawCode = normalized.replacingOccurrences(of: ".HK", with: "")
+            guard rawCode.range(of: #"^\d{1,5}$"#, options: .regularExpression) != nil else { return nil }
+            let code = leadingZeroTrimmed(rawCode)
             let padded = String(code.suffix(5)).leftPadded(toLength: 5, withPad: "0")
             return "116.\(padded)"
         case "美股":
@@ -708,32 +727,16 @@ private final class BackgroundPriceUpdater {
         }
     }
 
-    private static func quoteTime(fromSeconds value: Double) -> String? {
-        guard value.isFinite, value > 0 else { return nil }
-        return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: value))
+    private static let formatterLock = NSLock()
+    private nonisolated(unsafe) static let isoFormatter = ISO8601DateFormatter()
+
+    private static func parseTimestamp(_ value: String) -> Date? {
+        formatterLock.withLock { isoFormatter.date(from: value) }
     }
 
-    private static func normalizedQuoteSource(_ value: String?) -> String {
-        let normalized = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        switch normalized.lowercased() {
-        case "okx", "OKX":
-            return "OKX"
-        case "local", "手工价格":
-            return "手工价格"
-        case "eastmoney", "em", "东方财富", "东财":
-            return "东方财富"
-        default:
-            if normalized.isEmpty {
-                return "东方财富"
-            }
-            if normalized.localizedCaseInsensitiveContains("okx") {
-                return "OKX"
-            }
-            if normalized.localizedCaseInsensitiveContains("eastmoney") || normalized.contains("东方财富") {
-                return "东方财富"
-            }
-            return normalized
-        }
+    private static func quoteTime(fromSeconds value: Double) -> String? {
+        guard value.isFinite, value > 0 else { return nil }
+        return formatterLock.withLock { isoFormatter.string(from: Date(timeIntervalSince1970: value)) }
     }
 
     private func migrateSupportTables() throws {
@@ -771,10 +774,11 @@ private final class BackgroundPriceUpdater {
         }
     }
 
-    private func bind(_ value: Int, to index: Int32, in statement: OpaquePointer) throws {
-        guard sqlite3_bind_int(statement, index, Int32(value)) == SQLITE_OK else {
-            throw UpdaterError.requestFailed(String(cString: sqlite3_errmsg(database)))
-        }
+    private func stepRow(_ statement: OpaquePointer) throws -> Bool {
+        let status = sqlite3_step(statement)
+        if status == SQLITE_ROW { return true }
+        if status == SQLITE_DONE { return false }
+        throw UpdaterError.requestFailed(String(cString: sqlite3_errmsg(database)))
     }
 
     private func stepDone(_ statement: OpaquePointer) throws {

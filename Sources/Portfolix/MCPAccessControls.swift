@@ -57,6 +57,7 @@ struct MCPConnectionSheet: View {
     private var displayedCode: String { referenceKind == .command ? (command ?? configuration) : configuration }
 
     var body: some View {
+        let isHelperAvailable = helperAvailable
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(title: text("MCP 配置参考", "MCP Configuration Reference"), symbol: "point.3.connected.trianglepath.dotted")
             Divider().overlay(PortfolixTheme.border)
@@ -79,7 +80,7 @@ struct MCPConnectionSheet: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                codeBlock
+                codeBlock(isHelperAvailable: isHelperAvailable)
 
                 Text(
                     text(
@@ -94,7 +95,7 @@ struct MCPConnectionSheet: View {
             }
             .padding(PortfolixSpacing.xl)
             Divider().overlay(PortfolixTheme.border)
-            SheetActionFooter(errorMessage: helperAvailable ? nil : text("MCP 组件缺失，请重新安装完整 App。", "MCP helper missing. Reinstall the complete App.")) {
+            SheetActionFooter(errorMessage: isHelperAvailable ? nil : text("MCP 组件缺失，请重新安装完整 App。", "MCP helper missing. Reinstall the complete App.")) {
                 Button {
                     NSWorkspace.shared.open(client.documentationURL)
                 } label: {
@@ -108,7 +109,6 @@ struct MCPConnectionSheet: View {
         }
         .frame(width: sheetWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .environment(\.portfolixFormGlass, true)
         .background { PortfolixSheetBackground() }
         .onExitCommand { dismiss() }
     }
@@ -141,8 +141,9 @@ struct MCPConnectionSheet: View {
         }
     }
 
-    private var codeBlock: some View {
-        VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
+    private func codeBlock(isHelperAvailable: Bool) -> some View {
+        let code = displayedCode
+        return VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
             HStack {
                 if command != nil {
                     PortfolixGlassSegmentedPicker(
@@ -162,19 +163,19 @@ struct MCPConnectionSheet: View {
                     .foregroundStyle(PortfolixTheme.secondary)
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(displayedCode, forType: .string)
-                    copiedValue = displayedCode
+                    NSPasteboard.general.setString(code, forType: .string)
+                    copiedValue = code
                 } label: {
-                    Image(systemName: copiedValue == displayedCode ? "checkmark" : "doc.on.doc")
+                    Image(systemName: copiedValue == code ? "checkmark" : "doc.on.doc")
                         .frame(width: 16, height: 16)
                 }
                 .buttonStyle(QuietButtonStyle())
                 .accessibilityLabel(text("复制", "Copy"))
-                .disabled(!helperAvailable || displayedCode.isEmpty)
+                .disabled(!isHelperAvailable || code.isEmpty)
             }
-            MCPReferenceCodeView(text: displayedCode)
+            MCPReferenceCodeView(text: code)
                 .id(client)
-                .frame(width: codeWidth, height: MCPReferenceCodeLayout.viewportHeight(for: displayedCode, width: codeWidth))
+                .frame(width: codeWidth, height: MCPReferenceCodeLayout.viewportHeight(for: code, width: codeWidth))
                 .background(PortfolixTheme.raised, in: RoundedRectangle(cornerRadius: PortfolixRadius.compact))
                 .clipShape(RoundedRectangle(cornerRadius: PortfolixRadius.compact))
         }

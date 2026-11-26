@@ -29,10 +29,12 @@ final class DeepSeekSearchClient: WebSearching, @unchecked Sendable {
     static let endpoint = URL(string: "https://api.deepseek.com/v1/tools/search")!
     static let maximumResponseBytes = 2_000_000
     private let session: URLSession
+    private let ownsSession: Bool
 
     init(session: URLSession? = nil) {
         if let session {
             self.session = session
+            self.ownsSession = false
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpShouldSetCookies = false
@@ -41,6 +43,13 @@ final class DeepSeekSearchClient: WebSearching, @unchecked Sendable {
             configuration.urlCache = nil
             configuration.timeoutIntervalForResource = 45
             self.session = URLSession(configuration: configuration, delegate: DeepSeekSearchRedirectPolicy(), delegateQueue: nil)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
         }
     }
 

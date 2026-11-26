@@ -159,7 +159,7 @@ struct AdditionalSearchAPITests {
 
     @Test(arguments: providers)
     func allPlannersAllowNewProvidersAndRejectDisabledOnes(provider: SearchProviderOption) throws {
-        for prompt in [AIAnalysisPromptText.toolPlanningSystem, AIAnalysisPromptText.followUpToolPlanningSystem, AIAnalysisPromptText.investmentProfilePlanningSystem] {
+        for prompt in [AIAnalysisPromptText.toolPlanningSystem, AIAnalysisPromptText.followUpToolPlanningSystem] {
             #expect(prompt.contains(provider.rawValue))
         }
         let plan = AIWebSearchToolPlan(toolCalls: [.init(id: "search_1", query: "gold market latest news", positionRefs: [], provider: provider)], status: "continue", limitations: [])

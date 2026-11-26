@@ -27,14 +27,19 @@ enum AdditionalSearchAPIError: LocalizedError, Equatable {
 }
 
 final class AdditionalSearchAPIClient: WebSearching, @unchecked Sendable {
+    static let sharedExa = AdditionalSearchAPIClient(provider: .exa)
+    static let sharedAnySearch = AdditionalSearchAPIClient(provider: .anysearch)
+
     private let provider: SearchProviderOption
     private let session: URLSession
+    private let ownsSession: Bool
     private let maximumResponseBytes = 2 * 1024 * 1024
 
     init(provider: SearchProviderOption, session: URLSession? = nil) {
         self.provider = provider
         if let session {
             self.session = session
+            self.ownsSession = false
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieStorage = nil
@@ -44,6 +49,13 @@ final class AdditionalSearchAPIClient: WebSearching, @unchecked Sendable {
             configuration.urlCache = nil
             configuration.timeoutIntervalForResource = 30
             self.session = URLSession(configuration: configuration)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
         }
     }
 

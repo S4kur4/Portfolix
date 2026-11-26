@@ -46,6 +46,10 @@ final class HoldingSpeechAnalyzerSession: HoldingSpeechSession {
         self.onFailure = onFailure
     }
 
+    isolated deinit {
+        cancel()
+    }
+
     static func start(
         locale: Locale,
         onLevel: @escaping @MainActor @Sendable (Float) -> Void,

@@ -683,12 +683,7 @@ private struct HeroValueTrendPlot: View {
         }
     }
 
-    private static let monthDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "M/d"
-        return formatter
-    }()
+    private static let monthDayFormatter = DashboardDateFormatters.monthDay
 }
 
 private struct PriceRefreshButton: View {
@@ -774,12 +769,7 @@ private struct RiskChartHoverLayer: View {
     let value: (PerformanceRiskPoint) -> Double
     let lineColor: (PerformanceRiskPoint) -> Color
 
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "M/d"
-        return formatter
-    }()
+    private static let dateFormatter = DashboardDateFormatters.monthDay
 
     private var markerPoint: PerformanceRiskPoint? {
         guard let highlightedDate = tracker.highlightedDate else { return points.last }
@@ -1397,12 +1387,7 @@ private struct PerformanceRiskCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private static let shortDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "M/d"
-        return formatter
-    }()
+    private static let shortDateFormatter = DashboardDateFormatters.monthDay
 
     private static let englishMonthFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1412,19 +1397,24 @@ private struct PerformanceRiskCard: View {
     }()
 }
 
+private enum DashboardDateFormatters {
+    static let monthDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "M/d"
+        return formatter
+    }()
+}
+
 private struct AssetMixBarCard: View {
     @Environment(PortfolioStore.self) private var store
     @State private var highlightedItemID: PositionShareItem.ID?
 
-    private var items: [PositionShareItem] {
-        store.positionShareItems
-    }
-
-    private var displayedAmountCNY: Decimal {
-        items.first { $0.id == highlightedItemID }?.amountCNY ?? store.totalValueCNY
-    }
-
     var body: some View {
+        let items = store.positionShareItems
+        let displayedAmountCNY = items.first { $0.id == highlightedItemID }?.amountCNY ?? store.totalValueCNY
+        let formattedAmount = formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency)
+
         Panel {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
                 HStack(alignment: .center, spacing: PortfolixSpacing.md) {
@@ -1432,10 +1422,10 @@ private struct AssetMixBarCard: View {
 
                     Spacer(minLength: PortfolixSpacing.sm)
 
-                    Text(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
+                    Text(formattedAmount)
                         .font(PortfolixTypography.bodyEmphasis)
                         .monospacedDigit()
-                        .portfolixNumericTransition(formatMoney(store.converted(displayedAmountCNY), currency: store.displayCurrency))
+                        .portfolixNumericTransition(formattedAmount)
                         .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)
                 }
@@ -1503,12 +1493,16 @@ private struct AssetMixSegmentBar: View {
     }
 
     private func updateHighlightedItem(for phase: HoverPhase, rectangles: [CGRect]) {
+        let nextID: PositionShareItem.ID?
         switch phase {
         case let .active(location):
-            highlightedItemID = rectangles.enumerated().first { $0.element.contains(location) }
+            nextID = rectangles.enumerated().first { $0.element.contains(location) }
                 .flatMap { items.indices.contains($0.offset) ? items[$0.offset].id : nil }
         case .ended:
-            highlightedItemID = nil
+            nextID = nil
+        }
+        if highlightedItemID != nextID {
+            highlightedItemID = nextID
         }
     }
 }
@@ -1904,6 +1898,13 @@ private struct CompactPositionRow: View {
     @State private var isHovered = false
 
     var body: some View {
+        let convertedMarketValue = store.converted(position.marketValueCNY)
+        let marketValueText = formatMoney(convertedMarketValue, currency: store.displayCurrency)
+        let weightText = formattedWeightText
+        let todayProfit = store.todayProfitCNY(for: position)
+        let convertedTodayProfit = store.converted(todayProfit)
+        let todayProfitText = formattedTodayProfitText(todayProfit: todayProfit, converted: convertedTodayProfit)
+
         HStack(spacing: PrimaryPositionColumnWidths.columnSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1940,7 +1941,7 @@ private struct CompactPositionRow: View {
                     .font(PortfolixTypography.label)
                     .foregroundStyle(PortfolixTheme.text)
                     .monospacedDigit()
-                    .portfolixNumericTransition(store.converted(position.marketValueCNY))
+                    .portfolixNumericTransition(convertedMarketValue)
                     .lineLimit(1)
                 Text(weightText)
                     .font(PortfolixTypography.caption)
@@ -1962,7 +1963,7 @@ private struct CompactPositionRow: View {
                 .font(PortfolixTypography.label)
                 .foregroundStyle(PortfolixTheme.performanceColor(for: todayProfit, scheme: store.performanceColorScheme))
                 .monospacedDigit()
-                .portfolixNumericTransition(store.converted(todayProfit))
+                .portfolixNumericTransition(convertedTodayProfit)
                 .lineLimit(1)
                 .frame(minWidth: PrimaryPositionColumnWidths.todayColumnWidth, maxWidth: .infinity, alignment: .trailing)
         }
@@ -1986,37 +1987,33 @@ private struct CompactPositionRow: View {
         .onTapGesture(perform: action)
         .help(helpText)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
+        .accessibilityLabel(accessibilityText(
+            marketValueText: marketValueText,
+            weightText: weightText,
+            todayProfitText: todayProfitText
+        ))
         .accessibilityAddTraits(.isButton)
     }
 
-    private var marketValueText: String {
-        formatMoney(store.converted(position.marketValueCNY), currency: store.displayCurrency)
-    }
-
-    private var weightText: String {
+    private var formattedWeightText: String {
         guard store.totalValueCNY > 0 else { return "—" }
         let share = (position.marketValueCNY / store.totalValueCNY * 100).doubleValue
         return String(format: "%.1f%%", share)
     }
 
-    private var todayProfit: Decimal {
-        store.todayProfitCNY(for: position)
-    }
-
-    private var todayProfitText: String {
+    private func formattedTodayProfitText(todayProfit: Decimal, converted: Decimal) -> String {
         guard store.todayProfitIsAvailable(for: position) else { return "—" }
         if todayProfit == 0 {
-            return formatMoney(store.converted(todayProfit), currency: store.displayCurrency)
+            return formatMoney(converted, currency: store.displayCurrency)
         }
-        return formatSignedMoney(store.converted(todayProfit), currency: store.displayCurrency)
+        return formatSignedMoney(converted, currency: store.displayCurrency)
     }
 
     private var helpText: String {
         "\(position.priceDateText(language: store.appLanguage)) · \(position.relativeUpdateText(now: Date(), language: store.appLanguage))"
     }
 
-    private var accessibilityText: String {
+    private func accessibilityText(marketValueText: String, weightText: String, todayProfitText: String) -> String {
         let name = position.name
         let category = position.category.title(language: store.appLanguage)
         let rate = position.costIsKnown ? formatPercent(position.profitRate) : "—"
@@ -2476,10 +2473,11 @@ private struct DailyProfitMonthCard: View {
                         }
                     }
 
+                    let todayStart = calendar.startOfDay(for: .now)
                     LazyVGrid(columns: calendarColumns, spacing: PortfolixLayout.dataTileSpacing) {
                         ForEach(slots) { slot in
                             if let date = slot.date {
-                                calendarCell(for: date, height: cellHeight)
+                                calendarCell(for: date, height: cellHeight, todayStart: todayStart)
                             } else {
                                 Color.clear
                                     .frame(height: cellHeight)
@@ -2580,12 +2578,13 @@ private struct DailyProfitMonthCard: View {
     }
 
     @ViewBuilder
-    private func calendarCell(for date: Date, height: CGFloat) -> some View {
+    private func calendarCell(for date: Date, height: CGFloat, todayStart: Date) -> some View {
         let point = pointsByDay[date]
         let amount = point?.amountCNY
-        let isToday = calendar.isDateInToday(date)
+        let dayStart = calendar.startOfDay(for: date)
+        let isToday = dayStart == todayStart
         let isHovered = hoveredDate.map { calendar.isDate($0, inSameDayAs: date) } == true
-        let isFuture = calendar.startOfDay(for: date) > calendar.startOfDay(for: .now)
+        let isFuture = dayStart > todayStart
         let todayForeground = isToday ? todayCellForeground : nil
 
         VStack(spacing: 0) {

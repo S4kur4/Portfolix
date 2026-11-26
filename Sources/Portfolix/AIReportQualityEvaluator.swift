@@ -127,7 +127,8 @@ enum AIReportQualityEvaluator {
         let summaryRefs = ledger.items.filter { $0.kind == "calculation" }.map(\.id) + snapshotEvidence.map(\.id)
         sections.append((report.summary + " " + report.healthScoreExplanation, summaryRefs))
         let groundedNumericClaimCount = sections.reduce(0) { count, section in
-            let evidence = allEvidence.filter { section.1.contains($0.id) }
+            let sectionRefSet = Set(section.1)
+            let evidence = allEvidence.filter { sectionRefSet.contains($0.id) }
             return count + numericMatches(in: section.0).filter { claim in
                 guard let value = claim.value else { return false }
                 let unit = claimUnit(in: section.0, range: claim.range)
@@ -178,10 +179,11 @@ enum AIReportQualityEvaluator {
         ].joined(separator: " ")
     }
 
+    private static let numericRegex = try! NSRegularExpression(pattern: #"[-+]?\d[\d,]*(?:\.\d+)?%?"#)
+
     private static func numericMatches(in text: String) -> [(value: Double?, range: NSRange)] {
-        guard let regex = try? NSRegularExpression(pattern: #"[-+]?\d[\d,]*(?:\.\d+)?%?"#) else { return [] }
         let nsText = text as NSString
-        return regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)).map { match in
+        return numericRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length)).map { match in
             let raw = nsText.substring(with: match.range)
                 .replacingOccurrences(of: ",", with: "")
                 .replacingOccurrences(of: "%", with: "")

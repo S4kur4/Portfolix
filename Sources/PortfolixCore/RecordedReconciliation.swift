@@ -15,14 +15,16 @@ public struct RecordedReconciliation: Decodable, Sendable {
     public let reversalProfitAdjustmentCNY: String?
     public let sequence: Int
 
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+
     public static func adjustments(_ records: [Self]) -> [String: [String: Decimal]] {
         var result: [String: [String: Decimal]] = [:]
         for record in records {
-            if let text = record.profitAdjustmentCNY, let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) {
+            if let text = record.profitAdjustmentCNY, let amount = Decimal(string: text, locale: posixLocale) {
                 result[record.effectiveDay, default: [:]][record.asset.id, default: 0] += amount
             }
             if let day = record.reversalDay, let text = record.reversalProfitAdjustmentCNY,
-               let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) {
+               let amount = Decimal(string: text, locale: posixLocale) {
                 result[day, default: [:]][record.asset.id, default: 0] += amount
             }
         }
@@ -32,19 +34,44 @@ public struct RecordedReconciliation: Decodable, Sendable {
 
 extension RecordedReconciliation {
     public static func costKnown(_ records: [Self], assetID: String? = nil, assetIDs: Set<String>? = nil, through day: String = "9999-12-31") -> Bool {
+        guard !records.isEmpty else { return true }
+        let relevantRecords: [Self]
+        if let assetID {
+            relevantRecords = records.filter { $0.asset.id == assetID }
+            guard !relevantRecords.isEmpty else { return true }
+        } else if let assetIDs {
+            guard !assetIDs.isEmpty else { return true }
+            relevantRecords = records.filter { assetIDs.contains($0.asset.id) }
+            guard !relevantRecords.isEmpty else { return true }
+        } else {
+            relevantRecords = records
+        }
+
         var states: [String: Bool] = [:]
         var events: [(String, Int, String, Bool)] = []
-        for record in records {
+        events.reserveCapacity(relevantRecords.count)
+        for record in relevantRecords {
             if record.effectiveDay <= day { events.append((record.effectiveAt, record.sequence, record.asset.id, record.costKnown)) }
             // Reversing the latest checkpoint restores the cost state before that checkpoint.
             if let reversedAt = record.reversedAt, let reversalDay = record.reversalDay, reversalDay <= day {
-                let beforeKnown = records.filter { $0.asset.id == record.asset.id && $0.sequence < record.sequence && ($0.reversedAt == nil || $0.reversedAt! > record.effectiveAt) }.max { $0.sequence < $1.sequence }?.costKnown ?? true
+                var bestSequence = Int.min
+                var beforeKnown = true
+                for prior in relevantRecords where prior.asset.id == record.asset.id && prior.sequence < record.sequence {
+                    if let priorReversedAt = prior.reversedAt, priorReversedAt <= record.effectiveAt {
+                        continue
+                    }
+                    if prior.sequence > bestSequence {
+                        bestSequence = prior.sequence
+                        beforeKnown = prior.costKnown
+                    }
+                }
                 events.append((reversedAt, record.sequence, record.asset.id, beforeKnown))
             }
         }
+        guard !events.isEmpty else { return true }
         for event in events.sorted(by: { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }) { states[event.2] = event.3 }
         if let assetID { return states[assetID] ?? true }
-        return states.filter { assetIDs == nil || assetIDs!.contains($0.key) }.values.allSatisfy { $0 }
+        return states.values.allSatisfy { $0 }
     }
 
     public static func incompleteDays(_ records: [Self]) -> Set<String> {

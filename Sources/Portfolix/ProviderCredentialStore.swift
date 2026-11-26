@@ -127,13 +127,18 @@ final class ProviderCredentialStore: ProviderCredentialStoring, @unchecked Senda
 
 final class DatabaseProviderCredentialStore: ProviderCredentialStoring, @unchecked Sendable {
     private let repository: PositionRepository
+    private let lock = NSLock()
 
     init(repository: PositionRepository) {
-        self.repository = repository
+        // Open a dedicated SQLite connection so background Agent credential reads
+        // never interleave with @MainActor transactions on PortfolioStore's handle.
+        self.repository = (try? PositionRepository(databaseURL: repository.storageURL)) ?? repository
     }
 
     func read(kind: ProviderCredentialKind) throws -> String? {
-        try repository.appSetting(for: kind.databaseKey)
+        try lock.withLock {
+            try repository.appSetting(for: kind.databaseKey)
+        }
     }
 
     func save(_ value: String, kind: ProviderCredentialKind) throws {
@@ -141,23 +146,31 @@ final class DatabaseProviderCredentialStore: ProviderCredentialStoring, @uncheck
         guard !trimmed.isEmpty else {
             throw ProviderCredentialError.invalidValue
         }
-        try repository.setAppSetting(key: kind.databaseKey, value: trimmed)
+        try lock.withLock {
+            try repository.setAppSetting(key: kind.databaseKey, value: trimmed)
+        }
     }
 
     func delete(kind: ProviderCredentialKind) throws {
-        try repository.deleteAppSetting(key: kind.databaseKey)
-        try repository.deleteAppSetting(key: kind.validationStateDatabaseKey)
+        try lock.withLock {
+            try repository.deleteAppSetting(key: kind.databaseKey)
+            try repository.deleteAppSetting(key: kind.validationStateDatabaseKey)
+        }
     }
 
     func readValidationState(kind: ProviderCredentialKind) throws -> ProviderCredentialValidationState {
-        guard let rawValue = try repository.appSetting(for: kind.validationStateDatabaseKey) else {
-            return .unknown
+        try lock.withLock {
+            guard let rawValue = try repository.appSetting(for: kind.validationStateDatabaseKey) else {
+                return .unknown
+            }
+            return ProviderCredentialValidationState(rawValue: rawValue) ?? .unknown
         }
-        return ProviderCredentialValidationState(rawValue: rawValue) ?? .unknown
     }
 
     func saveValidationState(_ state: ProviderCredentialValidationState, kind: ProviderCredentialKind) throws {
-        try repository.setAppSetting(key: kind.validationStateDatabaseKey, value: state.rawValue)
+        try lock.withLock {
+            try repository.setAppSetting(key: kind.validationStateDatabaseKey, value: state.rawValue)
+        }
     }
 }
 

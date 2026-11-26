@@ -65,7 +65,6 @@ extension View {
         self
             .formStyle(CompactSheetFormStyle())
             .labeledContentStyle(SheetFormRowStyle())
-            .environment(\.portfolixFormGlass, true)
             .scrollContentBackground(.hidden)
             .scrollIndicators(.never)
             .environment(\.defaultMinListRowHeight, SheetFormLayout.minimumRowHeight)

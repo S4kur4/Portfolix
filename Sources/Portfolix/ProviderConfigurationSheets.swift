@@ -213,27 +213,6 @@ struct LLMConfigurationSheet: View {
         apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func applyProviderDefaults(_ option: LLMProviderOption) {
-        availableModels = option == .deepSeek
-            ? AIProviderConfigurationStore.availableDeepSeekModels()
-            : AIProviderConfigurationStore.loadCachedModels(provider: option)
-        connectionStatus = nil
-        let savedConfiguration = store.aiConfiguration
-        let savedBaseURL = savedConfiguration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if savedConfiguration.providerOption == option, !savedBaseURL.isEmpty {
-            baseURL = savedBaseURL
-        } else if option.canAutoFillBaseURL {
-            baseURL = option.defaultBaseURL
-        } else {
-            baseURL = ""
-        }
-        model = availableModels.first ?? option.defaultModel
-        if store.aiConfiguration.providerOption == option, !store.aiConfiguration.model.isEmpty {
-            model = store.aiConfiguration.model
-        }
-        scheduleAPIKeyValidation()
-    }
-
     private func save() {
         saveErrorMessage = nil
         didAttemptSave = true
@@ -463,6 +442,7 @@ struct SearchConfigurationSheet: View {
     @State private var isAnySearchAPIKeyVisible = false
     @State private var validatingProviders: Set<SearchProviderOption> = []
     @State private var validationRequestIDs: [SearchProviderOption: UUID] = [:]
+    @State private var validationTasks: [SearchProviderOption: Task<Void, Never>] = [:]
     @State private var activationPromptProviders: Set<SearchProviderOption> = []
     @State private var didLoadConfiguration = false
     @State private var didAttemptSave = false
@@ -553,6 +533,12 @@ struct SearchConfigurationSheet: View {
                 didLoadConfiguration = true
             }
         }
+        .onDisappear {
+            for task in validationTasks.values {
+                task.cancel()
+            }
+            validationTasks.removeAll()
+        }
     }
 
     private var sharedProviderSection: some View {
@@ -631,6 +617,7 @@ struct SearchConfigurationSheet: View {
                     activationPromptProviders.remove(provider)
                     validatingProviders.remove(provider)
                     validationRequestIDs[provider] = nil
+                    validationTasks.removeValue(forKey: provider)?.cancel()
                     if isEnabled.wrappedValue {
                         isEnabled.wrappedValue = false
                     }
@@ -673,6 +660,7 @@ struct SearchConfigurationSheet: View {
                 if !requestedValue {
                     validatingProviders.remove(provider)
                     validationRequestIDs[provider] = nil
+                    validationTasks.removeValue(forKey: provider)?.cancel()
                     activationPromptProviders.remove(provider)
                     isEnabled.wrappedValue = false
                     return
@@ -707,9 +695,10 @@ struct SearchConfigurationSheet: View {
         validatingProviders.insert(provider)
         let requestID = UUID()
         validationRequestIDs[provider] = requestID
+        validationTasks.removeValue(forKey: provider)?.cancel()
         setStatus(.validatingAPI(language: store.appLanguage), for: provider)
 
-        Task {
+        validationTasks[provider] = Task {
             let result: Result<Void, Error>
             do {
                 try await SearchAPIKeyValidationProbe.validate(provider: provider, apiKey: key)
@@ -718,8 +707,9 @@ struct SearchConfigurationSheet: View {
                 result = .failure(error)
             }
 
-            guard validationRequestIDs[provider] == requestID else { return }
+            guard !Task.isCancelled, validationRequestIDs[provider] == requestID else { return }
             validationRequestIDs[provider] = nil
+            validationTasks[provider] = nil
             validatingProviders.remove(provider)
             guard isEnabled.wrappedValue, activeKey(for: provider) == key else { return }
             switch result {
@@ -998,10 +988,10 @@ private struct ProviderSheetScaffold<Content: View, Secondary: View>: View {
 
     private func clearInitialTextSelection() {
         DispatchQueue.main.async {
-            NSApp.keyWindow?.makeFirstResponder(nil)
+            NSApp?.keyWindow?.makeFirstResponder(nil)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            NSApp.keyWindow?.makeFirstResponder(nil)
+            NSApp?.keyWindow?.makeFirstResponder(nil)
         }
     }
 }
@@ -1277,17 +1267,28 @@ final class ProviderAPIKeyTextInputView: NSView {
     }
 
     func update(text: String, isVisible: Bool, textColor: NSColor) {
-        let wasEditing = plainField.currentEditor() != nil
+        let visibilityChanged = self.isVisible != isVisible
         self.isVisible = isVisible
-        plainField.isHidden = !isVisible
-        maskedDisplayField.isHidden = isVisible
+        if plainField.isHidden != !isVisible {
+            plainField.isHidden = !isVisible
+        }
+        if maskedDisplayField.isHidden != isVisible {
+            maskedDisplayField.isHidden = isVisible
+        }
         if plainField.stringValue != text {
             plainField.stringValue = text
         }
-        maskedDisplayField.stringValue = text.isEmpty ? "" : Self.maskedValue
-        plainField.textColor = textColor
-        maskedDisplayField.textColor = textColor
-        if wasEditing {
+        let targetMasked = text.isEmpty ? "" : Self.maskedValue
+        if maskedDisplayField.stringValue != targetMasked {
+            maskedDisplayField.stringValue = targetMasked
+        }
+        if plainField.textColor != textColor {
+            plainField.textColor = textColor
+        }
+        if maskedDisplayField.textColor != textColor {
+            maskedDisplayField.textColor = textColor
+        }
+        if visibilityChanged, isVisible, plainField.currentEditor() == nil {
             focusActiveField()
         }
     }
@@ -1360,50 +1361,6 @@ struct SheetHeader: View {
                 .foregroundStyle(PortfolixTheme.brandText)
         }
         .padding(PortfolixSpacing.xl)
-    }
-}
-
-private struct ProviderActionLabel: View {
-    let title: String
-    let isLoading: Bool
-
-    var body: some View {
-        ZStack {
-            Text(title)
-                .opacity(isLoading ? 0 : 1)
-
-            ProgressView()
-                .controlSize(.small)
-                .labelsHidden()
-                .scaleEffect(0.7)
-                .frame(width: 16, height: 16)
-                .opacity(isLoading ? 1 : 0)
-        }
-        .frame(width: 84, height: 14)
-        .fixedSize()
-        .animation(nil, value: isLoading)
-    }
-}
-
-private struct ProviderNoticeSection: View {
-    let symbol: String
-    let title: String
-    let message: String?
-    let tint: Color
-    let titleColor: Color
-
-    var body: some View {
-        Section {
-            ProviderNoticeRow(
-                symbol: symbol,
-                title: title,
-                message: message,
-                tint: tint,
-                titleColor: titleColor
-            )
-        }
-        .listRowBackground(PortfolixTheme.surface)
-        .listRowSeparator(.hidden)
     }
 }
 

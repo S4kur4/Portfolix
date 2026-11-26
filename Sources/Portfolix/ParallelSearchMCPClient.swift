@@ -32,6 +32,7 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
     private static let maximumResponseBytes = 2_000_000
     private let endpoint: URL
     private let session: URLSession
+    private let ownsSession: Bool
 
     init(
         endpoint: URL = URL(string: "https://search.parallel.ai/mcp")!,
@@ -40,6 +41,7 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
         self.endpoint = endpoint
         if let session {
             self.session = session
+            self.ownsSession = false
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieAcceptPolicy = .never
@@ -48,6 +50,13 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
             configuration.urlCache = nil
             configuration.timeoutIntervalForResource = 30
             self.session = URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
         }
     }
 
@@ -114,10 +123,13 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
             )
             try? await close(sessionID: sessionID)
             return Self.sources(from: response.payload, positions: positions)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as ParallelSearchMCPError {
             if let sessionID { try? await close(sessionID: sessionID) }
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             if let sessionID { try? await close(sessionID: sessionID) }
             throw ParallelSearchMCPError.requestFailed(error.localizedDescription)
         }
@@ -251,17 +263,21 @@ final class ParallelSearchMCPClient: WebSearching, @unchecked Sendable {
             return
         }
         if let string = value as? String,
-           string.utf8.count <= maximumResponseBytes,
-           let data = string.data(using: .utf8),
-           let decoded = try? JSONSerialization.jsonObject(with: data) {
-            collectSourceObjects(in: decoded, into: &result, depth: depth + 1)
+           string.utf8.count <= maximumResponseBytes {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if (trimmed.first == "{" || trimmed.first == "["),
+               let data = trimmed.data(using: .utf8),
+               let decoded = try? JSONSerialization.jsonObject(with: data) {
+                collectSourceObjects(in: decoded, into: &result, depth: depth + 1)
+            }
         }
     }
 
     private static func isSafe(_ value: String) -> Bool {
         let markers = [
             "ignore previous", "ignore all previous", "system prompt", "developer message",
-            "you are chatgpt", "api key", "忽略之前", "忽略以上", "系统提示词", "开发者消息",
+            "you are chatgpt", "api key:", "api key=", "reveal api key", "output api key",
+            "忽略之前", "忽略以上", "系统提示词", "开发者消息",
             "泄露密钥", "输出凭据",
         ]
         return !markers.contains { value.localizedCaseInsensitiveContains($0) }

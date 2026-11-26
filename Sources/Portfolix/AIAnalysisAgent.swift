@@ -1502,7 +1502,12 @@ struct AIAnalysisAgent: Sendable {
                     }
                 }
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             throw AIAnalysisPipelineError(stage: reportStage, underlying: error)
         }
         let raw = completion.content
@@ -1584,7 +1589,12 @@ struct AIAnalysisAgent: Sendable {
                         progress: progress
                     )
                     lastRepaired = candidate
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
+                    if Task.isCancelled {
+                        throw CancellationError()
+                    }
                     throw AIAnalysisPipelineError(stage: repairProgress, underlying: error,
                         partialArtifacts: failureArtifacts(repaired: lastRepaired, error: error))
                 }
@@ -2071,68 +2081,6 @@ struct AIAnalysisAgent: Sendable {
         _ = inputJSON
     }
 
-    static func investmentProfile(
-        from payload: LLMInvestmentProfilePayload,
-        localScores: [AIInvestmentProfileScore],
-        generatedAt: Date,
-        model: String,
-        riskProfileVersion: Int,
-        inputFingerprint: String,
-        exposureCoverage: Double? = nil,
-        unknownExposurePercent: Double? = nil,
-        evidenceSourceCount: Int? = nil,
-        assetExposures: [AssetExposureProfile]? = nil
-    ) throws -> AIInvestmentProfile {
-        let requiredIDs = ["growth", "global", "diversification", "defense", "cashflow", "activity"]
-        var scoresByID: [String: LLMInvestmentProfileDimensionPayload] = [:]
-        let localScoresByID = Dictionary(uniqueKeysWithValues: localScores.map { ($0.id, $0.score) })
-        for dimension in payload.dimensions {
-            guard scoresByID[dimension.id] == nil else {
-                throw AIAnalysisAgentError.invalidReport
-            }
-            scoresByID[dimension.id] = dimension
-        }
-        guard Set(scoresByID.keys).isSuperset(of: requiredIDs) else {
-            throw AIAnalysisAgentError.invalidReport
-        }
-
-        let dimensions = try requiredIDs.map { id in
-            guard
-                let score = scoresByID[id],
-                let localScore = localScoresByID[id],
-                score.score.isFinite
-            else {
-                throw AIAnalysisAgentError.invalidReport
-            }
-            let boundedScore = min(max(score.score, localScore - 10), localScore + 10)
-            let finalScore = min(max(boundedScore, 0), 100)
-            return AIInvestmentProfileScore(
-                id: id,
-                score: finalScore,
-                reason: String(score.reason.prefix(220))
-            )
-        }
-
-        let text = ([payload.summary] + dimensions.map(\.reason)).joined(separator: " ")
-        try AIInformationSecurityGuardrail.validateGeneratedText(text)
-
-        return AIInvestmentProfile(
-            generatedAt: generatedAt,
-            profileDate: dayString(from: generatedAt),
-            model: model,
-            promptVersion: AIAnalysisPromptText.investmentProfileVersion,
-            riskProfileVersion: riskProfileVersion,
-            inputFingerprint: inputFingerprint,
-            dimensions: dimensions,
-            summary: String(payload.summary.prefix(300)),
-            confidence: ["low", "medium", "high"].contains(payload.confidence) ? payload.confidence : "low",
-            exposureCoverage: exposureCoverage,
-            unknownExposurePercent: unknownExposurePercent,
-            evidenceSourceCount: evidenceSourceCount,
-            assetExposures: assetExposures
-        )
-    }
-
     static func decodePayload(
         _ raw: String,
         expectedLanguage: AIResponseLanguage? = nil
@@ -2385,7 +2333,7 @@ struct AIAnalysisAgent: Sendable {
             "http://", "https://", "api key", "apikey", "system prompt", "developer message",
             "ignore previous", "忽略之前", "系统提示词", "开发者消息", "密钥", "凭据",
             "持仓数量", "持仓成本", "持仓市值", "账户资产", "portfolio value", "holding quantity",
-            "cost basis", "market value",
+            "my cost basis", "my market value", "portfolio cost basis", "portfolio market value",
         ]
         if prohibitedQueryFragments.contains(where: { query.localizedCaseInsensitiveContains($0) }) {
             return "Query contains prohibited private, URL, or instruction text. Search only public market or asset facts."
@@ -2463,10 +2411,11 @@ struct AIAnalysisAgent: Sendable {
         })
     }
 
+    private static let numberTokenRegex = try! NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#)
+
     private static func numberTokens(in value: String) -> Set<String> {
-        guard let expression = try? NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#) else { return [] }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return Set(expression.matches(in: value, range: range).compactMap { match in
+        return Set(numberTokenRegex.matches(in: value, range: range).compactMap { match in
             Range(match.range, in: value).map { String(value[$0]) }
         })
     }
@@ -2520,17 +2469,6 @@ struct AIAnalysisAgent: Sendable {
         appendIfMissing("Nasdaq S&P 500 Dow Jones", hints: ["Nasdaq", "S&P 500", "SP500", "Dow Jones"])
         appendIfMissing("Reuters CNBC MarketWatch", hints: ["Reuters", "CNBC", "MarketWatch"])
         return String(optimized.prefix(128))
-    }
-
-    static func decodeInvestmentProfilePayload(_ raw: String) -> LLMInvestmentProfilePayload? {
-        let trimmed = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (try? AIInformationSecurityGuardrail.validateGeneratedText(trimmed)) != nil else { return nil }
-        guard let data = trimmed.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(LLMInvestmentProfilePayload.self, from: data)
     }
 
     static func decodeFollowUpPayload(_ raw: String) -> LLMFollowUpPayload? {
@@ -2952,7 +2890,12 @@ struct AIAnalysisHarness {
                         "enabled_providers": request.searchConfiguration.orderedEnabledProviders.map(\.rawValue).joined(separator: ","),
                     ]
                 )
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
                 stopReason = "search_planning_failed"
                 toolPlan = AIWebSearchToolPlan(
                     toolCalls: [],
@@ -3473,6 +3416,29 @@ enum AIUserFacingTextSanitizer {
         ("JSON", "结构化数据", "structured data"),
     ]
 
+    private static let compiledReplacements: [(regex: NSRegularExpression, chinese: String, english: String)] = replacements.compactMap { replacement in
+        let escaped = NSRegularExpression.escapedPattern(for: replacement.0)
+        // Enforce ASCII word boundaries on identifier/word terms so ordinary English words
+        // such as "example", "unparalleled", "harnessing", or "schematic" remain intact.
+        let needsWordBoundary = replacement.0.unicodeScalars.allSatisfy {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_")
+        }
+        let pattern = needsWordBoundary
+            ? "(?<![A-Za-z0-9_])\(escaped)(?![A-Za-z0-9_])" : escaped
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        return (regex, replacement.1, replacement.2)
+    }
+
+    private static let chineseDisclosureRegex = try! NSRegularExpression(
+        pattern: #"(?:以上)?内容由\s*AI\s*基于(?:现有数据理解|当前持仓与公开信息)生成[，,]\s*仅供参考[，,]\s*不构成投资建议[。.]?"#,
+        options: .caseInsensitive
+    )
+
+    private static let englishDisclosureRegex = try! NSRegularExpression(
+        pattern: #"Generated by\s*AI\s*from available data for reference only[.;,\s]*(?:This is )?not investment advice[.]?"#,
+        options: .caseInsensitive
+    )
+
     static func sanitize(_ text: String, language: AIResponseLanguage? = nil) -> String {
         sanitize(text, citations: [], language: language).text
     }
@@ -3495,28 +3461,17 @@ enum AIUserFacingTextSanitizer {
             }
             source.replaceCharacters(in: range, with: replacement)
         }
-        func replaceMatches(_ pattern: String, with replacement: String) {
-            guard let expression = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return }
+        func replaceMatches(_ expression: NSRegularExpression, with replacement: String) {
             for match in expression.matches(in: source as String, range: NSRange(location: 0, length: source.length)).reversed() {
                 replace(match.range, with: replacement)
             }
         }
-        for replacement in replacements {
-            let escaped = NSRegularExpression.escapedPattern(for: replacement.0)
-            // Enforce ASCII word boundaries on identifier/word terms so ordinary English words
-            // such as "example", "unparalleled", "harnessing", or "schematic" remain intact.
-            let needsWordBoundary = replacement.0.unicodeScalars.allSatisfy {
-                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_")
-            }
-            let pattern = needsWordBoundary
-                ? "(?<![A-Za-z0-9_])\(escaped)(?![A-Za-z0-9_])" : escaped
-            replaceMatches(pattern,
-                with: resolvedLanguage == .english ? replacement.2 : replacement.1)
+        for replacement in compiledReplacements {
+            replaceMatches(replacement.regex,
+                with: resolvedLanguage == .english ? replacement.english : replacement.chinese)
         }
-        let chineseDisclosurePattern = #"(?:以上)?内容由\s*AI\s*基于(?:现有数据理解|当前持仓与公开信息)生成[，,]\s*仅供参考[，,]\s*不构成投资建议[。.]?"#
-        let englishDisclosurePattern = #"Generated by\s*AI\s*from available data for reference only[.;,\s]*(?:This is )?not investment advice[.]?"#
-        replaceMatches(chineseDisclosurePattern, with: "")
-        replaceMatches(englishDisclosurePattern, with: "")
+        replaceMatches(chineseDisclosureRegex, with: "")
+        replaceMatches(englishDisclosureRegex, with: "")
         let trimmed = (source as String).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return ("", []) }
         let range = source.range(of: trimmed)
@@ -3838,7 +3793,7 @@ enum AIFollowUpGuardrail {
         guard !trimmed.isEmpty, trimmed.count <= 500 else {
             throw AIAnalysisAgentError.invalidReport
         }
-        let blocked = ["api key", "password", "system prompt", "开发者指令", "系统提示词", "导出密钥", "修改持仓", "删除持仓", "更改配置"]
+        let blocked = ["api key", "password", "system prompt", "开发者指令", "系统提示词", "导出密钥"]
         guard !blocked.contains(where: { trimmed.localizedCaseInsensitiveContains($0) }) else {
             throw AIAnalysisAgentError.invalidReport
         }
@@ -4290,18 +4245,6 @@ struct LLMRebalanceActionPayload: Decodable {
         self.riskNote = riskNote
         self.evidenceRefs = evidenceRefs
     }
-}
-
-struct LLMInvestmentProfilePayload: Decodable {
-    let dimensions: [LLMInvestmentProfileDimensionPayload]
-    let summary: String
-    let confidence: String
-}
-
-struct LLMInvestmentProfileDimensionPayload: Decodable {
-    let id: String
-    let score: Double
-    let reason: String
 }
 
 struct LLMFollowUpPayload: Decodable {

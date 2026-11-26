@@ -59,6 +59,14 @@ enum AIResponseSchema: String, Equatable, Sendable {
       return Self.object([
         "answer": Self.text(maximum: AIFollowUpGuardrail.maximumAnswerCharacters),
         "limitations": Self.list(text, maximum: 4),
+        "memory_candidates": Self.list(
+          Self.object([
+            "category": Self.choice(AIMemoryCategory.allCases.map(\.rawValue)),
+            "content": Self.text(maximum: AIMemoryPolicy.maximumContentCharacters),
+            "related_asset": Self.nullableText(),
+          ]),
+          maximum: AIMemoryPolicy.maximumCandidatesPerTurn
+        ),
       ])
     case .searchPlan:
       return Self.object([

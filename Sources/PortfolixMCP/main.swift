@@ -43,14 +43,33 @@ while true {
     let count = read(STDIN_FILENO, &buffer, buffer.count)
     if count < 0, errno == EINTR { continue }
     if count <= 0 { break }
-    for byte in buffer.prefix(count) {
-        if byte == 10 {
+    var cursor = 0
+    while cursor < count {
+        if let newlineIndex = buffer[cursor..<count].firstIndex(of: 10) {
+            if !oversized {
+                let chunkLength = newlineIndex - cursor
+                if line.count + chunkLength > 65_536 {
+                    oversized = true
+                    line.removeAll(keepingCapacity: true)
+                } else if chunkLength > 0 {
+                    line.append(contentsOf: buffer[cursor..<newlineIndex])
+                }
+            }
             send(server.respond(to: oversized ? Data(repeating: 32, count: 65_537) : line))
             line.removeAll(keepingCapacity: true)
             oversized = false
-        } else if !oversized {
-            if line.count == 65_536 { oversized = true; line.removeAll(keepingCapacity: true) }
-            else { line.append(byte) }
+            cursor = newlineIndex + 1
+        } else {
+            if !oversized {
+                let chunkLength = count - cursor
+                if line.count + chunkLength > 65_536 {
+                    oversized = true
+                    line.removeAll(keepingCapacity: true)
+                } else if chunkLength > 0 {
+                    line.append(contentsOf: buffer[cursor..<count])
+                }
+            }
+            cursor = count
         }
     }
 }

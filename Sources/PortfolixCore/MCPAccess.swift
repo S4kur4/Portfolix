@@ -86,7 +86,8 @@ public enum MCPAccess {
         let identifier = appBundleURL.flatMap { Bundle(url: $0)?.bundleIdentifier } ?? "app.portfolix.mac"
         let safeIdentifier = !identifier.isEmpty && identifier.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") })
             && identifier != "." && identifier != ".." ? identifier : "app.portfolix.mac"
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return support.appendingPathComponent(safeIdentifier).appendingPathComponent("portfolix.sqlite3")
     }
 

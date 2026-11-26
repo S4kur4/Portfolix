@@ -280,9 +280,12 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             default:
                 throw LLMClientError.serverError(httpResponse.statusCode)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as LLMClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw LLMClientError.requestFailed(error.localizedDescription)
         }
     }
@@ -333,9 +336,12 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             default:
                 throw LLMClientError.serverError(httpResponse.statusCode)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as LLMClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw LLMClientError.requestFailed(error.localizedDescription)
         }
     }
@@ -442,6 +448,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
         var reasoningCharacterCount = 0
         var finishReason: String?
         var regularResponseLines: [String] = []
+        let decoder = JSONDecoder()
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -461,7 +468,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
             }
             guard
                 let data = payload.data(using: .utf8),
-                let chunk = try? JSONDecoder().decode(OpenAIStreamResponse.self, from: data)
+                let chunk = try? decoder.decode(OpenAIStreamResponse.self, from: data)
             else {
                 continue
             }
@@ -492,7 +499,7 @@ final class OpenAICompatibleClient: LLMCompleting, LLMConnectionValidating, @unc
         }
 
         let data = regularResponseLines.joined(separator: "\n").data(using: .utf8)
-        guard let data, let decoded = try? JSONDecoder().decode(OpenAIChatResponse.self, from: data) else {
+        guard let data, let decoded = try? decoder.decode(OpenAIChatResponse.self, from: data) else {
             throw LLMClientError.invalidResponse
         }
         let selected = decoded.choices.first { $0.index == 0 } ?? decoded.choices.first { $0.index == nil }

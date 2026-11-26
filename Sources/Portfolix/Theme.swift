@@ -450,17 +450,6 @@ private struct PortfolixGlassSurface<S: Shape>: ViewModifier {
     }
 }
 
-private struct PortfolixFormGlassKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var portfolixFormGlass: Bool {
-        get { self[PortfolixFormGlassKey.self] }
-        set { self[PortfolixFormGlassKey.self] = newValue }
-    }
-}
-
 private struct PortfolixSecondaryGlassSurface<S: InsettableShape>: ViewModifier {
     let shape: S
     var interactive: Bool = true
@@ -953,9 +942,17 @@ struct ButtonGlassBackground: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: ButtonGlassView, context: Context) {
-        nsView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
-        nsView.tintColor = tint.map { NSColor($0) }
-        nsView.cornerRadius = cornerRadius
+        let appearanceName: NSAppearance.Name = colorScheme == .dark ? .darkAqua : .aqua
+        if nsView.appearance?.name != appearanceName {
+            nsView.appearance = NSAppearance(named: appearanceName)
+        }
+        let targetTint = tint.map { NSColor($0) }
+        if nsView.tintColor != targetTint {
+            nsView.tintColor = targetTint
+        }
+        if nsView.cornerRadius != cornerRadius {
+            nsView.cornerRadius = cornerRadius
+        }
     }
 }
 
@@ -1066,12 +1063,14 @@ private enum PortfolixNumberFormatters {
     }
 }
 
+private let minimumVisibleMoneyValue = Decimal(sign: .plus, exponent: -8, significand: 1)
+
 func formatMoney(_ value: Decimal, currency: DisplayCurrency, maximumFractionDigits: Int = 2) -> String {
     formattedMoney(value, currency: currency, maximumFractionDigits: maximumFractionDigits, separatesSymbol: false)
 }
 
 func formatUnitCost(_ value: Decimal, currency: DisplayCurrency) -> String {
-    if value != 0, abs(value) < Decimal(string: "0.00000001")! {
+    if value != 0, abs(value) < minimumVisibleMoneyValue {
         return formatMoney(value, currency: currency)
     }
     let maxDigits = abs(value) < 0.01 ? 8 : 6
@@ -1090,9 +1089,8 @@ private func formattedMoney(
     separatesSymbol: Bool
 ) -> String {
     let absoluteValue = abs(value)
-    let minimumVisibleValue = Decimal(string: "0.00000001")!
     let separator = separatesSymbol ? " " : ""
-    if maximumFractionDigits == 2, absoluteValue > 0, absoluteValue < minimumVisibleValue {
+    if maximumFractionDigits == 2, absoluteValue > 0, absoluteValue < minimumVisibleMoneyValue {
         return "\(currency.symbol)\(separator)< 0.00000001"
     }
 

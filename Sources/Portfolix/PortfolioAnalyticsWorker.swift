@@ -59,10 +59,6 @@ actor PortfolioAnalyticsWorker {
         })
     }
 
-    func fetchLatestAIAnalysisArtifacts() throws -> AIAnalysisArtifactBundle? {
-        try resolvedRepository().fetchLatestAIAnalysisArtifacts()
-    }
-
     func persistQuoteRefresh(
         updatedPositions: [Position],
         snapshotPositions: [Position],

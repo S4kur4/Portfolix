@@ -174,22 +174,41 @@ enum PositionClosureMath {
         return result
     }
 
-    static func day(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
-
-    static func date(_ day: String) -> Date? {
+    private static let formatterLock = NSLock()
+    private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.isLenient = false
-        guard day.count == 10, let date = formatter.date(from: day), formatter.string(from: date) == day else { return nil }
+        return formatter
+    }()
+    private nonisolated(unsafe) static let isoFormatter = ISO8601DateFormatter()
+
+    static func day(_ date: Date) -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return dayFormatter.string(from: date)
+    }
+
+    static func date(_ day: String) -> Date? {
+        guard day.count == 10 else { return nil }
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        guard let date = dayFormatter.date(from: day), dayFormatter.string(from: date) == day else { return nil }
         return date
+    }
+
+    static func isoTimestamp(_ date: Date) -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return isoFormatter.string(from: date)
+    }
+
+    static func isoDate(_ value: String) -> Date? {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return isoFormatter.date(from: value)
     }
 
     static func cashName(_ currency: DisplayCurrency, language: AppLanguage) -> String {
@@ -200,7 +219,7 @@ enum PositionClosureMath {
         Position(id: id, name: name, symbol: symbol ?? currency.rawValue, category: .cash,
             quoteCurrency: currency, quantity: quantity, totalCost: quantity, averageCost: 1,
             latestPrice: 1, marketValueCNY: quantity / currency.rateFromCNY, profitRate: 0,
-            weeklyTrend: [], source: "手工价格", quoteTime: ISO8601DateFormatter().string(from: .now), freshness: .manual)
+            weeklyTrend: [], source: "手工价格", quoteTime: isoTimestamp(.now), freshness: .manual)
     }
 }
 
@@ -241,7 +260,7 @@ enum PositionClosureValidation {
     static func validate(_ record: PositionClosureRecord) throws {
         let holding = try record.holding.position()
         guard holding.costIsKnown, holding.category != .cash, let tradeDate = PositionClosureMath.date(record.tradeDate),
-              let recordedAt = ISO8601DateFormatter().date(from: record.recordedAt),
+              let recordedAt = PositionClosureMath.isoDate(record.recordedAt),
               PositionClosureMath.day(tradeDate) <= PositionClosureMath.day(recordedAt),
               let price = PositionClosureMath.decimal(record.executionPrice), price >= 0,
               let fees = PositionClosureMath.decimal(record.fees), fees >= 0,
@@ -251,7 +270,7 @@ enum PositionClosureValidation {
               record.originalSnapshots.count <= 367, record.historyAdjustments.count <= 1_000,
               abs((holding.quantity * price - net - fees).doubleValue) <= (record.currency == .usdt ? 0.00000001 : 0.01),
               record.dailyProfitCNY == nil || PositionClosureMath.decimal(record.dailyProfitCNY!) != nil,
-              record.reversedAt == nil || ISO8601DateFormatter().date(from: record.reversedAt!) != nil else {
+              record.reversedAt == nil || PositionClosureMath.isoDate(record.reversedAt!) != nil else {
             throw PositionClosureError.invalidRecord
         }
         if let cashID = record.cashPositionID {

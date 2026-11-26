@@ -80,8 +80,11 @@ final class MCPReferenceCodeScrollView: NSScrollView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { nil }
 
+    private var cachedMeasurement: (text: String, width: CGFloat, height: CGFloat)?
+
     func setText(_ text: String) {
         guard codeTextView.string != text else { return }
+        cachedMeasurement = nil
         codeTextView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: MCPReferenceCodeLayout.attributes()))
         codeTextView.setSelectedRange(NSRange(location: 0, length: 0))
         resizeDocument()
@@ -97,7 +100,15 @@ final class MCPReferenceCodeScrollView: NSScrollView {
     private func resizeDocument() {
         guard contentSize.width > MCPReferenceCodeLayout.inset * 2 else { return }
         let width = max(1, contentSize.width)
-        let height = MCPReferenceCodeLayout.measuredHeight(for: codeTextView.string, width: width)
+        let currentText = codeTextView.string
+        let height: CGFloat
+        if let cached = cachedMeasurement, cached.text == currentText, abs(cached.width - width) < 0.5 {
+            height = cached.height
+        } else {
+            let measured = MCPReferenceCodeLayout.measuredHeight(for: currentText, width: width)
+            cachedMeasurement = (currentText, width, measured)
+            height = measured
+        }
         let size = NSSize(width: width, height: max(contentSize.height, height))
         if codeTextView.frame.size != size { codeTextView.setFrameSize(size) }
     }

@@ -83,13 +83,21 @@ struct HoldingVoiceWaveformSnapshot: Equatable {
     }
 }
 
+/// Non-published mutable waveform buffer read directly by `HoldingVoiceWaveform`'s
+/// `TimelineView` at display refresh rate, avoiding 30 Hz SwiftUI parent view invalidations.
+@MainActor
+final class HoldingVoiceWaveformBuffer {
+    var snapshot = HoldingVoiceWaveformSnapshot.empty()
+}
+
 @MainActor
 final class HoldingVoiceRecorder: ObservableObject {
     private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
     @Published private(set) var isStarting = false
-    @Published private(set) var waveform = HoldingVoiceWaveformSnapshot.empty()
+    let waveformBuffer = HoldingVoiceWaveformBuffer()
+    var waveform: HoldingVoiceWaveformSnapshot { waveformBuffer.snapshot }
     @Published var errorMessage: String?
 
     var isTranscribing: Bool {
@@ -119,6 +127,10 @@ final class HoldingVoiceRecorder: ObservableObject {
     private var smoothedLevel: CGFloat = 0
     private var signalSampleCount = 0
 
+    isolated deinit {
+        blur()
+    }
+
     func focus(
         numeric: Bool,
         english: Bool,
@@ -145,7 +157,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         case .functionModifier:
             monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
                 MainActor.assumeIsolated {
-                    guard let self, event.keyCode == 63, NSApp.isActive else { return }
+                    guard let self, event.keyCode == 63, NSApp?.isActive == true else { return }
                     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                     if flags.contains(.function) { self.press() } else { self.release() }
                 }
@@ -155,7 +167,7 @@ final class HoldingVoiceRecorder: ObservableObject {
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
                 guard event.keyCode == 122 else { return event }
                 MainActor.assumeIsolated {
-                    guard let self, NSApp.isActive else { return }
+                    guard let self, NSApp?.isActive == true else { return }
                     if event.type == .keyDown { self.press() } else { self.release() }
                 }
                 return nil
@@ -426,11 +438,11 @@ final class HoldingVoiceRecorder: ObservableObject {
         }
 
         let retainedCount = HoldingVoiceWaveformMetrics.historyCount - stepCount
-        var levels = Array(waveform.levels.suffix(retainedCount))
+        var levels = Array(waveformBuffer.snapshot.levels.suffix(retainedCount))
         levels.append(contentsOf: newLevels)
         waveformTick = tick
         pendingLevel = 0
-        waveform = HoldingVoiceWaveformSnapshot(
+        waveformBuffer.snapshot = HoldingVoiceWaveformSnapshot(
             levels: levels,
             anchor: HoldingVoiceWaveformMetrics.anchor(for: tick)
         )
@@ -445,7 +457,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         prepareWaveformSampling(at: date)
         smoothedLevel = 0
         signalSampleCount = 0
-        waveform = .empty(at: date)
+        waveformBuffer.snapshot = .empty(at: date)
     }
 
     @available(macOS 26.0, *)
@@ -710,7 +722,7 @@ private struct HoldingVoiceInputModifier: ViewModifier {
 
     private var waveform: some View {
         HoldingVoiceWaveform(
-            snapshot: recorder.waveform,
+            buffer: recorder.waveformBuffer,
             isTranscribing: recorder.isTranscribing
         )
         .padding(.horizontal, PortfolixSpacing.sm)
@@ -719,16 +731,35 @@ private struct HoldingVoiceInputModifier: ViewModifier {
 }
 
 struct HoldingVoiceWaveform: View {
-    let snapshot: HoldingVoiceWaveformSnapshot
+    let snapshot: HoldingVoiceWaveformSnapshot?
+    let buffer: HoldingVoiceWaveformBuffer?
     var isTranscribing: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    init(snapshot: HoldingVoiceWaveformSnapshot, isTranscribing: Bool = false) {
+        self.snapshot = snapshot
+        self.buffer = nil
+        self.isTranscribing = isTranscribing
+    }
+
+    init(buffer: HoldingVoiceWaveformBuffer, isTranscribing: Bool = false) {
+        self.snapshot = nil
+        self.buffer = buffer
+        self.isTranscribing = isTranscribing
+    }
+
+    private var currentSnapshot: HoldingVoiceWaveformSnapshot {
+        buffer?.snapshot ?? snapshot ?? .empty()
+    }
+
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { timeline in
+            let activeSnapshot = currentSnapshot
             Canvas { context, size in
                 drawFluidWave(
                     in: &context,
                     size: size,
+                    snapshot: activeSnapshot,
                     time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
                 )
             }
@@ -739,6 +770,7 @@ struct HoldingVoiceWaveform: View {
     private func drawFluidWave(
         in context: inout GraphicsContext,
         size: CGSize,
+        snapshot: HoldingVoiceWaveformSnapshot,
         time: TimeInterval
     ) {
         guard size.width > 4, size.height > 4 else { return }

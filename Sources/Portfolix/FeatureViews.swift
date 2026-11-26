@@ -446,8 +446,6 @@ struct PositionSourceCell: View {
     let store: PortfolioStore
 
     var body: some View {
-        let isSelected = store.selectedPositionID == position.id
-
         HStack(spacing: PortfolixSpacing.sm) {
             VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
                 Text(localizedQuoteSource(position.source, language: store.appLanguage))
@@ -464,18 +462,30 @@ struct PositionSourceCell: View {
             Spacer(minLength: PortfolixSpacing.sm)
 
             if MarketDataAdapter.supportsQuote(for: position) {
-                PositionRefreshButton(
-                    position: position,
-                    isRefreshing: store.refreshingPositionIDs.contains(position.id),
-                    language: store.appLanguage
-                ) {
-                    store.refreshPosition(id: position.id)
-                }
-                .opacity(isSelected ? 1 : 0)
-                .allowsHitTesting(isSelected)
-                .accessibilityHidden(!isSelected)
+                PositionSourceRefreshSlot(position: position, store: store)
             }
         }
+    }
+}
+
+/// Isolates `selectedPositionID` and `refreshingPositionIDs` observation to the trailing
+/// refresh button so changing table selection does not rebuild the entire source cell.
+private struct PositionSourceRefreshSlot: View {
+    let position: Position
+    let store: PortfolioStore
+
+    var body: some View {
+        let isSelected = store.selectedPositionID == position.id
+        PositionRefreshButton(
+            position: position,
+            isRefreshing: store.refreshingPositionIDs.contains(position.id),
+            language: store.appLanguage
+        ) {
+            store.refreshPosition(id: position.id)
+        }
+        .opacity(isSelected ? 1 : 0)
+        .allowsHitTesting(isSelected)
+        .accessibilityHidden(!isSelected)
     }
 }
 
@@ -1197,6 +1207,7 @@ private struct AIReportFollowUpMessage: View {
     }
 
     var body: some View {
+        let resolvedCitations = uniqueCitations
         VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
             if !activitySteps.isEmpty {
                 AIReportUntimestampedAgentRow {
@@ -1209,7 +1220,7 @@ private struct AIReportFollowUpMessage: View {
                     AIReportCitedText(text: text, citations: citations)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if !uniqueCitations.isEmpty {
+                    if !resolvedCitations.isEmpty {
                         Rectangle()
                             .fill(PortfolixTheme.border)
                             .frame(height: 0.5)
@@ -1217,7 +1228,7 @@ private struct AIReportFollowUpMessage: View {
                             .padding(.bottom, PortfolixSpacing.xs)
 
                         AIReportFollowUpSourcesDisclosure(
-                            citations: uniqueCitations,
+                            citations: resolvedCitations,
                             language: language
                         )
                     }
@@ -1443,6 +1454,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
     private var renderedCitations: [AIMessageCitation] = []
     private var renderedAppearanceName: NSAppearance.Name?
     private var lastMeasuredWidth: CGFloat = 320
+    private var cachedHeight: (width: CGFloat, height: CGFloat)?
     var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
 
     override init(frame frameRect: NSRect) {
@@ -1494,6 +1506,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
         renderedText = text
         renderedCitations = citations
         renderedAppearanceName = currentAppearance
+        cachedHeight = nil
 
         let resolvedCitationColor = citationColor
         textView.linkTextAttributes = [
@@ -1540,14 +1553,22 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
     func fittingHeight(for width: CGFloat) -> CGFloat {
         let resolvedWidth = max(1, width)
         lastMeasuredWidth = resolvedWidth
+        if let cachedHeight, abs(cachedHeight.width - resolvedWidth) < 0.5 {
+            return cachedHeight.height
+        }
+        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else {
+            return 17
+        }
         textView.frame.size.width = resolvedWidth
-        textView.textContainer?.containerSize = NSSize(
+        textContainer.containerSize = NSSize(
             width: resolvedWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-        let usedHeight = textView.layoutManager?.usedRect(for: textView.textContainer!).height ?? 0
-        return max(17, ceil(usedHeight))
+        layoutManager.ensureLayout(for: textContainer)
+        let usedHeight = layoutManager.usedRect(for: textContainer).height
+        let height = max(17, ceil(usedHeight))
+        cachedHeight = (width: resolvedWidth, height: height)
+        return height
     }
 
     override var intrinsicContentSize: NSSize {
@@ -2853,7 +2874,7 @@ private struct AIReportChatComposer: View {
             .overlay {
                 if isVoiceActive {
                     AIReportVoiceListeningOverlay(
-                        snapshot: voiceRecorder.waveform,
+                        waveformBuffer: voiceRecorder.waveformBuffer,
                         isTranscribing: voiceRecorder.isTranscribing,
                         language: language
                     )
@@ -3086,7 +3107,7 @@ private struct AIReportChatComposer: View {
 }
 
 private struct AIReportVoiceListeningOverlay: View {
-    let snapshot: HoldingVoiceWaveformSnapshot
+    let waveformBuffer: HoldingVoiceWaveformBuffer
     let isTranscribing: Bool
     let language: AppLanguage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -3125,7 +3146,7 @@ private struct AIReportVoiceListeningOverlay: View {
             }
 
             HoldingVoiceWaveform(
-                snapshot: snapshot,
+                buffer: waveformBuffer,
                 isTranscribing: isTranscribing
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3240,13 +3261,17 @@ struct AIReportComposerTextInput: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        let boundsChanged = context.coordinator.parent.minHeight != minHeight
+            || context.coordinator.parent.maxHeight != maxHeight
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
         if textView.placeholderText != placeholder {
             textView.placeholderText = placeholder
             textView.needsDisplay = true
         }
+        var textChanged = false
         if !textView.hasMarkedText(), textView.string != text {
+            textChanged = true
             context.coordinator.isProgrammaticUpdate = true
             textView.string = text
             let end = (text as NSString).length
@@ -3264,7 +3289,9 @@ struct AIReportComposerTextInput: NSViewRepresentable {
                 textView.scrollRangeToVisible(NSRange(location: end, length: 0))
             }
         }
-        context.coordinator.recalculateHeight()
+        if textChanged || boundsChanged {
+            context.coordinator.recalculateHeight()
+        }
     }
 
     @MainActor
@@ -3662,6 +3689,12 @@ struct RiskProfileView: View {
 
     var body: some View {
         @Bindable var store = store
+        let evaluation = store.riskConstraintEvaluation
+        let constraintCount = evaluation.results.count
+        let passedConstraintCount = evaluation.results.count { $0 }
+        let breachCount = constraintCount - passedConstraintCount
+        let largestPositionLabel = evaluation.largestPositionName
+            ?? localizedText("暂无持仓", "No holdings", language: store.appLanguage)
 
         ScrollView {
             VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
@@ -3691,7 +3724,7 @@ struct RiskProfileView: View {
                     )
 
                     RiskPortfolioMatchCard(
-                        score: portfolioMatchScore,
+                        score: evaluation.matchScore,
                         passedCount: passedConstraintCount,
                         totalCount: constraintCount,
                         breachCount: breachCount,
@@ -3706,7 +3739,7 @@ struct RiskProfileView: View {
                         RiskConstraintSliderRow(
                             title: localizedText("单一资产最大占比", "Max Single Asset", language: store.appLanguage),
                             actualLabel: largestPositionLabel,
-                            actualValue: largestPositionPercent,
+                            actualValue: evaluation.largestPositionPercent,
                             limitLabel: localizedText("上限", "Limit", language: store.appLanguage),
                             value: $store.positionLimit,
                             range: 10 ... 60,
@@ -3718,7 +3751,7 @@ struct RiskProfileView: View {
                         RiskConstraintSliderRow(
                             title: localizedText("加密资产上限", "Max Crypto", language: store.appLanguage),
                             actualLabel: localizedText("当前加密资产", "Current Crypto", language: store.appLanguage),
-                            actualValue: cryptoAllocationPercent,
+                            actualValue: evaluation.cryptoAllocationPercent,
                             limitLabel: localizedText("上限", "Limit", language: store.appLanguage),
                             value: $store.cryptoLimit,
                             range: 0 ... 50,
@@ -3730,7 +3763,7 @@ struct RiskProfileView: View {
                         RiskConstraintSliderRow(
                             title: localizedText("外币资产上限", "Max Non-Base Currency", language: store.appLanguage),
                             actualLabel: localizedText("当前外币占比", "Current Non-Base", language: store.appLanguage),
-                            actualValue: nonCNYAllocationPercent,
+                            actualValue: evaluation.nonCNYAllocationPercent,
                             limitLabel: localizedText("上限", "Limit", language: store.appLanguage),
                             value: $store.foreignCurrencyLimit,
                             range: 10 ... 90,
@@ -3742,7 +3775,7 @@ struct RiskProfileView: View {
                         RiskConstraintSliderRow(
                             title: localizedText("最低现金比例", "Minimum Cash", language: store.appLanguage),
                             actualLabel: localizedText("当前现金占比", "Current Cash", language: store.appLanguage),
-                            actualValue: cashAllocationPercent,
+                            actualValue: evaluation.cashAllocationPercent,
                             limitLabel: localizedText("下限", "Minimum", language: store.appLanguage),
                             value: $store.liquidityMinimum,
                             range: 0 ... 40,
@@ -3755,7 +3788,7 @@ struct RiskProfileView: View {
                 }
 
                 RiskMaintenanceCard(
-                    status: reviewStatus,
+                    status: reviewStatus(for: evaluation),
                     isConfigured: store.riskProfileConfigured,
                     version: store.riskProfileVersion,
                     updatedAt: store.riskProfileUpdatedAt,
@@ -3817,55 +3850,11 @@ struct RiskProfileView: View {
         }
     }
 
-    private var riskEvaluation: RiskConstraintEvaluation {
-        store.riskConstraintEvaluation
-    }
-
-    private var largestPositionPercent: Double {
-        riskEvaluation.largestPositionPercent
-    }
-
-    private var largestPositionLabel: String {
-        riskEvaluation.largestPositionName ?? localizedText("暂无持仓", "No holdings", language: store.appLanguage)
-    }
-
-    private var cryptoAllocationPercent: Double {
-        riskEvaluation.cryptoAllocationPercent
-    }
-
-    private var nonCNYAllocationPercent: Double {
-        riskEvaluation.nonCNYAllocationPercent
-    }
-
-    private var cashAllocationPercent: Double {
-        riskEvaluation.cashAllocationPercent
-    }
-
-    private var constraintResults: [Bool] {
-        riskEvaluation.results
-    }
-
-    private var constraintCount: Int {
-        constraintResults.count
-    }
-
-    private var passedConstraintCount: Int {
-        constraintResults.filter(\.self).count
-    }
-
-    private var breachCount: Int {
-        constraintCount - passedConstraintCount
-    }
-
-    private var portfolioMatchScore: Double? {
-        riskEvaluation.matchScore
-    }
-
-    private var reviewStatus: RiskReviewStatus {
+    private func reviewStatus(for evaluation: RiskConstraintEvaluation) -> RiskReviewStatus {
         if !store.riskProfileConfigured {
             return .notConfigured
         }
-        if riskEvaluation.shouldSuggestReview {
+        if evaluation.shouldSuggestReview {
             return .reviewSuggested
         }
         return .valid
@@ -3960,13 +3949,26 @@ private struct RiskProfileSummaryCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
-                TimelineView(.periodic(from: .now, by: 30)) { context in
+                if isConfigured {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        CardMetaLabel(
+                            title: riskProfileVersionLabel(
+                                isConfigured: true,
+                                version: version,
+                                updatedAt: updatedAt,
+                                now: context.date,
+                                language: language
+                            ),
+                            symbol: "clock"
+                        )
+                    }
+                } else {
                     CardMetaLabel(
                         title: riskProfileVersionLabel(
-                            isConfigured: isConfigured,
+                            isConfigured: false,
                             version: version,
                             updatedAt: updatedAt,
-                            now: context.date,
+                            now: .now,
                             language: language
                         ),
                         symbol: "clock"
@@ -4145,13 +4147,25 @@ private struct RiskMaintenanceCard: View {
             }
             SettingsDivider()
             SettingsRow(title: localizedText("档案版本", "Version", language: language)) {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
+                if isConfigured {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        RiskSettingValue(
+                            riskProfileVersionLabel(
+                                isConfigured: true,
+                                version: version,
+                                updatedAt: updatedAt,
+                                now: context.date,
+                                language: language
+                            )
+                        )
+                    }
+                } else {
                     RiskSettingValue(
                         riskProfileVersionLabel(
-                            isConfigured: isConfigured,
+                            isConfigured: false,
                             version: version,
                             updatedAt: updatedAt,
-                            now: context.date,
+                            now: .now,
                             language: language
                         )
                     )

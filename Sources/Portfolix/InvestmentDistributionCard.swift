@@ -358,13 +358,16 @@ struct InvestmentCloudTreemap: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
             .onContinuousHover { phase in
+                let nextID: String?
                 switch phase {
                 case let .active(location):
-                    let hit = rectangles.enumerated().first { $0.element.contains(location) }
+                    nextID = rectangles.enumerated().first { $0.element.contains(location) }
                         .flatMap { items.indices.contains($0.offset) ? items[$0.offset].id : nil }
-                    setHighlightedID(hit)
                 case .ended:
-                    setHighlightedID(nil)
+                    nextID = nil
+                }
+                if activeHighlightedID != nextID {
+                    setHighlightedID(nextID)
                 }
             }
             .overlay(alignment: .topLeading) {

@@ -51,9 +51,15 @@ final class MCPDatabase {
     func readSnapshot<T>(_ body: () throws -> T) throws -> T {
         deadline = ContinuousClock.now.advanced(by: .seconds(2))
         guard sqlite3_exec(handle, "BEGIN", nil, nil, nil) == SQLITE_OK else { throw MCPFailure.unavailable }
-        defer { sqlite3_exec(handle, "ROLLBACK", nil, nil, nil) }
+        var committed = false
+        defer {
+            if !committed {
+                sqlite3_exec(handle, "ROLLBACK", nil, nil, nil)
+            }
+        }
         let result = try body()
         guard sqlite3_exec(handle, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw MCPFailure.unavailable }
+        committed = true
         return result
     }
 
@@ -76,6 +82,10 @@ final class MCPDatabase {
             let result = value.withCString { sqlite3_bind_text(statement, Int32(index + 1), $0, Int32(value.utf8.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
             guard result == SQLITE_OK else { throw MCPFailure.unavailable }
         }
+        let columnCount = Int(sqlite3_column_count(statement))
+        let columnNames: [String?] = (0..<columnCount).map { index in
+            sqlite3_column_name(statement, Int32(index)).map { String(cString: $0) }
+        }
         var rowCount = 0
         var byteCount = 0
         while true {
@@ -84,15 +94,16 @@ final class MCPDatabase {
             guard status == SQLITE_ROW else { throw status == SQLITE_INTERRUPT ? MCPFailure.queryLimit : MCPFailure.unavailable }
             rowCount += 1
             guard rowCount <= limit, ContinuousClock.now <= deadline else { throw MCPFailure.queryLimit }
-            var row: [String: String] = [:]
-            for index in 0..<sqlite3_column_count(statement) {
-                guard sqlite3_column_type(statement, index) != SQLITE_NULL,
-                      let name = sqlite3_column_name(statement, index), let value = sqlite3_column_text(statement, index) else { continue }
-                let length = Int(sqlite3_column_bytes(statement, index))
+            var row: [String: String] = Dictionary(minimumCapacity: columnCount)
+            for index in 0..<columnCount {
+                let col = Int32(index)
+                guard sqlite3_column_type(statement, col) != SQLITE_NULL,
+                      let name = columnNames[index], let value = sqlite3_column_text(statement, col) else { continue }
+                let length = Int(sqlite3_column_bytes(statement, col))
                 byteCount += length
                 guard byteCount <= byteLimit else { throw MCPFailure.queryLimit }
                 guard let text = String(bytes: UnsafeBufferPointer(start: value, count: length), encoding: .utf8) else { throw MCPFailure.invalidData }
-                row[String(cString: name)] = text
+                row[name] = text
             }
             try body(row)
         }

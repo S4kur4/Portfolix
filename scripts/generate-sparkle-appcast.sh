@@ -49,5 +49,7 @@ done
   "$WORK_DIR"
 
 cp "$WORK_DIR/appcast.xml" "$APPCAST_PATH"
-cp "$APPCAST_PATH" "$ROOT_DIR/appcast.xml"
+if [[ "$APPCAST_PATH" != "$ROOT_DIR/appcast.xml" ]]; then
+  cp "$WORK_DIR/appcast.xml" "$ROOT_DIR/appcast.xml"
+fi
 echo "$ROOT_DIR/appcast.xml"

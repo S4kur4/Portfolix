@@ -92,6 +92,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
     static let shared = DeepSeekResponsesClient()
 
     private let session: URLSession
+    private let ownsSession: Bool
     private let maximumResponseBytes = 8 * 1024 * 1024
     private let maxTransientRetries: Int
     private let retryDelay: Duration
@@ -105,6 +106,7 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         self.retryDelay = retryDelay ?? (session == nil ? .milliseconds(800) : .milliseconds(50))
         if let session {
             self.session = session
+            self.ownsSession = false
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpShouldSetCookies = false
@@ -112,6 +114,13 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             configuration.urlCredentialStorage = nil
             configuration.urlCache = nil
             self.session = URLSession(configuration: configuration, delegate: WebSearchRedirectBlockingDelegate(), delegateQueue: nil)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
         }
     }
 
@@ -247,9 +256,12 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             guard !result.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw LLMClientError.invalidResponse
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as LLMClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw LLMClientError.requestFailed(error.localizedDescription)
         }
     }
@@ -393,34 +405,34 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 break
             }
 
-            for citation in Self.citations(in: dictionary) where seenCitationURLs.insert(citation.url).inserted {
-                citations.append(citation)
+            let isPureDeltaEvent = eventType == "response.output_text.delta" || Self.isReasoningDeltaEvent(eventType)
+            if !isPureDeltaEvent {
+                for citation in Self.citations(in: dictionary) where seenCitationURLs.insert(citation.url).inserted {
+                    citations.append(citation)
+                }
             }
         }
 
-        guard completionObject != nil else { throw LLMClientError.invalidResponse }
-        if let completionObject {
-            let completedData = try JSONSerialization.data(withJSONObject: completionObject)
-            let completed = try Self.parseResponseObject(completedData)
-            completedResult = completed
-            // Deltas are provisional; the completed response is the authoritative text.
-            content = completed.content
-            for citation in completed.citations where seenCitationURLs.insert(citation.url).inserted {
-                citations.append(citation)
-            }
-            for query in completed.webSearchQueries where seenSearchQueries.insert(query).inserted {
-                searchQueries.append(query)
-            }
-            if searchCallIDs.isEmpty, anonymousSearchCallCount == 0 {
-                anonymousSearchCallCount = completed.webSearchCallCount
-            }
+        guard let completionObject else { throw LLMClientError.invalidResponse }
+        let completed = try Self.parseResponseDictionary(completionObject)
+        completedResult = completed
+        // Deltas are provisional; the completed response is the authoritative text.
+        content = completed.content
+        for citation in completed.citations where seenCitationURLs.insert(citation.url).inserted {
+            citations.append(citation)
+        }
+        for query in completed.webSearchQueries where seenSearchQueries.insert(query).inserted {
+            searchQueries.append(query)
+        }
+        if searchCallIDs.isEmpty, anonymousSearchCallCount == 0 {
+            anonymousSearchCallCount = completed.webSearchCallCount
         }
 
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(completedResult?.functionCalls.isEmpty ?? true) else {
             throw LLMClientError.emptyFinalContent(reasoningCharacters: reasoningCharacterCount, finishReason: nil)
         }
         let completedAt = Date()
-        let usage = completionObject?["usage"] as? [String: Any]
+        let usage = completionObject["usage"] as? [String: Any]
         let inputDetails = usage?["input_tokens_details"] as? [String: Any]
         let outputDetails = usage?["output_tokens_details"] as? [String: Any]
         return LLMCompletionResult(
@@ -439,8 +451,8 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
                 cachedInputTokenCount: inputDetails?["cached_tokens"] as? Int,
                 outputTokenCount: usage?["output_tokens"] as? Int,
                 reasoningTokenCount: outputDetails?["reasoning_tokens"] as? Int,
-                responseID: completionObject?["id"] as? String,
-                responseModel: completionObject?["model"] as? String
+                responseID: completionObject["id"] as? String,
+                responseModel: completionObject["model"] as? String
             ),
             functionCalls: completedResult?.functionCalls ?? [],
             continuationItems: completedResult?.continuationItems ?? []
@@ -451,6 +463,10 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw LLMClientError.invalidResponse
         }
+        return try parseResponseDictionary(object)
+    }
+
+    static func parseResponseDictionary(_ object: [String: Any]) throws -> LLMCompletionResult {
         if let error = object["error"] as? [String: Any] {
             throw LLMClientError.requestFailed(error["message"] as? String ?? "DeepSeek Responses API returned an error")
         }
@@ -472,11 +488,12 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             return LLMFunctionCall(callID: callID, name: name, arguments: arguments)
         }
         // Keep continuation items only in memory while resolving this turn's tool calls.
+        let decoder = JSONDecoder()
+        let allowedContinuationKeys = Set(["type", "role", "content", "call_id", "name", "arguments"])
         let continuationItems: [AIJSONValue] = try functionCalls.isEmpty ? [] : output.compactMap { item in
             guard let type = item["type"] as? String, ["message", "reasoning", "function_call"].contains(type) else { return nil }
-            let allowedKeys = Set(["type", "role", "content", "call_id", "name", "arguments"])
-            let filtered = item.filter { allowedKeys.contains($0.key) }
-            return try JSONDecoder().decode(AIJSONValue.self, from: JSONSerialization.data(withJSONObject: filtered))
+            let filtered = item.filter { allowedContinuationKeys.contains($0.key) }
+            return try decoder.decode(AIJSONValue.self, from: JSONSerialization.data(withJSONObject: filtered))
         }
         // Only the final assistant message is an answer; drafts and nested metadata are not.
         let message = output.last {
@@ -490,16 +507,15 @@ final class DeepSeekResponsesClient: LLMCompleting, LLMConnectionValidating, LLM
             guard dictionary["type"] as? String == "output_text" else { return nil }
             return dictionary["text"] as? String
         }
-        let searchCalls = allDictionaries(in: object).filter {
-            ($0["type"] as? String) == "web_search_call"
-        }.count
+        let dictionaries = allDictionaries(in: object)
+        let webSearchCallDicts = dictionaries.filter { ($0["type"] as? String) == "web_search_call" }
+        let searchCalls = webSearchCallDicts.count
         var seenCitationURLs = Set<String>()
         let uniqueCitations = citations(in: object).filter {
             seenCitationURLs.insert($0.url).inserted
         }
         var seenQueries = Set<String>()
-        let uniqueQueries = allDictionaries(in: object)
-            .filter { $0["type"] as? String == "web_search_call" }
+        let uniqueQueries = webSearchCallDicts
             .flatMap(searchQueries)
             .filter { seenQueries.insert($0).inserted }
         let usage = object["usage"] as? [String: Any]

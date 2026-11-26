@@ -401,7 +401,7 @@ enum AIPortfolioDataToolExecutor {
   static func execute(_ request: AIPortfolioToolRequest, snapshot: AIPortfolioToolSnapshot)
     -> String
   {
-    let asOf = ISO8601DateFormatter().string(from: snapshot.asOf)
+    let asOf = PositionClosureMath.isoTimestamp(snapshot.asOf)
     let positions = snapshot.positions.sorted { $0.marketValueCNY > $1.marketValueCNY }
     var result: [String: Any] = [
       "status": "ok", "as_of": asOf, "source": "local_portfolix_records", "read_only": true,
@@ -626,7 +626,7 @@ enum AIPortfolioDataToolExecutor {
         var data: [String: Any] = ["record_id": row.id.uuidString, "position_ref": "position_\(row.assetID)",
           "name": row.name, "symbol": row.symbol, "side": row.kind.rawValue,
           "trade_date": row.tradeDate, "quantity": row.quantity, "currency": row.currency.rawValue,
-          "recorded_at": row.recordedAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull()]
+          "recorded_at": row.recordedAt.map { PositionClosureMath.isoTimestamp($0) } as Any? ?? NSNull()]
         data["execution_price"] = decimal(row.price)
         data["effective_at"] = (row.trade?.effectiveAt ?? row.reconciliation?.effectiveAt) as Any? ?? NSNull()
         data["fees"] = decimal(row.fee)

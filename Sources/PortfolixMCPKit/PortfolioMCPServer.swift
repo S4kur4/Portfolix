@@ -142,21 +142,32 @@ public final class PortfolioMCPServer {
         default: ["start_date", "end_date"]
         }
         guard Set(arguments.keys).isSubset(of: allowed) else { throw MCPFailure.invalidArguments }
-        let dayFormatter = DateFormatter()
-        dayFormatter.calendar = Calendar(identifier: .gregorian)
-        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dayFormatter.timeZone = .current
-        dayFormatter.dateFormat = "yyyy-MM-dd"
-        var result: [String: Any] = ["source": "Portfolix local records", "read_at": ISO8601DateFormatter().string(from: Date()),
+        let now = Date()
+        var result: [String: Any] = ["source": "Portfolix local records", "read_at": Self.formatISO8601(now),
                                    "numeric_format": "Decimal strings; currencies are explicit. profit_rate is a percentage (10 means 10%). Missing records are not zero.",
-                                   "local_date": dayFormatter.string(from: Date()),
+                                   "local_date": Self.formatLocalDay(now),
                                    "time_zone": TimeZone.current.identifier]
-        let reconciliationRows = try database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'position_reconciliations'")
-        let reconciliations: [RecordedReconciliation] = try reconciliationRows.isEmpty ? [] : database.query("SELECT payload_json FROM position_reconciliations", limit: 10_000).map {
-            guard let json = $0["payload_json"] else { throw MCPFailure.invalidData }
-            return try JSONDecoder().decode(RecordedReconciliation.self, from: Data(json.utf8))
+        let hasReconciliationsTable = try !database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'position_reconciliations'").isEmpty
+        let needsFullReconciliations = name != "get_data_status" && name != "list_transactions" && name != "list_closed_holdings"
+        let reconciliations: [RecordedReconciliation]
+        let hasActiveReconciliations: Bool
+        if !hasReconciliationsTable {
+            reconciliations = []
+            hasActiveReconciliations = false
+        } else if needsFullReconciliations {
+            let decoder = JSONDecoder()
+            reconciliations = try database.query("SELECT payload_json FROM position_reconciliations", limit: 10_000).map {
+                guard let json = $0["payload_json"] else { throw MCPFailure.invalidData }
+                return try decoder.decode(RecordedReconciliation.self, from: Data(json.utf8))
+            }
+            hasActiveReconciliations = reconciliations.contains { $0.reversedAt == nil }
+        } else {
+            reconciliations = []
+            hasActiveReconciliations = try !database.query(
+                "SELECT 1 FROM position_reconciliations WHERE json_extract(payload_json, '$.reversedAt') IS NULL LIMIT 1",
+                limit: 1
+            ).isEmpty
         }
-        let hasActiveReconciliations = reconciliations.contains { $0.reversedAt == nil }
         result["history_complete"] = hasActiveReconciliations ? "incomplete_before_checkpoints" : "no_known_reconciliation_gaps"
         func maskCost(_ row: [String: String], asset: Bool = false, snapshotAssetIDsByDay: [String: Set<String>]? = nil) throws -> [String: String] {
             var row = row
@@ -206,8 +217,9 @@ public final class PortfolioMCPServer {
             let records = name == "list_closed_holdings" ? ledger.closedSales : ledger.records
             let numbered = records.enumerated().map { (number: records.count - $0.offset, record: $0.element) }
             let filtered = numbered.filter {
-                query.isEmpty || $0.record.fields["name"]!.localizedCaseInsensitiveContains(query)
-                    || $0.record.fields["symbol"]!.localizedCaseInsensitiveContains(query)
+                query.isEmpty
+                    || ($0.record.fields["name"] ?? "").localizedCaseInsensitiveContains(query)
+                    || ($0.record.fields["symbol"] ?? "").localizedCaseInsensitiveContains(query)
             }
             let rows = filtered.dropFirst(min(offset, filtered.count)).prefix(limit)
             result["records"] = rows.map { $0.record.output(number: $0.number) }
@@ -273,10 +285,18 @@ public final class PortfolioMCPServer {
             try database.forEachRow("""
                 SELECT s.asset_id, s.snapshot_date, s.quantity, s.market_value_cny
                 FROM asset_price_snapshots s
-                WHERE s.snapshot_date BETWEEN ? AND ? OR s.snapshot_date = (
-                    SELECT MAX(p.snapshot_date) FROM asset_price_snapshots p
-                    WHERE p.asset_id = s.asset_id AND p.snapshot_date < ?)
-                ORDER BY s.asset_id, s.snapshot_date
+                WHERE s.snapshot_date BETWEEN ? AND ?
+                UNION ALL
+                SELECT s.asset_id, s.snapshot_date, s.quantity, s.market_value_cny
+                FROM (
+                    SELECT asset_id, MAX(snapshot_date) AS prev_date
+                    FROM asset_price_snapshots
+                    WHERE snapshot_date < ?
+                    GROUP BY asset_id
+                ) prev
+                JOIN asset_price_snapshots s
+                  ON s.asset_id = prev.asset_id AND s.snapshot_date = prev.prev_date
+                ORDER BY 1, 2
                 """, [start, end, start]) { row in
                 guard let asset = row["asset_id"], let day = row["snapshot_date"],
                       let quantity = storedDecimal(row["quantity"]), quantity > 0,
@@ -288,9 +308,10 @@ public final class PortfolioMCPServer {
                 unitValues[asset, default: [:]][day] = unitValue
             }
             if try !database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'position_trades'").isEmpty {
+                let tradeDecoder = JSONDecoder()
                 let trades = try database.query("SELECT payload_json FROM position_trades WHERE trade_date BETWEEN ? AND ?", [start, end], limit: 10_000).map { row in
                     guard let json = row["payload_json"] else { throw MCPFailure.invalidData }
-                    return try JSONDecoder().decode(RecordedTradeProfit.self, from: Data(json.utf8))
+                    return try tradeDecoder.decode(RecordedTradeProfit.self, from: Data(json.utf8))
                 }
                 for (day, amounts) in RecordedTradeProfit.adjustments(trades: trades, unitValues: unitValues, through: end) {
                     totals[day, default: 0] += amounts.values.reduce(0, +)
@@ -310,11 +331,44 @@ public final class PortfolioMCPServer {
             result["currency"] = "CNY"
             result["days"] = Set(totals.keys).union(incompleteDays.filter { $0 >= start && $0 <= end }).sorted().map { day -> [String: String] in
                 if incompleteDays.contains(day) { return ["date": day, "status": "unavailable"] }
-                return ["date": day, "amount_cny": NSDecimalNumber(decimal: totals[day]!).stringValue, "status": "available"]
+                let amount = totals[day] ?? 0
+                return ["date": day, "amount_cny": NSDecimalNumber(decimal: amount).stringValue, "status": "available"]
             }
             result["calculation"] = "Recorded unit-value changes with buy/sell timing and fee adjustments. Includes FX changes; not time-weighted account returns. Missing price baselines are not inferred."
         }
         return result
+    }
+
+    private static let formatterLock = NSLock()
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+    private nonisolated(unsafe) static let isoFormatter = ISO8601DateFormatter()
+    private static let localDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = posixLocale
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+    private static let utcDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = posixLocale
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        return formatter
+    }()
+    private static let decimalPattern = try! NSRegularExpression(pattern: #"^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"#)
+
+    private static func formatISO8601(_ date: Date) -> String {
+        formatterLock.withLock { isoFormatter.string(from: date) }
+    }
+
+    private static func formatLocalDay(_ date: Date) -> String {
+        formatterLock.withLock {
+            localDayFormatter.timeZone = .current
+            return localDayFormatter.string(from: date)
+        }
     }
 
     private func integer(_ value: Any?, fallback: Int, range: ClosedRange<Int>) throws -> Int {
@@ -325,24 +379,26 @@ public final class PortfolioMCPServer {
     }
 
     private func storedDecimal(_ value: String?) -> Decimal? {
-        guard let value, value.count <= 80, value.allSatisfy({ "0123456789.+-eE".contains($0) }),
-              value.range(of: #"^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"#, options: .regularExpression) != nil,
-              let number = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")), !number.isNaN else { return nil }
+        guard let value, !value.isEmpty, value.utf8.count <= 80 else { return nil }
+        let nsRange = NSRange(location: 0, length: value.utf16.count)
+        guard Self.decimalPattern.firstMatch(in: value, range: nsRange) != nil,
+              let number = Decimal(string: value, locale: Self.posixLocale), !number.isNaN else { return nil }
         return number
     }
 
     private func dateRange(_ arguments: [String: Any]) throws -> (String, String) {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.isLenient = false
         guard let start = arguments["start_date"] as? String, let end = arguments["end_date"] as? String,
-              start.count == 10, end.count == 10,
-              let from = formatter.date(from: start), let to = formatter.date(from: end),
-              formatter.string(from: from) == start, formatter.string(from: to) == end,
-              to >= from, to.timeIntervalSince(from) <= 365 * 86_400 else { throw MCPFailure.invalidArguments }
+              start.count == 10, end.count == 10 else { throw MCPFailure.invalidArguments }
+        let valid = Self.formatterLock.withLock { () -> Bool in
+            guard let from = Self.utcDayFormatter.date(from: start),
+                  let to = Self.utcDayFormatter.date(from: end),
+                  Self.utcDayFormatter.string(from: from) == start,
+                  Self.utcDayFormatter.string(from: to) == end,
+                  to >= from,
+                  to.timeIntervalSince(from) <= 365 * 86_400 else { return false }
+            return true
+        }
+        guard valid else { throw MCPFailure.invalidArguments }
         return (start, end)
     }
 

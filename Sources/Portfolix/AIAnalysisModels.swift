@@ -970,10 +970,19 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     func migratingLegacyPromptText() -> AIReportChatItem {
         guard let text else { return self }
         let migratedText: String
+        let migratedCitations: [AIMessageCitation]?
         switch kind {
         case .assistant:
-            migratedText = AIUserFacingTextSanitizer.sanitize(text)
+            if let existingCitations = citations, !existingCitations.isEmpty {
+                let sanitized = AIUserFacingTextSanitizer.sanitize(text, citations: existingCitations)
+                migratedText = sanitized.text
+                migratedCitations = sanitized.citations
+            } else {
+                migratedText = AIUserFacingTextSanitizer.sanitize(text)
+                migratedCitations = citations
+            }
         case .user:
+            migratedCitations = citations
             switch text {
             case "请重新生成一份智能分析报告":
                 migratedText = "请重新生成分析报告"
@@ -985,7 +994,7 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         case .report:
             return self
         }
-        guard migratedText != text else { return self }
+        guard migratedText != text || migratedCitations != citations else { return self }
         return AIReportChatItem(
             id: id,
             createdAt: createdAt,
@@ -994,8 +1003,12 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             report: report,
             runSnapshot: runSnapshot,
             followUpRunSnapshot: followUpRunSnapshot,
-            citations: citations,
-            modelUsage: modelUsage
+            citations: migratedCitations,
+            modelUsage: modelUsage,
+            activitySteps: activitySteps,
+            retryQuestion: retryQuestion,
+            threadID: threadID,
+            extractedMemories: extractedMemories
         )
     }
 }
@@ -1302,61 +1315,6 @@ struct AIAnalysisReport: Codable, Identifiable, Equatable {
         self.limitations = limitations
         self.sources = sources
     }
-}
-
-struct AIInvestmentProfile: Codable, Identifiable, Equatable {
-    let id: UUID
-    let generatedAt: Date
-    let profileDate: String
-    let model: String
-    let promptVersion: String
-    let riskProfileVersion: Int
-    let inputFingerprint: String
-    let dimensions: [AIInvestmentProfileScore]
-    let summary: String
-    let confidence: String
-    let exposureCoverage: Double?
-    let unknownExposurePercent: Double?
-    let evidenceSourceCount: Int?
-    let assetExposures: [AssetExposureProfile]?
-
-    init(
-        id: UUID = UUID(),
-        generatedAt: Date,
-        profileDate: String,
-        model: String,
-        promptVersion: String,
-        riskProfileVersion: Int,
-        inputFingerprint: String,
-        dimensions: [AIInvestmentProfileScore],
-        summary: String,
-        confidence: String,
-        exposureCoverage: Double? = nil,
-        unknownExposurePercent: Double? = nil,
-        evidenceSourceCount: Int? = nil,
-        assetExposures: [AssetExposureProfile]? = nil
-    ) {
-        self.id = id
-        self.generatedAt = generatedAt
-        self.profileDate = profileDate
-        self.model = model
-        self.promptVersion = promptVersion
-        self.riskProfileVersion = riskProfileVersion
-        self.inputFingerprint = inputFingerprint
-        self.dimensions = dimensions
-        self.summary = summary
-        self.confidence = confidence
-        self.exposureCoverage = exposureCoverage
-        self.unknownExposurePercent = unknownExposurePercent
-        self.evidenceSourceCount = evidenceSourceCount
-        self.assetExposures = assetExposures
-    }
-}
-
-struct AIInvestmentProfileScore: Codable, Equatable {
-    let id: String
-    let score: Double
-    let reason: String
 }
 
 struct AIReportRiskItem: Codable, Identifiable, Equatable {

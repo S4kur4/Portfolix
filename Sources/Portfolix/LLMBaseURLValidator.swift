@@ -78,24 +78,6 @@ enum LLMBaseURLValidator {
         return components
     }
 
-    static func endpointURL(baseURL: String, appendingPath pathComponent: String) -> URL? {
-        guard var components = try? validatedComponents(from: baseURL) else { return nil }
-        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if basePath.hasSuffix(pathComponent) {
-            return components.url
-        }
-        components.path = "/" + [basePath, pathComponent].filter { !$0.isEmpty }.joined(separator: "/")
-        return components.url
-    }
-
-    static func endpointURL(baseURL: String, appendingPath pathComponent: String, queryItems: [URLQueryItem]) -> URL? {
-        guard var components = try? validatedComponents(from: baseURL) else { return nil }
-        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = "/" + [basePath, pathComponent].filter { !$0.isEmpty }.joined(separator: "/")
-        components.queryItems = queryItems
-        return components.url
-    }
-
     private static func normalize(host: String) -> String {
         host
             .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
@@ -117,7 +99,7 @@ enum LLMBaseURLValidator {
     }
 
     private static func isValidHostSyntax(_ host: String) -> Bool {
-        if ipv4Bytes(host) != nil || ipv6Bytes(host) != nil {
+        if host == "localhost" || ipv4Bytes(host) != nil || ipv6Bytes(host) != nil {
             return true
         }
         guard host.count <= 253, host.contains(".") else { return false }
