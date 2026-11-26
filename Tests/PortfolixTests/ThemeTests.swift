@@ -862,4 +862,34 @@ struct ThemeTests {
                 == NSColor(hex: 0x14161F).usingColorSpace(.sRGB))
         }
     }
+
+    @Test
+    func secondaryGlassAndButtonGlassResolveDistinctLightAndDarkTintsWithoutLayoutDrift() throws {
+        if #available(macOS 26.0, *) {
+            let lightAppearance = try #require(NSAppearance(named: .aqua))
+            let darkAppearance = try #require(NSAppearance(named: .darkAqua))
+            let lightTint = try #require(ButtonGlassBackground.resolvedTintColor(PortfolixTheme.soft.opacity(0.55), for: lightAppearance))
+            let darkBrand = try #require(ButtonGlassBackground.resolvedTintColor(PortfolixTheme.brandSolid, for: darkAppearance))
+            let lightBrand = try #require(ButtonGlassBackground.resolvedTintColor(PortfolixTheme.brandSolid, for: lightAppearance))
+            #expect(lightTint.alphaComponent > 0.5 && lightTint.alphaComponent < 0.6)
+            #expect(darkBrand != lightBrand)
+            #expect(ButtonGlassBackground.resolvedTintColor(nil, for: darkAppearance) == nil)
+        }
+        for scheme: ColorScheme in [.light, .dark] {
+            let picker = NSHostingView(rootView: PortfolixGlassMenuPicker(
+                title: "Currency",
+                selection: .constant(DisplayCurrency.cny),
+                options: DisplayCurrency.allCases,
+                optionTitle: { $0.rawValue },
+                height: PortfolixLayout.settingsControlHeight
+            ).environment(\.colorScheme, scheme))
+            #expect(picker.fittingSize.height == PortfolixLayout.settingsControlHeight)
+
+            let circleButton = NSHostingView(rootView: Image(systemName: "arrow.clockwise")
+                .frame(width: 24, height: 24)
+                .portfolixSecondaryGlass(in: Circle(), interactive: true)
+                .environment(\.colorScheme, scheme))
+            #expect(circleButton.fittingSize == CGSize(width: 24, height: 24))
+        }
+    }
 }

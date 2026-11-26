@@ -51,7 +51,7 @@ struct PositionOpeningBalanceSheet: View {
             }
         }
         .frame(width: 620, height: 400)
-        .background(PortfolixTheme.canvas)
+        .background { PortfolixSheetBackground() }
         .interactiveDismissDisabled(isSaving)
     }
 
@@ -116,6 +116,6 @@ struct PositionOpeningBalanceDetailSheet: View {
             }
         }
         .frame(width: 620, height: 440)
-        .background(PortfolixTheme.canvas)
+        .background { PortfolixSheetBackground() }
     }
 }

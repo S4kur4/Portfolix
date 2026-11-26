@@ -32,6 +32,7 @@ private struct CompactSheetFormStyle: FormStyle {
                                     .foregroundStyle(PortfolixTheme.secondary)
                             }
                         }
+                        let cardShape = RoundedRectangle(cornerRadius: PortfolixRadius.card, style: .continuous)
                         VStack(spacing: 0) {
                             ForEach(section.content) { row in
                                 row
@@ -39,11 +40,22 @@ private struct CompactSheetFormStyle: FormStyle {
                                     .frame(minHeight: SheetFormLayout.minimumRowHeight)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if row.id != section.content.last?.id {
-                                    Divider().padding(.horizontal, PortfolixSpacing.md)
+                                    Divider()
+                                        .overlay(PortfolixTheme.border)
+                                        .padding(.horizontal, PortfolixSpacing.md)
                                 }
                             }
                         }
-                        .background(PortfolixTheme.surface, in: RoundedRectangle(cornerRadius: PortfolixRadius.card))
+                        .background {
+                            cardShape
+                                .fill(PortfolixTheme.surface)
+                                .shadow(color: PortfolixTheme.cardShadow, radius: 1.5, x: 0, y: 0.5)
+                        }
+                        .overlay {
+                            cardShape
+                                .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
+                                .allowsHitTesting(false)
+                        }
                         if !section.footer.isEmpty {
                             ForEach(section.footer) { footer in
                                 footer.font(PortfolixTypography.caption)

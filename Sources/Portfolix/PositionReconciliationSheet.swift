@@ -115,7 +115,7 @@ private struct PositionReconciliationForm: View {
             }
         }
         .frame(width: 620, height: isCash ? 580 : 760)
-        .background(PortfolixTheme.canvas)
+        .background { PortfolixSheetBackground() }
         .interactiveDismissDisabled(isSaving)
         .onAppear {
             quantity = PositionClosureMath.string(position.quantity)
@@ -171,6 +171,7 @@ struct PositionReconciliationDetailSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader(title: localizedText("持仓校准详情", "Reconciliation Details", language: store.appLanguage), symbol: "equal.circle")
+            Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
                     LabeledContent(localizedText("资产", "Asset", language: store.appLanguage), value: record.asset.name)
@@ -185,7 +186,13 @@ struct PositionReconciliationDetailSheet: View {
                     Text(localizedText("此条为余额校准，不计入现金流与已实现收益；校准前的历史缺口仍需另行补录。", "Balance checkpoint only — no cash flow or realized P&L recorded. Earlier history gaps remain unrecorded.", language: store.appLanguage))
                 }
             }.portfolixSheetForm()
-            HStack { Spacer(); Button(localizedText("完成", "Done", language: store.appLanguage)) { dismiss() }.buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction) }.padding(20)
-        }.frame(width: 620, height: 540).background(PortfolixTheme.canvas)
+            Divider().overlay(PortfolixTheme.border)
+            SheetActionFooter(errorMessage: nil) {
+                Button(localizedText("完成", "Done", language: store.appLanguage)) { dismiss() }
+                    .buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+            }
+        }
+        .frame(width: 620, height: 540)
+        .background { PortfolixSheetBackground() }
     }
 }

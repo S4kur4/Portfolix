@@ -417,53 +417,36 @@ struct PortfolixGlassGroup<Content: View>: View {
     }
 }
 
-private struct PortfolixGlassSurface<S: Shape>: ViewModifier {
-    let shape: S
-    var tint: Color?
-    var fallbackTint: Color
-    var fallbackOpacity: Double
-    var isInteractive: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(resolvedGlass, in: shape)
-        } else {
-            content
-                .background {
-                    shape.fill(.regularMaterial)
-                    shape.fill(fallbackTint.opacity(fallbackOpacity))
-                }
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private var resolvedGlass: Glass {
-        var glass = Glass.regular
-        if let tint {
-            glass = glass.tint(tint)
-        }
-        if isInteractive {
-            glass = glass.interactive()
-        }
-        return glass
-    }
-}
-
 private struct PortfolixSecondaryGlassSurface<S: InsettableShape>: ViewModifier {
     let shape: S
     var interactive: Bool = true
     @Environment(\.colorScheme) private var colorScheme
 
+    private var resolvedCornerRadius: CGFloat? {
+        (shape as? RoundedRectangle)?.cornerSize.width
+    }
+
     func body(content: Content) -> some View {
+        let lightTint: Color? = colorScheme == .light ? PortfolixTheme.soft.opacity(0.55) : nil
         content
-            .portfolixGlass(
-                in: shape,
-                tint: colorScheme == .light ? PortfolixTheme.soft.opacity(0.55) : nil,
-                fallbackTint: PortfolixTheme.soft,
-                fallbackOpacity: 0.55,
-                interactive: interactive
-            )
+            .background {
+                if #available(macOS 26.0, *) {
+                    // Use AppKit's NSGlassEffectView across main windows, sheets, and popovers so
+                    // modal sheet presentations never flatten SwiftUI `.glassEffect` into dull blocks.
+                    ButtonGlassBackground(
+                        tint: lightTint,
+                        cornerRadius: resolvedCornerRadius ?? PortfolixRadius.compact,
+                        isCapsule: resolvedCornerRadius == nil
+                    )
+                    .allowsHitTesting(false)
+                } else {
+                    ZStack {
+                        shape.fill(.regularMaterial)
+                        shape.fill(PortfolixTheme.soft.opacity(0.55))
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
             .overlay {
                 shape
                     .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
@@ -489,24 +472,6 @@ private struct PortfolixGlassControlSurface: ViewModifier {
 }
 
 extension View {
-    func portfolixGlass<S: Shape>(
-        in shape: S,
-        tint: Color? = nil,
-        fallbackTint: Color = PortfolixTheme.soft,
-        fallbackOpacity: Double = 0.42,
-        interactive: Bool = false
-    ) -> some View {
-        modifier(
-            PortfolixGlassSurface(
-                shape: shape,
-                tint: tint,
-                fallbackTint: fallbackTint,
-                fallbackOpacity: fallbackOpacity,
-                isInteractive: interactive
-            )
-        )
-    }
-
     func portfolixSecondaryGlass<S: InsettableShape>(
         in shape: S,
         interactive: Bool = true
@@ -931,11 +896,13 @@ struct QuietButtonStyle: ButtonStyle {
 struct ButtonGlassBackground: NSViewRepresentable {
     let tint: Color?
     var cornerRadius: CGFloat = PortfolixRadius.compact
+    var isCapsule: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     func makeNSView(context: Context) -> ButtonGlassView {
         let view = ButtonGlassView()
         view.style = .regular
+        view.isCapsule = isCapsule
         view.cornerRadius = cornerRadius
         view.setAccessibilityElement(false)
         return view
@@ -943,22 +910,54 @@ struct ButtonGlassBackground: NSViewRepresentable {
 
     func updateNSView(_ nsView: ButtonGlassView, context: Context) {
         let appearanceName: NSAppearance.Name = colorScheme == .dark ? .darkAqua : .aqua
+        let appearance = NSAppearance(named: appearanceName)
         if nsView.appearance?.name != appearanceName {
-            nsView.appearance = NSAppearance(named: appearanceName)
+            nsView.appearance = appearance
         }
-        let targetTint = tint.map { NSColor($0) }
+        let targetTint = Self.resolvedTintColor(tint, for: appearance)
         if nsView.tintColor != targetTint {
             nsView.tintColor = targetTint
         }
-        if nsView.cornerRadius != cornerRadius {
+        if nsView.isCapsule != isCapsule {
+            nsView.isCapsule = isCapsule
+        }
+        if isCapsule {
+            nsView.updateCapsuleCornerRadius()
+        } else if nsView.cornerRadius != cornerRadius {
             nsView.cornerRadius = cornerRadius
         }
+    }
+
+    static func resolvedTintColor(_ tint: Color?, for appearance: NSAppearance?) -> NSColor? {
+        guard let tint else { return nil }
+        var resolved = NSColor(tint)
+        appearance?.performAsCurrentDrawingAppearance {
+            let dynamic = NSColor(tint)
+            resolved = dynamic.usingColorSpace(.sRGB) ?? dynamic
+        }
+        return resolved
     }
 }
 
 @available(macOS 26.0, *)
 final class ButtonGlassView: NSGlassEffectView {
+    var isCapsule = false
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        if isCapsule {
+            updateCapsuleCornerRadius()
+        }
+    }
+
+    func updateCapsuleCornerRadius() {
+        let radius = min(bounds.width, bounds.height) / 2
+        if radius > 0, abs(cornerRadius - radius) > 0.01 {
+            cornerRadius = radius
+        }
+    }
 }
 
 private struct InteractiveButtonLabel: View {
