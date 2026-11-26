@@ -156,7 +156,8 @@ enum AIFollowUpResponseParser {
         case let .value(inner):
             var seen = Set<String>()
             let limitations = (payload.limitations + inner.limitations).filter { seen.insert($0).inserted }
-            return .value(LLMFollowUpPayload(answer: inner.answer, limitations: limitations))
+            let candidates = payload.memoryCandidates.isEmpty ? inner.memoryCandidates : payload.memoryCandidates
+            return .value(LLMFollowUpPayload(answer: inner.answer, limitations: limitations, memoryCandidates: candidates))
         case let .invalid(prefix):
             return .invalid(readablePrefix: prefix)
         }

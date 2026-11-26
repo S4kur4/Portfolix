@@ -155,6 +155,30 @@ enum InvestmentDistributionEngine {
         )
     }
 
+    static func resolvedItems(
+        positions: [Position],
+        cache: AIInvestmentDistribution?
+    ) -> [InvestmentDistributionItem] {
+        var resolvedByRef = Dictionary(
+            uniqueKeysWithValues: cachedAssets(cache, positions: positions).map { ($0.positionRef, $0) }
+        )
+        for position in positions {
+            let ref = InvestmentProfileEngine.positionRef(for: position)
+            if resolvedByRef[ref] == nil, let local = localDomain(for: position) {
+                resolvedByRef[ref] = AssetInvestmentDistribution(
+                    positionRef: ref,
+                    identityFingerprint: identityFingerprint(position),
+                    allocations: [InvestmentDomainWeight(domain: local, weight: 1.0)]
+                )
+            }
+        }
+        return items(
+            positions: positions,
+            assets: Array(resolvedByRef.values),
+            usesUnclassifiedFallback: true
+        )
+    }
+
     static func items(
         positions: [Position], assets: [AssetInvestmentDistribution] = [], usesUnclassifiedFallback: Bool = false
     ) -> [InvestmentDistributionItem] {

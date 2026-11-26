@@ -82,8 +82,8 @@ struct RootView: View {
 
                 detailContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .clipped()
                     .padding(PortfolixSpacing.xl)
+                    .clipped()
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .ignoresSafeArea(edges: .top)

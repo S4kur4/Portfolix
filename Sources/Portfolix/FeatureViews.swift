@@ -71,10 +71,9 @@ struct PositionsView: View {
                         }
                         .padding(.horizontal, PortfolixSpacing.md)
                         .frame(width: 220, height: PortfolixLayout.positionsToolbarControlHeight)
-                        .portfolixGlass(
+                        .portfolixSecondaryGlass(
                             in: RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous),
-                            fallbackTint: PortfolixTheme.raised,
-                            fallbackOpacity: 0.62
+                            interactive: false
                         )
                         .holdingVoiceInput(
                             text: $store.searchText,
@@ -499,6 +498,7 @@ struct AIReportView: View {
     @State private var composerResetID = UUID()
     @State private var isClearHistoryConfirmationPresented = false
     @State private var clearHistoryErrorMessage: String?
+    @State private var isMemorySheetPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: PortfolixSpacing.md) {
@@ -507,6 +507,8 @@ struct AIReportView: View {
             AIReportChatSurface(
                 report: store.aiAnalysisReport,
                 items: store.aiAnalysisChatItems,
+                threads: store.aiChatThreads,
+                activeThreadID: store.activeAIChatThreadID,
                 run: store.aiAnalysisRun,
                 isRunning: isRunning,
                 isSendingFollowUp: store.isAnsweringAIAnalysisFollowUp,
@@ -527,6 +529,21 @@ struct AIReportView: View {
                 language: store.appLanguage,
                 canClearHistory: hasAIAnalysisHistory,
                 clearHistory: { isClearHistoryConfirmationPresented = true },
+                onNewThread: {
+                    guard !store.aiAnalysisChatItems.isEmpty else { return }
+                    store.startNewAIChatThread()
+                    composerResetID = UUID()
+                },
+                onSelectThread: { id in
+                    store.selectAIChatThread(id: id)
+                },
+                onDeleteThread: { id in
+                    store.deleteAIChatThread(id: id)
+                },
+                onOpenMemory: { isMemorySheetPresented = true },
+                onUndoMemory: { id in
+                    store.deleteAIMemoryItem(id: id)
+                },
                 generate: requestAnalysis,
                 cancel: store.cancelAIAnalysis,
                 sendFollowUp: sendFollowUp,
@@ -534,6 +551,10 @@ struct AIReportView: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .sheet(isPresented: $isMemorySheetPresented) {
+            AIMemoryManagerSheet()
+                .environment(store)
+        }
         .alert(localizedText("清空分析历史？", "Clear analysis history?", language: store.appLanguage), isPresented: $isClearHistoryConfirmationPresented) {
             Button(localizedText("取消", "Cancel", language: store.appLanguage), role: .cancel) {}
             Button(localizedText("清空", "Clear", language: store.appLanguage), role: .destructive) {
@@ -675,6 +696,8 @@ private enum AIReportChatRenderPolicy {
 private struct AIReportChatSurface: View {
     let report: AIAnalysisReport?
     let items: [AIReportChatItem]
+    let threads: [AIChatThread]
+    let activeThreadID: UUID?
     let run: AIAnalysisRun
     let isRunning: Bool
     let isSendingFollowUp: Bool
@@ -692,6 +715,11 @@ private struct AIReportChatSurface: View {
     let language: AppLanguage
     let canClearHistory: Bool
     let clearHistory: () -> Void
+    let onNewThread: () -> Void
+    let onSelectThread: (UUID) -> Void
+    let onDeleteThread: (UUID) -> Void
+    let onOpenMemory: () -> Void
+    let onUndoMemory: (UUID) -> Void
     let generate: () -> Void
     let cancel: () -> Void
     let sendFollowUp: (String) -> Void
@@ -705,15 +733,16 @@ private struct AIReportChatSurface: View {
         Panel(padding: 0) {
             VStack(spacing: 0) {
                 AIReportChatHeader(
-                    report: report,
-                    run: run,
-                    selectedModel: $selectedModel,
-                    availableModels: availableModels,
-                    selectedAnalysisMode: $selectedAnalysisMode,
+                    threads: threads,
+                    activeThreadID: activeThreadID,
+                    canStartNewThread: !items.isEmpty,
                     isInteractionEnabled: !isRunning && !isSendingFollowUp,
                     language: language,
                     canClearHistory: canClearHistory,
-                    clearHistory: clearHistory
+                    clearHistory: clearHistory,
+                    onNewThread: onNewThread,
+                    onSelectThread: onSelectThread,
+                    onDeleteThread: onDeleteThread
                 )
 
                 Divider()
@@ -773,10 +802,13 @@ private struct AIReportChatSurface: View {
                                                 modelUsage: item.responseModelUsage,
                                                 showsDisclaimer: AIChatDisclosurePolicy.shouldShowDisclosure(for: text),
                                                 activitySteps: item.activitySteps ?? [],
+                                                extractedMemories: item.extractedMemories ?? [],
                                                 retryQuestion: fallbackQuestion,
                                                 isFailure: item.retryQuestion != nil,
                                                 canRetry: !isRunning && !isSendingFollowUp,
-                                                onRetry: { question in sendFollowUp(question) }
+                                                onRetry: { question in sendFollowUp(question) },
+                                                onUndoMemory: onUndoMemory,
+                                                onManageMemories: onOpenMemory
                                             )
                                         }
                                     }
@@ -862,6 +894,10 @@ private struct AIReportChatSurface: View {
                     canSendFollowUp: !isRunning && !isSendingFollowUp,
                     isAwaitingResponse: isSendingFollowUp || isRunning,
                     hasReport: hasReport,
+                    selectedModel: $selectedModel,
+                    availableModels: availableModels,
+                    selectedAnalysisMode: $selectedAnalysisMode,
+                    fallbackModelName: report?.model ?? run.model,
                     language: language,
                     reviewQuestionRequest: $reviewQuestionRequest,
                     generate: generate,
@@ -958,15 +994,17 @@ private struct AIReportChatSurface: View {
 }
 
 private struct AIReportChatHeader: View {
-    let report: AIAnalysisReport?
-    let run: AIAnalysisRun
-    @Binding var selectedModel: String
-    let availableModels: [String]
-    @Binding var selectedAnalysisMode: SmartAnalysisMode
+    let threads: [AIChatThread]
+    let activeThreadID: UUID?
+    let canStartNewThread: Bool
     let isInteractionEnabled: Bool
     let language: AppLanguage
     let canClearHistory: Bool
     let clearHistory: () -> Void
+    let onNewThread: () -> Void
+    let onSelectThread: (UUID) -> Void
+    let onDeleteThread: (UUID) -> Void
+    @State private var isThreadsPopoverPresented = false
 
     var body: some View {
         HStack(spacing: PortfolixSpacing.md) {
@@ -975,97 +1013,76 @@ private struct AIReportChatHeader: View {
                     .fill(PortfolixTheme.brandGradient)
                 PortfolixBrandGlyph(size: 20)
             }
-                .frame(width: 28, height: 28)
+            .frame(width: 28, height: 28)
 
             Text(localizedText("Portfolix Agent", "Portfolix Agent", language: language))
                 .font(PortfolixTypography.subheading)
                 .foregroundStyle(PortfolixTheme.text)
 
-            AIReportChatActionsMenu(
-                canClearHistory: isInteractionEnabled && canClearHistory,
-                language: language,
-                clearHistory: clearHistory
-            )
-
             Spacer()
 
-            HStack(spacing: PortfolixLayout.controlSpacing) {
-                AIReportHeaderMenuTag(
-                    title: model,
-                    options: availableModels,
-                    selection: $selectedModel,
-                    isEnabled: isInteractionEnabled && !availableModels.isEmpty,
-                    optionTitle: { $0 }
+            HStack(spacing: 0) {
+                Button {
+                    onNewThread()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(
+                            isInteractionEnabled && canStartNewThread
+                                ? PortfolixTheme.text
+                                : PortfolixTheme.disabled
+                        )
+                        .frame(width: 34, height: PortfolixLayout.glassControlHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!isInteractionEnabled || !canStartNewThread)
+                .portfolixHelp(
+                    canStartNewThread
+                        ? localizedText("新建对话", "New Conversation", language: language)
+                        : localizedText("当前已是空白对话", "Already on a new conversation", language: language)
                 )
 
-                AIReportHeaderMenuTag(
-                    title: selectedAnalysisMode.title(language: language),
-                    options: SmartAnalysisMode.availableCases,
-                    selection: $selectedAnalysisMode,
-                    isEnabled: isInteractionEnabled,
-                    optionTitle: { $0.title(language: language) }
-                )
+                Rectangle()
+                    .fill(PortfolixTheme.border)
+                    .frame(width: 0.5, height: 14)
+
+                Button {
+                    isThreadsPopoverPresented.toggle()
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(threads.count > 1 ? PortfolixTheme.brandText : PortfolixTheme.text)
+                        .frame(width: 34, height: PortfolixLayout.glassControlHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .portfolixHelp(localizedText("历史话题（\(threads.count)）", "Conversations (\(threads.count))", language: language))
+                .popover(isPresented: $isThreadsPopoverPresented, arrowEdge: .bottom) {
+                    AIReportThreadsPopover(
+                        threads: threads,
+                        activeThreadID: activeThreadID,
+                        canClearAll: canClearHistory || !threads.isEmpty,
+                        isInteractionEnabled: isInteractionEnabled,
+                        language: language,
+                        onSelectThread: { id in
+                            isThreadsPopoverPresented = false
+                            onSelectThread(id)
+                        },
+                        onDeleteThread: onDeleteThread,
+                        onClearAll: {
+                            isThreadsPopoverPresented = false
+                            clearHistory()
+                        }
+                    )
+                }
             }
+            .portfolixGlassControl()
         }
         .font(PortfolixTypography.caption)
         .foregroundStyle(PortfolixTheme.secondary)
         .padding(.horizontal, PortfolixSpacing.lg)
         .padding(.vertical, PortfolixSpacing.md)
-    }
-
-    private var model: String {
-        selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? (report?.model ?? run.model ?? localizedText("未配置模型", "Model not configured", language: language))
-            : selectedModel
-    }
-}
-
-private struct AIReportHeaderMenuTag<Option: Hashable>: View {
-    let title: String
-    let options: [Option]
-    @Binding var selection: Option
-    let isEnabled: Bool
-    let optionTitle: (Option) -> String
-
-    var body: some View {
-        PortfolixGlassMenuPicker(
-            title: title,
-            selection: $selection,
-            options: options,
-            optionTitle: optionTitle,
-            selectionTitle: title
-        )
-        .disabled(!isEnabled)
-    }
-}
-
-private struct AIReportChatActionsMenu: View {
-    let canClearHistory: Bool
-    let language: AppLanguage
-    let clearHistory: () -> Void
-
-    var body: some View {
-        Menu {
-            Button(role: .destructive) {
-                clearHistory()
-            } label: {
-                Label(
-                    localizedText("清空分析历史", "Clear Analysis History", language: language),
-                    systemImage: "trash"
-                )
-            }
-            .disabled(!canClearHistory)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(PortfolixTheme.text)
-                .frame(width: PortfolixLayout.glassControlHeight)
-                .portfolixGlassControl()
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .disabled(!canClearHistory)
-        .opacity(canClearHistory ? 1 : 0.56)
     }
 }
 
@@ -1128,10 +1145,13 @@ private struct AIReportFollowUpMessage: View {
     let modelUsage: AIModelUsageSummary?
     let showsDisclaimer: Bool
     let activitySteps: [AIAgentActivityStep]
+    let extractedMemories: [AIMemoryItem]
     let retryQuestion: String?
     let isFailure: Bool
     let canRetry: Bool
     let onRetry: ((String) -> Void)?
+    let onUndoMemory: ((UUID) -> Void)?
+    let onManageMemories: (() -> Void)?
 
     init(
         text: String,
@@ -1141,10 +1161,13 @@ private struct AIReportFollowUpMessage: View {
         modelUsage: AIModelUsageSummary? = nil,
         showsDisclaimer: Bool = true,
         activitySteps: [AIAgentActivityStep] = [],
+        extractedMemories: [AIMemoryItem] = [],
         retryQuestion: String? = nil,
         isFailure: Bool = false,
         canRetry: Bool = false,
-        onRetry: ((String) -> Void)? = nil
+        onRetry: ((String) -> Void)? = nil,
+        onUndoMemory: ((UUID) -> Void)? = nil,
+        onManageMemories: (() -> Void)? = nil
     ) {
         self.text = text
         self.citations = citations
@@ -1153,10 +1176,13 @@ private struct AIReportFollowUpMessage: View {
         self.modelUsage = modelUsage
         self.showsDisclaimer = showsDisclaimer
         self.activitySteps = activitySteps
+        self.extractedMemories = extractedMemories
         self.retryQuestion = retryQuestion
         self.isFailure = isFailure
         self.canRetry = canRetry
         self.onRetry = onRetry
+        self.onUndoMemory = onUndoMemory
+        self.onManageMemories = onManageMemories
     }
 
     private var uniqueCitations: [AIMessageCitation] {
@@ -1207,6 +1233,16 @@ private struct AIReportFollowUpMessage: View {
                         .strokeBorder(PortfolixTheme.cardBorder, lineWidth: 0.5)
                         .allowsHitTesting(false)
                 }
+            }
+
+            if !extractedMemories.isEmpty, let onUndoMemory, let onManageMemories {
+                AIReportExtractedMemoriesStrip(
+                    memories: extractedMemories,
+                    language: language,
+                    onUndo: onUndoMemory,
+                    onManage: onManageMemories
+                )
+                .padding(.trailing, AIReportChatRenderPolicy.timestampWidth + PortfolixSpacing.sm)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: PortfolixSpacing.md) {
@@ -1557,7 +1593,7 @@ final class AIReportCitationTextView: NSView, NSTextViewDelegate {
     }
 
     private var citationColor: NSColor {
-        let appearance = NSApp.appearance ?? effectiveAppearance
+        let appearance = NSApp?.appearance ?? effectiveAppearance
         var resolved: NSColor?
         appearance.performAsCurrentDrawingAppearance {
             resolved = NSColor(PortfolixTheme.brandText).usingColorSpace(.sRGB) ?? NSColor(PortfolixTheme.brandText)
@@ -2761,6 +2797,10 @@ private struct AIReportChatComposer: View {
     let canSendFollowUp: Bool
     let isAwaitingResponse: Bool
     let hasReport: Bool
+    @Binding var selectedModel: String
+    let availableModels: [String]
+    @Binding var selectedAnalysisMode: SmartAnalysisMode
+    let fallbackModelName: String?
     let language: AppLanguage
     @Binding var reviewQuestionRequest: AIReportComposerReviewRequest?
     let generate: () -> Void
@@ -2776,6 +2816,13 @@ private struct AIReportChatComposer: View {
     @State private var editorContentHeight: CGFloat = AIReportComposerMetrics.defaultEditorHeight
     @StateObject private var voiceRecorder = HoldingVoiceRecorder()
 
+    private var displayedModelName: String {
+        let trimmed = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if let fallback = fallbackModelName, !fallback.isEmpty { return fallback }
+        return localizedText("未配置模型", "No Model", language: language)
+    }
+
     private var minimumEditorHeight: CGFloat {
         isReviewExpanded ? AIReportComposerMetrics.reviewEditorMinHeight : AIReportComposerMetrics.defaultEditorHeight
     }
@@ -2789,61 +2836,57 @@ private struct AIReportChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topLeading) {
-                AIReportComposerTextInput(
-                    placeholder: placeholder,
-                    text: draftTextBinding,
-                    minHeight: minimumEditorHeight,
-                    maxHeight: AIReportComposerMetrics.maximumEditorHeight,
-                    focusRequestID: focusRequestID,
-                    isFocused: $isComposerFocused,
-                    measuredHeight: $editorContentHeight,
-                    onSubmit: { queueFollowUpSubmission() }
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: displayedEditorHeight)
-                .opacity(isVoiceActive ? 0 : 1)
-                .allowsHitTesting(!isVoiceActive)
-
+            AIReportComposerTextInput(
+                placeholder: placeholder,
+                text: draftTextBinding,
+                minHeight: minimumEditorHeight,
+                maxHeight: AIReportComposerMetrics.maximumEditorHeight,
+                focusRequestID: focusRequestID,
+                isFocused: $isComposerFocused,
+                measuredHeight: $editorContentHeight,
+                onSubmit: { queueFollowUpSubmission() }
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: displayedEditorHeight)
+            .opacity(isVoiceActive ? 0 : 1)
+            .allowsHitTesting(!isVoiceActive)
+            .overlay {
                 if isVoiceActive {
-                    HoldingVoiceWaveform(snapshot: voiceRecorder.waveform)
-                        .frame(maxWidth: .infinity, minHeight: AIReportComposerMetrics.defaultEditorHeight)
-                        .padding(.vertical, PortfolixSpacing.xs)
-                        .allowsHitTesting(false)
+                    AIReportVoiceListeningOverlay(
+                        snapshot: voiceRecorder.waveform,
+                        isTranscribing: voiceRecorder.isTranscribing,
+                        language: language
+                    )
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: 0.16), value: isVoiceActive)
             .padding(.horizontal, PortfolixSpacing.md)
             .padding(.top, 10)
             .padding(.bottom, 4)
 
             HStack(alignment: .center, spacing: PortfolixSpacing.sm) {
-                if isAwaitingResponse {
-                    Text(localizedText("正在生成分析，点击右侧可随时停止", "Generating response… Click stop anytime", language: language))
-                        .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiary)
-                        .lineLimit(1)
-                } else {
-                    Text(localizedText("⏎ 发送 · ⇧⏎ 换行", "⏎ Send · ⇧⏎ New line", language: language))
-                        .font(PortfolixTypography.caption)
-                        .foregroundStyle(PortfolixTheme.tertiary)
-                        .lineLimit(1)
-                }
+                HStack(spacing: PortfolixSpacing.sm) {
+                    PortfolixGlassMenuPicker(
+                        title: displayedModelName,
+                        selection: $selectedModel,
+                        options: availableModels,
+                        optionTitle: { $0 },
+                        selectionTitle: displayedModelName,
+                        height: 28
+                    )
+                    .disabled(isAwaitingResponse || availableModels.isEmpty)
 
-                if hasDraftText && !isAwaitingResponse && !isVoiceActive {
-                    Button {
-                        draftBuffer.clear()
-                        hasDraftText = false
-                        isReviewExpanded = false
-                        editorContentHeight = AIReportComposerMetrics.defaultEditorHeight
-                        draftRevision &+= 1
-                        focusRequestID &+= 1
-                    } label: {
-                        Text(localizedText("清空", "Clear", language: language))
-                            .font(PortfolixTypography.caption)
-                            .foregroundStyle(PortfolixTheme.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(localizedText("清空输入框内容", "Clear input", language: language))
+                    PortfolixGlassMenuPicker(
+                        title: selectedAnalysisMode.title(language: language),
+                        selection: $selectedAnalysisMode,
+                        options: SmartAnalysisMode.availableCases,
+                        optionTitle: { $0.title(language: language) },
+                        selectionTitle: selectedAnalysisMode.title(language: language),
+                        height: 28
+                    )
+                    .disabled(isAwaitingResponse)
                 }
 
                 Spacer(minLength: PortfolixSpacing.sm)
@@ -2853,13 +2896,19 @@ private struct AIReportChatComposer: View {
                     voiceRecorder.toggle()
                 } label: {
                     Image(systemName: isVoiceActive ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: isVoiceActive ? 10 : 12, weight: .semibold))
                         .foregroundStyle(isVoiceActive ? PortfolixTheme.brandText : PortfolixTheme.secondary)
                         .frame(width: 28, height: 28)
                         .background(
                             isVoiceActive ? PortfolixTheme.brandWash : Color.clear,
                             in: Circle()
                         )
+                        .overlay {
+                            if isVoiceActive {
+                                Circle()
+                                    .strokeBorder(PortfolixTheme.brandFocus.opacity(0.35), lineWidth: 0.5)
+                            }
+                        }
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -2881,24 +2930,28 @@ private struct AIReportChatComposer: View {
                     }
                 }
             }
-            .padding(.leading, PortfolixSpacing.md + 2)
+            .padding(.leading, PortfolixSpacing.md)
             .padding(.trailing, PortfolixSpacing.sm)
             .padding(.top, 2)
             .padding(.bottom, PortfolixSpacing.sm)
         }
         .frame(maxWidth: .infinity)
         .background(
-            isVoiceActive ? PortfolixTheme.brandWash : PortfolixTheme.raised,
+            PortfolixTheme.raised,
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    isComposerFocused || isVoiceActive
-                        ? PortfolixTheme.brandFocus
-                        : PortfolixTheme.controlBorder,
-                    lineWidth: isComposerFocused || isVoiceActive ? 1 : 0.5
+                    isVoiceActive
+                        ? PortfolixTheme.brandFocus.opacity(0.45)
+                        : isComposerFocused
+                            ? PortfolixTheme.borderStrong.opacity(0.45)
+                            : PortfolixTheme.controlBorder,
+                    lineWidth: isVoiceActive || isComposerFocused ? 0.75 : 0.5
                 )
+                .animation(.easeOut(duration: 0.14), value: isComposerFocused)
+                .animation(.easeOut(duration: 0.14), value: isVoiceActive)
                 .allowsHitTesting(false)
         }
         .animation(.easeInOut(duration: 0.14), value: displayedEditorHeight)
@@ -3028,6 +3081,62 @@ private struct AIReportChatComposer: View {
             guard !Task.isCancelled else { return }
             isSubmitting = false
             sendFollowUp(question)
+        }
+    }
+}
+
+private struct AIReportVoiceListeningOverlay: View {
+    let snapshot: HoldingVoiceWaveformSnapshot
+    let isTranscribing: Bool
+    let language: AppLanguage
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulseExpanded = false
+
+    private var statusTitle: String {
+        if isTranscribing {
+            return localizedText("正在识别…", "Transcribing…", language: language)
+        }
+        return localizedText("正在聆听…", "Listening…", language: language)
+    }
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.md) {
+            HStack(spacing: PortfolixSpacing.sm) {
+                ZStack {
+                    if !reduceMotion {
+                        Circle()
+                            .fill(PortfolixTheme.brandFocus.opacity(pulseExpanded ? 0.0 : 0.28))
+                            .frame(width: 14, height: 14)
+                            .scaleEffect(pulseExpanded ? 1.25 : 0.65)
+                    }
+                    Circle()
+                        .fill(PortfolixTheme.brandFocus)
+                        .frame(width: 6, height: 6)
+                }
+                .frame(width: 14, height: 14)
+
+                Text(statusTitle)
+                    .font(PortfolixTypography.labelEmphasis)
+                    .foregroundStyle(PortfolixTheme.brandText)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: isTranscribing)
+            }
+
+            HoldingVoiceWaveform(
+                snapshot: snapshot,
+                isTranscribing: isTranscribing
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.25).repeatForever(autoreverses: false)) {
+                pulseExpanded = true
+            }
         }
     }
 }
@@ -3656,6 +3765,7 @@ struct RiskProfileView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.never)
+        .scrollClipDisabled()
         .sheet(isPresented: $isQuestionnairePresented) {
             RiskQuestionnaireSheet()
                 .environment(store)
@@ -4157,6 +4267,7 @@ struct SettingsView: View {
     @State private var configurationSheet: SettingsConfigurationSheet?
     @State private var preparedDataImport: PreparedPortfolixDataImport?
     @State private var isImportConfirmationPresented = false
+    @State private var isDisableMemoryConfirmationPresented = false
     @State private var dataTransferNotice: DataTransferNotice?
     @State private var exportStatus: DataTransferInlineStatus = .idle
     @State private var importStatus: DataTransferInlineStatus = .idle
@@ -4268,6 +4379,66 @@ struct SettingsView: View {
                         )
                     }
                     SettingsDivider()
+                    SettingsRow(
+                        title: settingsText("投研风格", "Advisor Style"),
+                        helpText: settingsText(
+                            "选择默认投研风格，也可在下拉菜单中补充个性表达偏好。",
+                            "Choose a default analysis style, or add optional custom preferences from the menu."
+                        ),
+                        helpPlacement: .trailing
+                    ) {
+                        AdvisorStyleMenuPicker(
+                            selection: Binding(
+                                get: { store.aiAdvisorPersona.preset },
+                                set: { newPreset in
+                                    var updated = store.aiAdvisorPersona
+                                    updated.preset = newPreset
+                                    store.aiAdvisorPersona = updated
+                                }
+                            ),
+                            hasCustomPreference: !store.aiAdvisorPersona.sanitizedCustomPreference.isEmpty,
+                            language: store.appLanguage
+                        ) {
+                            configurationSheet = .persona
+                        }
+                    }
+                    SettingsDivider()
+                    SettingsRow(
+                        title: settingsText("投研记忆", "Research Memory"),
+                        helpText: settingsText(
+                            "开启后自动汇总并记录对话中提到的资金约束、投资周期与持仓逻辑（仅保存于本机）；关闭将清空已保存的记忆。",
+                            "Automatically summarizes goals, cash constraints, and holding theses locally on this Mac. Turning off clears saved memory."
+                        ),
+                        helpPlacement: .trailing
+                    ) {
+                        HStack(spacing: PortfolixSpacing.sm) {
+                            Button(settingsText("管理", "Manage")) {
+                                configurationSheet = .memory
+                            }
+                            .buttonStyle(QuietButtonStyle())
+                            .disabled(!store.aiAdvisorPersona.autoExtractMemory)
+
+                            Toggle(
+                                settingsText("投研记忆", "Research Memory"),
+                                isOn: Binding(
+                                    get: { store.aiAdvisorPersona.autoExtractMemory },
+                                    set: { enabled in
+                                        if enabled {
+                                            store.setAIMemoryEnabled(true)
+                                        } else if !store.aiMemorySummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.aiMemoryItems.isEmpty {
+                                            isDisableMemoryConfirmationPresented = true
+                                        } else {
+                                            store.setAIMemoryEnabled(false)
+                                        }
+                                    }
+                                )
+                            )
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel(settingsText("投研记忆", "Research Memory"))
+                        }
+                    }
+                    SettingsDivider()
                     SettingsRow(title: settingsText("内容保留时长", "Content Retention")) {
                         SettingsMenuPicker(
                             title: settingsText("内容保留时长", "Content Retention"),
@@ -4350,6 +4521,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.never)
+        .scrollClipDisabled()
         .onAppear {
             store.refreshProviderCredentialState()
         }
@@ -4365,7 +4537,27 @@ struct SettingsView: View {
             case .search:
                 SearchConfigurationSheet()
                     .environment(store)
+            case .persona:
+                AIAdvisorPersonaSheet()
+                    .environment(store)
+            case .memory:
+                AIMemoryManagerSheet()
+                    .environment(store)
             }
+        }
+        .alert(
+            settingsText("关闭投研记忆？", "Turn off Research Memory?"),
+            isPresented: $isDisableMemoryConfirmationPresented
+        ) {
+            Button(settingsText("取消", "Cancel"), role: .cancel) {}
+            Button(settingsText("关闭并清空", "Turn Off & Clear"), role: .destructive) {
+                store.setAIMemoryEnabled(false)
+            }
+        } message: {
+            Text(settingsText(
+                "关闭后将立即清空已保存的投研记忆摘要并停止自动记录，不会影响持仓数据与历史对话。",
+                "Turning this off immediately clears your saved memory summary and stops auto-recording. Holdings and chat history remain intact."
+            ))
         }
         .alert(
             settingsText("确认导入数据？", "Import this data?"),
@@ -4664,6 +4856,59 @@ private struct SettingsMenuPicker<Value: CaseIterable & Identifiable & Hashable>
     }
 }
 
+struct AdvisorStyleMenuPicker: View {
+    @Binding var selection: AIAdvisorPersonaPreset
+    let hasCustomPreference: Bool
+    let language: AppLanguage
+    let onCustomize: () -> Void
+
+    var selectionLabel: String {
+        let baseTitle = selection.title(language: language)
+        guard hasCustomPreference else { return baseTitle }
+        return language == .english ? "\(baseTitle) · Custom" : "\(baseTitle) · 已自定义"
+    }
+
+    var customizeActionTitle: String {
+        if hasCustomPreference {
+            return localizedText("编辑自定义偏好…", "Edit Custom Preference…", language: language)
+        }
+        return localizedText("自定义偏好…", "Customize Preference…", language: language)
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(AIAdvisorPersonaPreset.allCases) { preset in
+                Button {
+                    selection = preset
+                } label: {
+                    Text(preset.title(language: language))
+                }
+            }
+
+            Divider()
+
+            Button(action: onCustomize) {
+                Text(customizeActionTitle)
+            }
+        } label: {
+            HStack(spacing: PortfolixSpacing.sm) {
+                Text(selectionLabel)
+                    .fixedSize(horizontal: true, vertical: false)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(PortfolixTypography.captionEmphasis)
+            .padding(.horizontal, PortfolixSpacing.sm)
+            .portfolixGlassControl(height: PortfolixLayout.settingsControlHeight)
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(localizedText("投研风格", "Advisor Style", language: language))
+        .accessibilityValue(selectionLabel)
+    }
+}
+
 private struct DataTransferNotice: Identifiable {
     let id = UUID()
     let title: String
@@ -4884,7 +5129,7 @@ private struct PositionRefreshButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(PortfolixTheme.text)
-        .portfolixGlass(in: Circle(), interactive: true)
+        .portfolixSecondaryGlass(in: Circle(), interactive: true)
         .opacity(isRefreshing ? 0.5 : 1)
         .accessibilityLabel(
             language == .english
@@ -4898,6 +5143,8 @@ private struct PositionRefreshButton: View {
 private enum SettingsConfigurationSheet: String, Identifiable {
     case llm
     case search
+    case persona
+    case memory
 
     var id: String { rawValue }
 }

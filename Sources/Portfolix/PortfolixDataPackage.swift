@@ -11,6 +11,9 @@ enum RiskProfilePersistence {
     static let cryptoLimitKey = "risk_crypto_limit"
     static let foreignCurrencyLimitKey = "risk_foreign_currency_limit"
     static let liquidityMinimumKey = "risk_liquidity_minimum"
+    static let investmentHorizonKey = "risk_profile_horizon"
+    static let investmentExperienceKey = "risk_profile_experience"
+    static let drawdownToleranceKey = "risk_profile_drawdown"
     static let updatedAtKey = "risk_profile_updated_at"
 }
 

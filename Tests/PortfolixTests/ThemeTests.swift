@@ -738,6 +738,23 @@ struct ThemeTests {
             } + PortfolixLayout.controlSelectionInset * 2
             #expect(requiredWidth <= 240)
         }
+        let plainPicker = AdvisorStyleMenuPicker(
+            selection: .constant(.steadyAdvisor),
+            hasCustomPreference: false,
+            language: language,
+            onCustomize: {}
+        )
+        let customPicker = AdvisorStyleMenuPicker(
+            selection: .constant(.steadyAdvisor),
+            hasCustomPreference: true,
+            language: language,
+            onCustomize: {}
+        )
+        #expect(NSHostingView(rootView: plainPicker).fittingSize.height == PortfolixLayout.settingsControlHeight)
+        #expect(NSHostingView(rootView: customPicker).fittingSize.height == PortfolixLayout.settingsControlHeight)
+        #expect(plainPicker.selectionLabel == AIAdvisorPersonaPreset.steadyAdvisor.title(language: language))
+        #expect(customPicker.selectionLabel.contains(language == .english ? "Custom" : "已自定义"))
+        #expect(plainPicker.customizeActionTitle != customPicker.customizeActionTitle)
     }
 
     @Test

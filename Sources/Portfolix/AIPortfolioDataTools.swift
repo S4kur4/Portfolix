@@ -3,6 +3,9 @@ import Foundation
 enum AIPortfolioDataTool: String, CaseIterable, Sendable {
   case summary = "get_portfolio_summary"
   case holdings = "list_holdings"
+  case holdingDetail = "get_holding_detail"
+  case allocationBreakdown = "get_allocation_breakdown"
+  case simulateRebalance = "simulate_rebalance"
   case closedHoldings = "list_closed_holdings"
   case transactions = "list_transactions"
   case performance = "get_holding_performance"
@@ -20,6 +23,64 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       required = []
       description =
         "Read-only: current local portfolio value, cost, unrealized P&L, realized P&L, today's recorded performance, and holding count. Use for portfolio overview questions or accepting an offer to review holdings. Does not fetch live quotes."
+    case .holdingDetail:
+      properties = [
+        "asset": .object([
+          "type": .string("string"),
+          "minLength": .number(1),
+          "maxLength": .number(80),
+          "description": .string("Holding identifier: position_ref, ticker symbol (e.g. 001513, BTC/USDT, NVDA), or asset name."),
+        ])
+      ]
+      required = ["asset"]
+      description =
+        "Read-only: deep single-holding view including cost, unrealized P&L, portfolio weight, 1W/1M price observations, up to 5 recent transactions, cached look-through domain exposures, and any saved holding thesis memories."
+    case .allocationBreakdown:
+      properties = [
+        "group_by": .object([
+          "type": .string("string"),
+          "enum": .array([.string("asset_class"), .string("currency"), .string("domain")]),
+          "description": .string("Grouping dimension: 'asset_class' (stock/fund/crypto/cash), 'currency' (CNY/USD/HKD/USDT), or 'domain' (look-through investment themes/sectors such as US Tech, Gold, CN Bonds)."),
+        ])
+      ]
+      required = ["group_by"]
+      description =
+        "Read-only: deterministic portfolio allocation breakdown by asset class, currency, or look-through investment domain (from cached Investment Cloud classification)."
+    case .simulateRebalance:
+      properties = [
+        "changes": .object([
+          "type": .string("array"),
+          "minItems": .number(1),
+          "maxItems": .number(8),
+          "description": .string("1 to 8 proposed holding adjustments. Each item must specify 'asset' plus either 'delta_amount_cny' (+buy / -sell in CNY) or 'target_weight_pct' (0 to 100)."),
+          "items": .object([
+            "type": .string("object"),
+            "additionalProperties": .bool(false),
+            "properties": .object([
+              "asset": .object([
+                "type": .string("string"),
+                "minLength": .number(1),
+                "maxLength": .number(80),
+                "description": .string("Target holding position_ref, symbol, or name."),
+              ]),
+              "delta_amount_cny": .object([
+                "type": .string("number"),
+                "description": .string("Change in CNY (+ to buy/add, - to sell/reduce). Mutually exclusive with target_weight_pct."),
+              ]),
+              "target_weight_pct": .object([
+                "type": .string("number"),
+                "minimum": .number(0),
+                "maximum": .number(100),
+                "description": .string("Desired target portfolio weight in percent (0 to 100). Mutually exclusive with delta_amount_cny."),
+              ]),
+            ]),
+            "required": .array([.string("asset")]),
+          ]),
+        ])
+      ]
+      required = ["changes"]
+      description =
+        "Read-only deterministic calculator: simulates proposed buy/sell or target-weight rebalance changes without modifying any ledger data. Returns exact before/after weights, cash impact, and risk-constraint breach diff."
     case .holdings, .closedHoldings, .transactions:
       let queryDesc: String = switch self {
       case .holdings: "Optional case-insensitive substring filter matching holding name or ticker symbol."
@@ -136,6 +197,9 @@ struct AIPortfolioToolRequest: Sendable {
   var positionRefs: [String] = []
   var period = "one_week"
   var days = 30
+  var asset = ""
+  var groupBy = "asset_class"
+  var rebalanceChanges: [AIRebalanceChangeInput] = []
 
   init(call: LLMFunctionCall) throws {
     guard let tool = AIPortfolioDataTool(rawValue: call.name) else {
@@ -156,6 +220,55 @@ struct AIPortfolioToolRequest: Sendable {
     }
     let allowed: Set<String>
     switch tool {
+    case .holdingDetail:
+      allowed = ["asset"]
+      guard case .string(let rawAsset) = arguments["asset"] else {
+        throw AIPortfolioToolError.invalidArguments(field: "asset", hint: "asset must be a non-empty position_ref, symbol, or holding name.")
+      }
+      let trimmed = rawAsset.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, trimmed.count <= 80 else {
+        throw AIPortfolioToolError.invalidArguments(field: "asset", hint: "asset must be 1 to 80 characters.")
+      }
+      asset = trimmed
+    case .allocationBreakdown:
+      allowed = ["group_by"]
+      guard case .string(let rawGroup) = arguments["group_by"],
+            ["asset_class", "currency", "domain"].contains(rawGroup)
+      else {
+        throw AIPortfolioToolError.invalidArguments(field: "group_by", hint: "group_by must be one of 'asset_class', 'currency', or 'domain'.")
+      }
+      groupBy = rawGroup
+    case .simulateRebalance:
+      allowed = ["changes"]
+      guard case .array(let rawChanges) = arguments["changes"], (1...8).contains(rawChanges.count) else {
+        throw AIPortfolioToolError.invalidArguments(field: "changes", hint: "changes must be a non-empty array of 1 to 8 items.")
+      }
+      rebalanceChanges = try rawChanges.map { entry in
+        guard case .object(let obj) = entry,
+              Set(obj.keys).isSubset(of: ["asset", "delta_amount_cny", "target_weight_pct"]),
+              case .string(let rawAsset) = obj["asset"]
+        else {
+          throw AIPortfolioToolError.invalidArguments(field: "changes", hint: "Each change requires 'asset' and either 'delta_amount_cny' or 'target_weight_pct'.")
+        }
+        let trimmed = rawAsset.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else {
+          throw AIPortfolioToolError.invalidArguments(field: "asset", hint: "asset must be 1 to 80 characters.")
+        }
+        let delta: Double? = if let rawDelta = obj["delta_amount_cny"] {
+          if case .number(let n) = rawDelta, n.isFinite { n } else {
+            throw AIPortfolioToolError.invalidArguments(field: "delta_amount_cny", hint: "delta_amount_cny must be a finite number.")
+          }
+        } else { nil }
+        let targetPct: Double? = if let rawPct = obj["target_weight_pct"] {
+          if case .number(let n) = rawPct, n.isFinite, (0...100).contains(n) { n } else {
+            throw AIPortfolioToolError.invalidArguments(field: "target_weight_pct", hint: "target_weight_pct must be between 0 and 100.")
+          }
+        } else { nil }
+        guard (delta != nil) != (targetPct != nil) else {
+          throw AIPortfolioToolError.invalidArguments(field: "changes", hint: "Provide exactly one of 'delta_amount_cny' or 'target_weight_pct' per item.")
+        }
+        return AIRebalanceChangeInput(asset: trimmed, deltaAmountCNY: delta, targetWeightPct: targetPct)
+      }
     case .holdings, .closedHoldings, .transactions:
       allowed = ["query", "offset", "limit"]
       if let value = arguments["query"] {
@@ -241,6 +354,8 @@ struct AIPortfolioToolSnapshot {
   var trades: [PositionTradeRecord] = []
   var openings: [PositionOpeningBalanceRecord] = []
   var reconciliations: [PositionReconciliationRecord] = []
+  var investmentDistribution: AIInvestmentDistribution? = nil
+  var memoryItems: [AIMemoryItem] = []
   var asOf: Date = .now
 }
 
@@ -263,7 +378,18 @@ enum AIPortfolioDataToolExecutor {
     if let bySymbol = positions.first(where: { $0.symbol.caseInsensitiveCompare(trimmed) == .orderedSame }) {
       return bySymbol
     }
-    return positions.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame })
+    if let byBase = positions.first(where: {
+      $0.symbol.split(separator: "/").first.map(String.init)?.caseInsensitiveCompare(trimmed) == .orderedSame
+    }) {
+      return byBase
+    }
+    if let byExactName = positions.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+      return byExactName
+    }
+    let partial = positions.filter {
+      $0.name.localizedCaseInsensitiveContains(trimmed) || $0.symbol.localizedCaseInsensitiveContains(trimmed)
+    }
+    return partial.count == 1 ? partial.first : nil
   }
 
   private static func rounded(_ value: Double, digits: Int = 2) -> Double {
@@ -308,6 +434,144 @@ enum AIPortfolioDataToolExecutor {
           "total_value_display": snapshot.portfolioContext?.totalValueDisplay ?? decimal(value),
           "today": snapshot.portfolioContext.map { encoded($0.today) } ?? ["status": "unavailable"],
         ] as [String: Any]
+    case .holdingDetail:
+      guard let position = resolvePosition(request.asset, in: positions) else {
+        return error("holding_not_found", field: "asset", hint: "No unique open holding matched '\(request.asset)'. Call list_holdings to see exact position_refs and symbols.")
+      }
+      let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
+      let quoteValue = position.quantity * position.latestPrice
+      let performance = snapshot.performance[position.id]
+      let recentRecords = PositionTransactionRow.listed(
+        trades: snapshot.trades, closures: snapshot.closures,
+        openings: snapshot.openings, reconciliations: snapshot.reconciliations
+      )
+      .filter { $0.assetID == position.id.uuidString }
+      .prefix(5)
+      .map { row -> [String: Any] in
+        [
+          "side": row.kind.rawValue,
+          "trade_date": row.tradeDate,
+          "quantity": row.quantity,
+          "price": decimal(row.price),
+          "amount_quote": decimal(row.amount),
+          "currency": row.currency.rawValue,
+        ]
+      }
+      let cachedAssets = InvestmentDistributionEngine.cachedAssets(snapshot.investmentDistribution, positions: [position])
+      let domains: [[String: Any]] = if let cached = cachedAssets.first {
+        cached.allocations.map {
+          [
+            "domain_id": $0.domain.id,
+            "title_zh": $0.domain.titleChinese,
+            "title_en": $0.domain.titleEnglish,
+            "weight_pct": rounded($0.weight * 100),
+          ]
+        }
+      } else if let local = InvestmentDistributionEngine.localDomain(for: position) {
+        [[
+          "domain_id": local.id,
+          "title_zh": local.titleChinese,
+          "title_en": local.titleEnglish,
+          "weight_pct": 100.0,
+        ]]
+      } else {
+        []
+      }
+      let relatedMemories = snapshot.memoryItems.filter { item in
+        if let related = item.relatedAsset, !related.isEmpty {
+          return position.name.localizedCaseInsensitiveContains(related)
+            || related.localizedCaseInsensitiveContains(position.name)
+            || position.symbol.localizedCaseInsensitiveContains(related)
+            || related.localizedCaseInsensitiveContains(position.symbol)
+        }
+        return item.content.localizedCaseInsensitiveContains(position.name)
+          || item.content.localizedCaseInsensitiveContains(position.symbol)
+      }.map {
+        ["category": $0.category.rawValue, "content": $0.content]
+      }
+      var detail: [String: Any] = [
+        "position_ref": "position_\(position.id.uuidString)",
+        "name": String(position.name.prefix(120)),
+        "symbol": String(position.symbol.prefix(40)),
+        "asset_type": position.category.aiCode,
+        "quote_currency": position.quoteCurrency.rawValue,
+        "quantity": decimal(position.quantity),
+        "cost_status": position.costIsKnown ? "known" : "unknown",
+        "latest_price": decimal(position.latestPrice),
+        "market_value_cny": decimal(position.marketValueCNY),
+        "allocation_pct": totalValue > 0 ? rounded(position.marketValueCNY.doubleValue / totalValue * 100) : 0,
+        "quote_status": position.freshness == .manual ? "manual" : position.freshness == .stale ? "stale" : "updated",
+        "quote_time": String(position.quoteTime.prefix(64)),
+      ]
+      detail["average_cost"] = position.costIsKnown ? decimal(position.averageCost) as Any : NSNull()
+      detail["total_cost_quote"] = position.costIsKnown ? decimal(position.totalCost) as Any : NSNull()
+      detail["unrealized_profit_quote"] = position.costIsKnown ? decimal(quoteValue - position.totalCost) as Any : NSNull()
+      detail["unrealized_profit_rate_pct"] = position.costIsKnown ? decimal(position.profitRate) as Any : NSNull()
+      detail["one_week"] = performance.map { encoded($0.oneWeek) } ?? ["status": "insufficient_history"]
+      detail["one_month"] = performance.map { encoded($0.oneMonth) } ?? ["status": "insufficient_history"]
+      detail["recent_transactions"] = recentRecords
+      detail["look_through_domains"] = domains
+      detail["saved_memories"] = relatedMemories
+      result["data"] = detail
+    case .allocationBreakdown:
+      let totalValue = positions.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
+      guard totalValue > 0 else { return error("empty_portfolio", hint: "No positive-value holdings in portfolio.") }
+      if request.groupBy == "asset_class" {
+        let grouped = Dictionary(grouping: positions, by: { $0.category.aiCode })
+        let rows = grouped.map { key, list -> [String: Any] in
+          let val = list.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
+          return [
+            "group": key,
+            "market_value_cny": rounded(val),
+            "weight_pct": rounded(val / totalValue * 100),
+            "holding_count": list.count,
+          ]
+        }.sorted { ($0["weight_pct"] as? Double ?? 0) > ($1["weight_pct"] as? Double ?? 0) }
+        result["group_by"] = "asset_class"
+        result["data"] = rows
+      } else if request.groupBy == "currency" {
+        let grouped = Dictionary(grouping: positions, by: { $0.quoteCurrency.rawValue })
+        let rows = grouped.map { key, list -> [String: Any] in
+          let val = list.reduce(0.0) { $0 + $1.marketValueCNY.doubleValue }
+          return [
+            "group": key,
+            "market_value_cny": rounded(val),
+            "weight_pct": rounded(val / totalValue * 100),
+            "holding_count": list.count,
+          ]
+        }.sorted { ($0["weight_pct"] as? Double ?? 0) > ($1["weight_pct"] as? Double ?? 0) }
+        result["group_by"] = "currency"
+        result["data"] = rows
+      } else {
+        let items = InvestmentDistributionEngine.resolvedItems(
+          positions: positions,
+          cache: snapshot.investmentDistribution
+        )
+        let classifiedPct = items
+          .filter { $0.domain.id != InvestmentDistributionEngine.unclassifiedDomain.id }
+          .reduce(0.0) { $0 + $1.percentage }
+        result["group_by"] = "domain"
+        result["classified_coverage_pct"] = rounded(classifiedPct)
+        result["data"] = items.map { item -> [String: Any] in
+          [
+            "domain_id": item.domain.id,
+            "title_zh": item.domain.titleChinese,
+            "title_en": item.domain.titleEnglish,
+            "market_value_cny": rounded(item.amountCNY.doubleValue),
+            "weight_pct": rounded(item.percentage),
+          ]
+        }
+        result["limitation"] = "Look-through domain weights are derived from cached Investment Cloud classification and may lag recent fund quarterly rebalancing."
+      }
+    case .simulateRebalance:
+      let simulation = AIRebalanceSimulator.simulate(
+        changes: request.rebalanceChanges,
+        positions: positions,
+        riskContext: snapshot.riskContext
+      )
+      for (key, value) in simulation {
+        result[key] = value
+      }
     case .holdings:
       let filtered = positions.filter {
         request.query.isEmpty || $0.name.localizedCaseInsensitiveContains(request.query)
@@ -440,6 +704,9 @@ enum AIPortfolioDataToolExecutor {
       result["data"] =
         [
           "configured": context.riskProfileConfigured, "risk_level": context.riskLevel,
+          "investment_horizon": context.investmentHorizon ?? NSNull(),
+          "investment_experience": context.investmentExperience ?? NSNull(),
+          "drawdown_tolerance": context.drawdownTolerance ?? NSNull(),
           "single_position_limit_pct": rounded(context.positionLimit),
           "crypto_limit_pct": rounded(context.cryptoLimit),
           "foreign_currency_limit_pct": rounded(context.foreignCurrencyLimit),

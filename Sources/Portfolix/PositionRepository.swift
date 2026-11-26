@@ -1335,46 +1335,196 @@ final class PositionRepository {
         return text(at: 0, in: statement)
     }
 
-    func upsertAIAnalysisChatItem(_ item: AIReportChatItem) throws {
+    func upsertAIAnalysisChatItem(_ item: AIReportChatItem, threadID: UUID? = nil) throws {
         let payload = String(data: try aiArtifactEncoder.encode(item), encoding: .utf8) ?? "{}"
+        let resolvedThreadID = (threadID ?? item.threadID)?.uuidString
         let statement = try prepare(
             """
-            INSERT INTO ai_analysis_chat_messages (id, created_at, payload_json)
-            VALUES (?, ?, ?)
+            INSERT INTO ai_analysis_chat_messages (id, created_at, payload_json, thread_id)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 created_at = excluded.created_at,
-                payload_json = excluded.payload_json
+                payload_json = excluded.payload_json,
+                thread_id = COALESCE(excluded.thread_id, ai_analysis_chat_messages.thread_id)
             """
         )
         defer { sqlite3_finalize(statement) }
         try bind(item.id.uuidString, to: 1, in: statement)
         try bind(Self.timestamp(from: item.createdAt), to: 2, in: statement)
         try bind(payload, to: 3, in: statement)
+        try bindOptional(resolvedThreadID, to: 4, in: statement)
         try stepDone(statement)
     }
 
-    func fetchAIAnalysisChatItems(since cutoff: Date) throws -> [AIReportChatItem] {
-        let statement = try prepare(
-            """
-            SELECT payload_json
-            FROM ai_analysis_chat_messages
-            WHERE created_at >= ?
-            ORDER BY created_at ASC, id ASC
-            """
-        )
+    func fetchAIAnalysisChatItems(since cutoff: Date, threadID: UUID? = nil) throws -> [AIReportChatItem] {
+        let sql: String
+        if threadID != nil {
+            sql = """
+                SELECT payload_json, thread_id
+                FROM ai_analysis_chat_messages
+                WHERE created_at >= ? AND thread_id = ?
+                ORDER BY created_at ASC, id ASC
+                """
+        } else {
+            sql = """
+                SELECT payload_json, thread_id
+                FROM ai_analysis_chat_messages
+                WHERE created_at >= ?
+                ORDER BY created_at ASC, id ASC
+                """
+        }
+        let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         try bind(Self.timestamp(from: cutoff), to: 1, in: statement)
+        if let threadID {
+            try bind(threadID.uuidString, to: 2, in: statement)
+        }
 
         var items: [AIReportChatItem] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let data = text(at: 0, in: statement).data(using: .utf8) else {
                 continue
             }
-            if let item = try? aiArtifactDecoder.decode(AIReportChatItem.self, from: data) {
+            if var item = try? aiArtifactDecoder.decode(AIReportChatItem.self, from: data) {
+                if item.threadID == nil,
+                   let rawThread = optionalText(at: 1, in: statement),
+                   let parsedThread = UUID(uuidString: rawThread)
+                {
+                    item.threadID = parsedThread
+                }
                 items.append(item)
             }
         }
         return items
+    }
+
+    func fetchAIChatThreads(since cutoff: Date) throws -> [AIChatThread] {
+        let statement = try prepare(
+            """
+            SELECT t.id, t.title, t.created_at, t.updated_at,
+                   (SELECT COUNT(*) FROM ai_analysis_chat_messages m WHERE m.thread_id = t.id AND m.created_at >= ?) AS msg_count
+            FROM ai_chat_threads t
+            ORDER BY t.updated_at DESC, t.created_at DESC
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(Self.timestamp(from: cutoff), to: 1, in: statement)
+
+        var threads: [AIChatThread] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
+            let title = text(at: 1, in: statement)
+            let createdAt = Self.date(from: text(at: 2, in: statement)) ?? .now
+            let updatedAt = Self.date(from: text(at: 3, in: statement)) ?? createdAt
+            let count = Int(sqlite3_column_int(statement, 4))
+            threads.append(AIChatThread(id: id, title: title, createdAt: createdAt, updatedAt: updatedAt, messageCount: count))
+        }
+        return threads
+    }
+
+    func upsertAIChatThread(_ thread: AIChatThread) throws {
+        let statement = try prepare(
+            """
+            INSERT INTO ai_chat_threads (id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                updated_at = excluded.updated_at
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(thread.id.uuidString, to: 1, in: statement)
+        try bind(thread.title, to: 2, in: statement)
+        try bind(Self.timestamp(from: thread.createdAt), to: 3, in: statement)
+        try bind(Self.timestamp(from: thread.updatedAt), to: 4, in: statement)
+        try stepDone(statement)
+    }
+
+    func assignOrphanChatMessages(to threadID: UUID) throws {
+        let statement = try prepare("UPDATE ai_analysis_chat_messages SET thread_id = ? WHERE thread_id IS NULL")
+        defer { sqlite3_finalize(statement) }
+        try bind(threadID.uuidString, to: 1, in: statement)
+        try stepDone(statement)
+    }
+
+    func deleteAIChatThread(id: UUID) throws {
+        try transaction {
+            let deleteMessages = try prepare("DELETE FROM ai_analysis_chat_messages WHERE thread_id = ?")
+            defer { sqlite3_finalize(deleteMessages) }
+            try bind(id.uuidString, to: 1, in: deleteMessages)
+            try stepDone(deleteMessages)
+
+            let deleteThread = try prepare("DELETE FROM ai_chat_threads WHERE id = ?")
+            defer { sqlite3_finalize(deleteThread) }
+            try bind(id.uuidString, to: 1, in: deleteThread)
+            try stepDone(deleteThread)
+        }
+    }
+
+    func fetchAIMemoryItems() throws -> [AIMemoryItem] {
+        let statement = try prepare(
+            """
+            SELECT id, category, content, related_asset, source, created_at, updated_at
+            FROM ai_memory_items
+            ORDER BY updated_at DESC, created_at DESC
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        var items: [AIMemoryItem] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
+            let category = AIMemoryCategory(rawValue: text(at: 1, in: statement)) ?? .preference
+            let content = text(at: 2, in: statement)
+            let relatedAsset = optionalText(at: 3, in: statement)
+            let source = AIMemorySource(rawValue: text(at: 4, in: statement)) ?? .autoExtracted
+            let createdAt = Self.date(from: text(at: 5, in: statement)) ?? .now
+            let updatedAt = Self.date(from: text(at: 6, in: statement)) ?? createdAt
+            items.append(AIMemoryItem(
+                id: id,
+                category: category,
+                content: content,
+                relatedAsset: relatedAsset,
+                source: source,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            ))
+        }
+        return items
+    }
+
+    func upsertAIMemoryItem(_ item: AIMemoryItem) throws {
+        let statement = try prepare(
+            """
+            INSERT INTO ai_memory_items (id, category, content, related_asset, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                category = excluded.category,
+                content = excluded.content,
+                related_asset = excluded.related_asset,
+                source = excluded.source,
+                updated_at = excluded.updated_at
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        try bind(item.id.uuidString, to: 1, in: statement)
+        try bind(item.category.rawValue, to: 2, in: statement)
+        try bind(item.content, to: 3, in: statement)
+        try bindOptional(item.relatedAsset, to: 4, in: statement)
+        try bind(item.source.rawValue, to: 5, in: statement)
+        try bind(Self.timestamp(from: item.createdAt), to: 6, in: statement)
+        try bind(Self.timestamp(from: item.updatedAt), to: 7, in: statement)
+        try stepDone(statement)
+    }
+
+    func deleteAIMemoryItem(id: UUID) throws {
+        let statement = try prepare("DELETE FROM ai_memory_items WHERE id = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(id.uuidString, to: 1, in: statement)
+        try stepDone(statement)
+    }
+
+    func deleteAllAIMemoryItems() throws {
+        try execute("DELETE FROM ai_memory_items")
     }
 
     func deleteAIAnalysisChatItems(before cutoff: Date) throws {
@@ -1401,6 +1551,7 @@ final class PositionRepository {
     func deleteAllAIAnalysisContent() throws {
         try transaction {
             try execute("DELETE FROM ai_analysis_chat_messages")
+            try execute("DELETE FROM ai_chat_threads")
             try execute("DELETE FROM ai_analysis_sources")
             try execute("DELETE FROM ai_analysis_reports")
             try execute("DELETE FROM ai_guardrail_results")
@@ -1840,8 +1991,47 @@ final class PositionRepository {
             CREATE TABLE IF NOT EXISTS ai_analysis_chat_messages (
                 id TEXT PRIMARY KEY NOT NULL,
                 created_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
+                payload_json TEXT NOT NULL,
+                thread_id TEXT
             )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_chat_threads (
+                id TEXT PRIMARY KEY NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_memory_items (
+                id TEXT PRIMARY KEY NOT NULL,
+                category TEXT NOT NULL,
+                content TEXT NOT NULL,
+                related_asset TEXT,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        if try !tableHasColumn(table: "ai_analysis_chat_messages", column: "thread_id") {
+            try execute("ALTER TABLE ai_analysis_chat_messages ADD COLUMN thread_id TEXT")
+        }
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_chat_thread
+            ON ai_analysis_chat_messages(thread_id, created_at)
+            """
+        )
+        try execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_memory_items_updated
+            ON ai_memory_items(updated_at)
             """
         )
         try execute(
@@ -2295,6 +2485,29 @@ final class PositionRepository {
     private func text(at index: Int32, in statement: OpaquePointer) -> String {
         guard let pointer = sqlite3_column_text(statement, index) else { return "" }
         return String(cString: pointer)
+    }
+
+    private func optionalText(at index: Int32, in statement: OpaquePointer) -> String? {
+        guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+              let pointer = sqlite3_column_text(statement, index) else { return nil }
+        return String(cString: pointer)
+    }
+
+    private func tableHasColumn(table: String, column: String) throws -> Bool {
+        let statement = try prepare("PRAGMA table_info(\(table))")
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if text(at: 1, in: statement).caseInsensitiveCompare(column) == .orderedSame {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func date(from timestamp: String) -> Date? {
+        timestampLock.withLock {
+            isoTimestampFormatter.date(from: timestamp)
+        }
     }
 
     private func currentError() -> PositionRepositoryError {

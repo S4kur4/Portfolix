@@ -64,6 +64,23 @@ struct HoldingVoiceWaveformSnapshot: Equatable {
     var hasAnySignal: Bool {
         levels.contains { $0 > HoldingVoiceWaveformMetrics.silenceEpsilon }
     }
+
+    /// Smoothed live voice energy (0...1) sampled from the most recent frames.
+    var liveEnergy: CGFloat {
+        let tail = levels.suffix(10)
+        guard !tail.isEmpty else { return 0 }
+        var peak: CGFloat = 0
+        var weightedSum: CGFloat = 0
+        var weightTotal: CGFloat = 0
+        for (index, level) in tail.enumerated() {
+            let weight = CGFloat(index + 1)
+            peak = max(peak, level)
+            weightedSum += level * weight
+            weightTotal += weight
+        }
+        let recentAverage = weightTotal > 0 ? weightedSum / weightTotal : 0
+        return min(1, max(0, peak * 0.65 + recentAverage * 0.35))
+    }
 }
 
 @MainActor
@@ -71,8 +88,13 @@ final class HoldingVoiceRecorder: ObservableObject {
     private static let logger = Logger(subsystem: "app.portfolix.mac", category: "HoldingVoiceInput")
     @Published private(set) var isRecording = false
     @Published private(set) var isFinishing = false
+    @Published private(set) var isStarting = false
     @Published private(set) var waveform = HoldingVoiceWaveformSnapshot.empty()
     @Published var errorMessage: String?
+
+    var isTranscribing: Bool {
+        isFinishing && !isRecording && !isStarting
+    }
     private var monitor: Any?
     private var resignObserver: NSObjectProtocol?
     private var activeShortcut: VoiceInputShortcut?
@@ -165,6 +187,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         transcript = ""
         receivedFinal = false
         resetWaveform()
+        isStarting = true
         isFinishing = true
         let id = UUID()
         session = id
@@ -239,6 +262,7 @@ final class HoldingVoiceRecorder: ObservableObject {
                 return
             }
             self.modernSession = modernSession
+            isStarting = false
             isFinishing = false
             prepareWaveformSampling()
             isRecording = true
@@ -297,6 +321,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         do {
             engine.prepare()
             try engine.start()
+            isStarting = false
             isFinishing = false
             prepareWaveformSampling()
             isRecording = true
@@ -311,6 +336,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         held = false
         if receivedFinal { complete(); return }
         if let modernSession {
+            isStarting = false
             isRecording = false
             isFinishing = true
             timeout?.cancel()
@@ -320,6 +346,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         }
         guard isRecording else { cancel(); return }
         stopAudio()
+        isStarting = false
         isRecording = false
         isFinishing = true
         request?.endAudio()
@@ -525,6 +552,7 @@ final class HoldingVoiceRecorder: ObservableObject {
         recognition = nil
         request = nil
         recognizer = nil
+        isStarting = false
         isRecording = false
         isFinishing = false
         resetWaveform()
@@ -666,11 +694,11 @@ private struct HoldingVoiceInputModifier: ViewModifier {
     private var voiceOverlay: some View {
         switch appearance {
         case .highlightedField:
-            RoundedRectangle(cornerRadius: PortfolixRadius.compact)
+            RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
                 .fill(PortfolixTheme.raised)
                 .overlay {
-                    RoundedRectangle(cornerRadius: PortfolixRadius.compact)
-                        .fill(PortfolixTheme.brandWash)
+                    RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
+                        .strokeBorder(PortfolixTheme.brandFocus.opacity(0.42), lineWidth: 0.75)
                 }
                 .overlay { waveform }
                 .allowsHitTesting(false)
@@ -681,112 +709,198 @@ private struct HoldingVoiceInputModifier: ViewModifier {
     }
 
     private var waveform: some View {
-        HoldingVoiceWaveform(snapshot: recorder.waveform)
-            .padding(.horizontal, PortfolixSpacing.sm)
-            .padding(.vertical, PortfolixSpacing.xs)
+        HoldingVoiceWaveform(
+            snapshot: recorder.waveform,
+            isTranscribing: recorder.isTranscribing
+        )
+        .padding(.horizontal, PortfolixSpacing.sm)
+        .padding(.vertical, 2)
     }
 }
 
 struct HoldingVoiceWaveform: View {
     let snapshot: HoldingVoiceWaveformSnapshot
+    var isTranscribing: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Canvas { context, size in
-                    drawBaseline(in: &context, size: size)
-                }
-
-                if snapshot.hasVisibleSignal(for: proxy.size.width) {
-                    TimelineView(.animation()) { timeline in
-                        Canvas { context, size in
-                            drawSignal(
-                                in: &context,
-                                size: size,
-                                phase: HoldingVoiceWaveformMetrics.phase(
-                                    from: snapshot.anchor,
-                                    to: timeline.date
-                                ),
-                                levels: snapshot.levels
-                            )
-                        }
-                    }
-                }
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            Canvas { context, size in
+                drawFluidWave(
+                    in: &context,
+                    size: size,
+                    time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                )
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func drawBaseline(
-        in context: inout GraphicsContext,
-        size: CGSize
-    ) {
-        guard size.width > 0, size.height > 0 else { return }
-
-        let barCount = HoldingVoiceWaveformMetrics.visibleBarCount(for: size.width)
-        for age in 0 ..< barCount {
-            let x = size.width
-                - HoldingVoiceWaveformMetrics.barWidth
-                - CGFloat(age) * HoldingVoiceWaveformMetrics.barStep
-            guard x + HoldingVoiceWaveformMetrics.barWidth >= 0 else { break }
-            drawBar(
-                in: &context,
-                x: x,
-                height: 2,
-                canvasHeight: size.height
-            )
-        }
-    }
-
-    private func drawSignal(
+    private func drawFluidWave(
         in context: inout GraphicsContext,
         size: CGSize,
-        phase: CGFloat,
-        levels: [CGFloat]
+        time: TimeInterval
     ) {
-        guard !levels.isEmpty, size.width > 0, size.height > 0 else { return }
+        guard size.width > 4, size.height > 4 else { return }
 
-        let newestX = size.width
-            - HoldingVoiceWaveformMetrics.barWidth
-            - phase * HoldingVoiceWaveformMetrics.barStep
-        let barCount = min(
-            levels.count,
-            HoldingVoiceWaveformMetrics.visibleBarCount(for: size.width)
+        let midY = size.height / 2
+        let maxHalfHeight = max(2, size.height * 0.42)
+        let energy = isTranscribing ? CGFloat(0.08) : snapshot.liveEnergy
+        let breathing = CGFloat(0.5 + 0.5 * sin(time * 2.4))
+        let baseAmplitude = maxHalfHeight * (isTranscribing
+            ? (0.14 + 0.08 * breathing)
+            : (0.14 + 0.06 * breathing + energy * 0.74))
+        let stepCount = min(140, max(44, Int(size.width / 4)))
+        let recentSamples = snapshot.levels.suffix(48)
+
+        // Subtle center baseline tapered smoothly to transparent at both edges.
+        var baseline = Path()
+        baseline.move(to: CGPoint(x: 0, y: midY))
+        baseline.addLine(to: CGPoint(x: size.width, y: midY))
+        context.stroke(
+            baseline,
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: PortfolixTheme.brandFocus.opacity(0), location: 0),
+                    .init(color: PortfolixTheme.brandFocus.opacity(0.18), location: 0.16),
+                    .init(color: PortfolixTheme.brandFocus.opacity(0.18), location: 0.84),
+                    .init(color: PortfolixTheme.brandFocus.opacity(0), location: 1),
+                ]),
+                startPoint: CGPoint(x: 0, y: midY),
+                endPoint: CGPoint(x: size.width, y: midY)
+            ),
+            style: StrokeStyle(lineWidth: 0.75, lineCap: .round)
         )
 
-        for age in 0 ..< barCount {
-            let x = newestX - CGFloat(age) * HoldingVoiceWaveformMetrics.barStep
-            guard x + HoldingVoiceWaveformMetrics.barWidth >= 0 else { break }
-            let level = levels[levels.count - 1 - age]
-            guard level > HoldingVoiceWaveformMetrics.silenceEpsilon else { continue }
-            drawBar(
-                in: &context,
-                x: x,
-                height: max(2, min(1, level) * size.height * 0.82),
-                canvasHeight: size.height
+        struct WaveLayer {
+            let frequency: Double
+            let speed: Double
+            let phaseOffset: Double
+            let amplitudeScale: CGFloat
+            let lineWidth: CGFloat
+            let fillOpacity: Double
+            let strokeOpacity: Double
+        }
+
+        let layers: [WaveLayer] = [
+            WaveLayer(
+                frequency: 2.1,
+                speed: -2.1,
+                phaseOffset: 0.4,
+                amplitudeScale: 0.78,
+                lineWidth: 1.1,
+                fillOpacity: 0.13,
+                strokeOpacity: 0.30
+            ),
+            WaveLayer(
+                frequency: 3.1,
+                speed: 3.0,
+                phaseOffset: 2.1,
+                amplitudeScale: 0.90,
+                lineWidth: 1.35,
+                fillOpacity: 0.09,
+                strokeOpacity: 0.52
+            ),
+            WaveLayer(
+                frequency: 2.5,
+                speed: -3.6,
+                phaseOffset: 4.0,
+                amplitudeScale: 1.0,
+                lineWidth: 1.75,
+                fillOpacity: 0.0,
+                strokeOpacity: 0.90
+            ),
+        ]
+
+        let speedBoost = isTranscribing ? 0.65 : (1.0 + Double(energy) * 0.95)
+
+        for layer in layers {
+            var upperPath = Path()
+            var ribbonPath = Path()
+            var lowerPoints: [CGPoint] = []
+            if layer.fillOpacity > 0 {
+                lowerPoints.reserveCapacity(stepCount + 1)
+            }
+
+            for index in 0...stepCount {
+                let u = Double(index) / Double(stepCount)
+                let x = CGFloat(u) * size.width
+                // Smooth bell envelope tapers amplitude cleanly to 0 at both edges.
+                let envelope = CGFloat(pow(sin(Double.pi * u), 1.55))
+
+                // Blend spatial voice history subtly into the fluid wave when speaking.
+                let sampleModulation: CGFloat
+                if !isTranscribing, energy > 0.02, !recentSamples.isEmpty {
+                    let sampleIndex = min(recentSamples.count - 1, Int(u * Double(recentSamples.count - 1)))
+                    let sampleValue = recentSamples[recentSamples.index(recentSamples.startIndex, offsetBy: sampleIndex)]
+                    sampleModulation = 0.72 + sampleValue * 0.48
+                } else {
+                    sampleModulation = 1.0
+                }
+
+                let angle = u * Double.pi * 2.0 * layer.frequency + time * layer.speed * speedBoost + layer.phaseOffset
+                let secondaryHarmonic = sin(angle * 1.85 - time * 1.6) * (0.18 + Double(energy) * 0.22)
+                let waveValue = CGFloat(sin(angle) + secondaryHarmonic) / 1.32
+                let displacement = waveValue * baseAmplitude * layer.amplitudeScale * envelope * sampleModulation
+
+                let topPoint = CGPoint(x: x, y: midY - displacement)
+                if index == 0 {
+                    upperPath.move(to: topPoint)
+                    if layer.fillOpacity > 0 {
+                        ribbonPath.move(to: topPoint)
+                    }
+                } else {
+                    upperPath.addLine(to: topPoint)
+                    if layer.fillOpacity > 0 {
+                        ribbonPath.addLine(to: topPoint)
+                    }
+                }
+
+                if layer.fillOpacity > 0 {
+                    lowerPoints.append(CGPoint(x: x, y: midY + displacement * 0.65))
+                }
+            }
+
+            if layer.fillOpacity > 0, !lowerPoints.isEmpty {
+                for point in lowerPoints.reversed() {
+                    ribbonPath.addLine(to: point)
+                }
+                ribbonPath.closeSubpath()
+
+                let fillGradient = Gradient(stops: [
+                    .init(color: PortfolixTheme.brandLogoStart.opacity(0), location: 0),
+                    .init(color: PortfolixTheme.brandLogoStart.opacity(layer.fillOpacity), location: 0.22),
+                    .init(color: PortfolixTheme.brandFocus.opacity(layer.fillOpacity * 1.15), location: 0.50),
+                    .init(color: PortfolixTheme.brandSolid.opacity(layer.fillOpacity), location: 0.78),
+                    .init(color: PortfolixTheme.brandSolid.opacity(0), location: 1),
+                ])
+                context.fill(
+                    ribbonPath,
+                    with: .linearGradient(
+                        fillGradient,
+                        startPoint: CGPoint(x: 0, y: midY),
+                        endPoint: CGPoint(x: size.width, y: midY)
+                    )
+                )
+            }
+
+            let strokeGradient = Gradient(stops: [
+                .init(color: PortfolixTheme.brandLogoStart.opacity(0), location: 0),
+                .init(color: PortfolixTheme.brandLogoStart.opacity(layer.strokeOpacity * 0.85), location: 0.14),
+                .init(color: PortfolixTheme.brandFocus.opacity(layer.strokeOpacity), location: 0.50),
+                .init(color: PortfolixTheme.brandSolid.opacity(layer.strokeOpacity * 0.88), location: 0.86),
+                .init(color: PortfolixTheme.brandSolid.opacity(0), location: 1),
+            ])
+            context.stroke(
+                upperPath,
+                with: .linearGradient(
+                    strokeGradient,
+                    startPoint: CGPoint(x: 0, y: midY),
+                    endPoint: CGPoint(x: size.width, y: midY)
+                ),
+                style: StrokeStyle(lineWidth: layer.lineWidth, lineCap: .round, lineJoin: .round)
             )
         }
-    }
-
-    private func drawBar(
-        in context: inout GraphicsContext,
-        x: CGFloat,
-        height: CGFloat,
-        canvasHeight: CGFloat
-    ) {
-        let rect = CGRect(
-            x: x,
-            y: (canvasHeight - height) / 2,
-            width: HoldingVoiceWaveformMetrics.barWidth,
-            height: height
-        )
-        context.fill(
-            Path(
-                roundedRect: rect,
-                cornerRadius: HoldingVoiceWaveformMetrics.barWidth / 2
-            ),
-            with: .color(PortfolixTheme.brandFocus.opacity(0.9))
-        )
     }
 }
 

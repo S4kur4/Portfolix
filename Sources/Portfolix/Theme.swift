@@ -461,52 +461,41 @@ extension EnvironmentValues {
     }
 }
 
+private struct PortfolixSecondaryGlassSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var interactive: Bool = true
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .portfolixGlass(
+                in: shape,
+                tint: colorScheme == .light ? PortfolixTheme.soft.opacity(0.55) : nil,
+                fallbackTint: PortfolixTheme.soft,
+                fallbackOpacity: 0.55,
+                interactive: interactive
+            )
+            .overlay {
+                shape
+                    .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
 private struct PortfolixGlassControlSurface: ViewModifier {
     let height: CGFloat
-    @Environment(\.portfolixFormGlass) private var isInForm
-    @Environment(\.colorScheme) private var colorScheme
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: PortfolixRadius.compact, style: .continuous)
     }
 
     func body(content: Content) -> some View {
-        let label = content.frame(height: height).foregroundStyle(PortfolixTheme.text)
-        Group {
-            if isInForm {
-                label.background {
-                    Group {
-                        if #available(macOS 26.0, *) {
-                            ButtonGlassBackground(tint: nil)
-                        } else {
-                            shape.fill(.regularMaterial)
-                                .overlay { shape.fill(PortfolixTheme.soft.opacity(0.48)) }
-                        }
-                    }
-                    .clipShape(shape)
-                    .overlay {
-                        shape.strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
-                    }
-                    .shadow(color: PortfolixTheme.buttonShadow, radius: 8, x: 0, y: 3)
-                    .allowsHitTesting(false)
-                }
-            } else {
-                label
-                    .portfolixGlass(
-                        in: shape,
-                        tint: colorScheme == .light ? PortfolixTheme.soft.opacity(0.55) : nil,
-                        fallbackTint: PortfolixTheme.soft,
-                        fallbackOpacity: 0.55,
-                        interactive: true
-                    )
-                    .overlay {
-                        shape
-                            .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
-                            .allowsHitTesting(false)
-                    }
-            }
-        }
-        .contentShape(shape)
+        content
+            .frame(height: height)
+            .foregroundStyle(PortfolixTheme.text)
+            .portfolixSecondaryGlass(in: shape, interactive: true)
+            .contentShape(shape)
     }
 }
 
@@ -527,6 +516,13 @@ extension View {
                 isInteractive: interactive
             )
         )
+    }
+
+    func portfolixSecondaryGlass<S: InsettableShape>(
+        in shape: S,
+        interactive: Bool = true
+    ) -> some View {
+        modifier(PortfolixSecondaryGlassSurface(shape: shape, interactive: interactive))
     }
 
     func portfolixGlassControl(height: CGFloat = PortfolixLayout.glassControlHeight) -> some View {
@@ -979,49 +975,51 @@ private struct InteractiveButtonLabel: View {
     @State private var isHovering = false
 
     var body: some View {
-        configuration.label
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let baseLabel = configuration.label
             .font(PortfolixTypography.control)
             .lineLimit(1)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, preservesLabelSize ? 0 : PortfolixSpacing.md)
             .padding(.vertical, preservesLabelSize ? 0 : PortfolixSpacing.sm)
-            .background {
-                Group {
-                    if #available(macOS 26.0, *) {
-                        ButtonGlassBackground(tint: isPrimary && isEnabled ? PortfolixTheme.brandSolid : nil, cornerRadius: cornerRadius)
-                            .overlay {
-                                if isPrimary && isEnabled {
-                                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                        .fill(PortfolixTheme.brandSolid.opacity(0.45))
-                                }
+
+        Group {
+            if isPrimary {
+                baseLabel
+                    .background {
+                        Group {
+                            if #available(macOS 26.0, *) {
+                                ButtonGlassBackground(tint: isEnabled ? PortfolixTheme.brandSolid : nil, cornerRadius: cornerRadius)
+                                    .overlay {
+                                        if isEnabled {
+                                            shape.fill(PortfolixTheme.brandSolid.opacity(0.45))
+                                        }
+                                    }
+                            } else {
+                                shape
+                                    .fill(.regularMaterial)
+                                    .overlay {
+                                        shape.fill(isEnabled
+                                            ? PortfolixTheme.brandSolid.opacity(0.88)
+                                            : PortfolixTheme.soft.opacity(0.48))
+                                    }
                             }
-                    } else {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(.regularMaterial)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                    .fill(isPrimary && isEnabled
-                                        ? PortfolixTheme.brandSolid.opacity(0.88)
-                                        : PortfolixTheme.soft.opacity(0.48))
-                            }
-                    }
-                }
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .overlay {
-                        if !isPrimary {
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                .strokeBorder(PortfolixTheme.controlBorder, lineWidth: 0.5)
                         }
+                        .clipShape(shape)
+                        .shadow(color: PortfolixTheme.buttonShadow, radius: 4, x: 0, y: 2)
+                        .allowsHitTesting(false)
                     }
-                    .shadow(color: PortfolixTheme.buttonShadow, radius: 4, x: 0, y: 2)
-                    .allowsHitTesting(false)
+            } else {
+                baseLabel
+                    .portfolixSecondaryGlass(in: shape, interactive: true)
             }
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .opacity(!isEnabled ? 0.5 : configuration.isPressed ? 0.72 : isHovering ? 0.88 : 1)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
-            .onHover { isHovering = $0 }
+        }
+        .contentShape(shape)
+        .opacity(!isEnabled ? 0.5 : configuration.isPressed ? 0.72 : isHovering ? 0.88 : 1)
+        .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovering)
+        .onHover { isHovering = $0 }
     }
 
     private var foregroundColor: Color {

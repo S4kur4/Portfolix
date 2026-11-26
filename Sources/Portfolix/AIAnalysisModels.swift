@@ -849,6 +849,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
     let modelUsage: AIModelUsageSummary?
     var activitySteps: [AIAgentActivityStep]? = nil
     var retryQuestion: String? = nil
+    var threadID: UUID? = nil
+    var extractedMemories: [AIMemoryItem]? = nil
 
     var responseModelUsage: AIModelUsageSummary? {
         modelUsage ?? followUpRunSnapshot?.modelUsage
@@ -879,7 +881,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         citations: [AIMessageCitation]? = nil,
         modelUsage: AIModelUsageSummary? = nil,
         activitySteps: [AIAgentActivityStep]? = nil,
-        retryQuestion: String? = nil
+        retryQuestion: String? = nil,
+        threadID: UUID? = nil,
+        extractedMemories: [AIMemoryItem]? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -892,6 +896,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         self.modelUsage = modelUsage
         self.activitySteps = activitySteps
         self.retryQuestion = retryQuestion
+        self.threadID = threadID
+        self.extractedMemories = extractedMemories
     }
 
     var content: AIReportChatContent {
@@ -909,15 +915,16 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         }
     }
 
-    static func user(_ text: String, createdAt: Date = .now) -> AIReportChatItem {
-        AIReportChatItem(id: UUID(), createdAt: createdAt, kind: .user, text: text, report: nil, runSnapshot: nil)
+    static func user(_ text: String, createdAt: Date = .now, threadID: UUID? = nil) -> AIReportChatItem {
+        AIReportChatItem(id: UUID(), createdAt: createdAt, kind: .user, text: text, report: nil, runSnapshot: nil, threadID: threadID)
     }
 
     static func report(
         _ report: AIAnalysisReport,
         _ run: AIAnalysisRun,
         modelUsage: AIModelUsageSummary? = nil,
-        activitySteps: [AIAgentActivityStep]? = nil
+        activitySteps: [AIAgentActivityStep]? = nil,
+        threadID: UUID? = nil
     ) -> AIReportChatItem {
         AIReportChatItem(
             id: report.id,
@@ -927,7 +934,8 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             report: report,
             runSnapshot: RunSnapshot(run: run),
             modelUsage: modelUsage,
-            activitySteps: activitySteps?.isEmpty == false ? activitySteps : nil
+            activitySteps: activitySteps?.isEmpty == false ? activitySteps : nil,
+            threadID: threadID
         )
     }
 
@@ -938,7 +946,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
         citations: [AIMessageCitation] = [],
         modelUsage: AIModelUsageSummary? = nil,
         activitySteps: [AIAgentActivityStep]? = nil,
-        retryQuestion: String? = nil
+        retryQuestion: String? = nil,
+        threadID: UUID? = nil,
+        extractedMemories: [AIMemoryItem]? = nil
     ) -> AIReportChatItem {
         AIReportChatItem(
             id: UUID(),
@@ -951,7 +961,9 @@ struct AIReportChatItem: Codable, Identifiable, Equatable {
             citations: citations.isEmpty ? nil : citations,
             modelUsage: modelUsage,
             activitySteps: activitySteps?.isEmpty == false ? activitySteps : nil,
-            retryQuestion: retryQuestion
+            retryQuestion: retryQuestion,
+            threadID: threadID,
+            extractedMemories: extractedMemories?.isEmpty == false ? extractedMemories : nil
         )
     }
 
@@ -1072,6 +1084,7 @@ struct AIAnalysisArtifactBundle: Codable, Equatable, Sendable {
 struct AIAnalysisFollowUpResult: Equatable {
     var modelUsage: AIModelUsageSummary? = nil
     var localToolCallCount = 0
+    var memoryCandidates: [AIMemoryCandidate] = []
     let answer: String
     let citations: [AIMessageCitation]
     let guardrailResultJSON: String
@@ -1531,6 +1544,20 @@ struct AIAnalysisInput: Encodable {
     let rebalanceContext: AIRebalanceContext
     let previousReport: AIPreviousReportContext?
     let riskFlags: [AIRiskFlag]
+    let investorMemory: [AIMemoryContextItem]?
+    let domainBreakdown: [AIAllocationContext]?
+}
+
+struct AIMemoryContextItem: Encodable, Equatable {
+    let category: String
+    let content: String
+    let relatedAsset: String?
+
+    enum CodingKeys: String, CodingKey {
+        case category
+        case content
+        case relatedAsset = "related_asset"
+    }
 }
 
 struct AIAnalysisSnapshot: Encodable {
@@ -1548,7 +1575,30 @@ struct AIRiskProfileContext: Encodable {
     let riskProfileVersion: Int
     let riskLevel: String?
     let baseCurrency: String
+    let investmentHorizon: String?
+    let investmentExperience: String?
+    let drawdownTolerance: String?
     let thresholds: AIRiskThresholds
+
+    init(
+        status: String,
+        riskProfileVersion: Int,
+        riskLevel: String?,
+        baseCurrency: String,
+        investmentHorizon: String? = nil,
+        investmentExperience: String? = nil,
+        drawdownTolerance: String? = nil,
+        thresholds: AIRiskThresholds
+    ) {
+        self.status = status
+        self.riskProfileVersion = riskProfileVersion
+        self.riskLevel = riskLevel
+        self.baseCurrency = baseCurrency
+        self.investmentHorizon = investmentHorizon
+        self.investmentExperience = investmentExperience
+        self.drawdownTolerance = drawdownTolerance
+        self.thresholds = thresholds
+    }
 }
 
 struct AIRiskThresholds: Encodable {

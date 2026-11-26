@@ -32,6 +32,7 @@ struct DashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.never)
+        .scrollClipDisabled()
     }
 }
 
@@ -705,13 +706,8 @@ private struct PriceRefreshButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(foregroundStyle)
-        .portfolixGlass(
-            in: Circle(),
-            fallbackTint: PortfolixTheme.soft,
-            fallbackOpacity: isHovering && !store.isRefreshing ? 0.64 : 0.42,
-            interactive: true
-        )
-        .opacity(store.isRefreshing ? 0.58 : 1)
+        .portfolixSecondaryGlass(in: Circle(), interactive: true)
+        .opacity(store.isRefreshing ? 0.58 : isHovering ? 0.88 : 1)
         .onHover { isHovering = $0 }
         .accessibilityLabel(localizedText("刷新最新行情", "Refresh latest prices", language: store.appLanguage))
         .disabled(store.isRefreshing)

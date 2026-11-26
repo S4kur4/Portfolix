@@ -413,6 +413,8 @@ struct AIAnalysisAgent: Sendable {
         localToolHandler: AIPortfolioToolHandler? = nil,
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
+        advisorPersona: AIAdvisorPersonaSettings = .default,
+        memoryItems: [AIMemoryItem] = [],
         runtimeRunID: UUID? = nil,
         progress: AIFollowUpProgressHandler? = nil
     ) async throws -> AIAnalysisFollowUpResult {
@@ -420,7 +422,8 @@ struct AIAnalysisAgent: Sendable {
             try await answerFollowUpImpl(
                 question: question, report: report, artifacts: artifacts, chatHistory: chatHistory,
                 positions: positions, portfolioContext: portfolioContext, localToolHandler: localToolHandler, llmConfiguration: llmConfiguration,
-                searchConfiguration: searchConfiguration, runtimeRunID: runtimeRunID, progress: progress
+                searchConfiguration: searchConfiguration, advisorPersona: advisorPersona, memoryItems: memoryItems,
+                runtimeRunID: runtimeRunID, progress: progress
             )
         }
         result.modelUsage = usage
@@ -437,6 +440,8 @@ struct AIAnalysisAgent: Sendable {
         localToolHandler: AIPortfolioToolHandler? = nil,
         llmConfiguration: AIProviderConfiguration,
         searchConfiguration: SearchConfiguration,
+        advisorPersona: AIAdvisorPersonaSettings = .default,
+        memoryItems: [AIMemoryItem] = [],
         runtimeRunID: UUID? = nil,
         progress: AIFollowUpProgressHandler? = nil
     ) async throws -> AIAnalysisFollowUpResult {
@@ -562,6 +567,7 @@ struct AIAnalysisAgent: Sendable {
         )
         let localDataAvailabilityJSON = "{\"holding_count\":\(positions.count),\"latest_report_available\":\(report != nil)}"
         let hasNativeSearchContinuation = followUpPlans.first?.functionContext != nil
+        let investorMemoryJSON = AIMemoryPolicy.contextJSON(from: memoryItems)
         let answerPrompt: String = hasNativeSearchContinuation
             ? AIAnalysisPromptText.followUpPostSearchUser(
                 question: normalizedQuestion,
@@ -576,6 +582,7 @@ struct AIAnalysisAgent: Sendable {
                 conversationHistoryJSON: conversationHistoryJSON,
                 artifactSummary: artifactSummary,
                 portfolioContextJSON: portfolioContextJSON,
+                investorMemoryJSON: investorMemoryJSON,
                 searchMode: searchMode,
                 toolResultsJSON: "[" + AISearchFunctionCalling.resultOutputs(toolResults).joined(separator: ",") + "]",
                 citationCatalogJSON: citationCatalogJSON,
@@ -598,11 +605,12 @@ struct AIAnalysisAgent: Sendable {
             }
         let loopOutput = try await completeFollowUpWithDataTools(
             prompt: answerPrompt, configuration: followUpConfiguration, apiKey: llmKey,
-            snapshot: AIPortfolioToolSnapshot(positions: positions, portfolioContext: portfolioContext, report: report),
+            snapshot: AIPortfolioToolSnapshot(positions: positions, portfolioContext: portfolioContext, report: report, memoryItems: memoryItems),
             handler: localToolHandler,
             searchConfiguration: searchConfiguration,
             searchKeys: usesConnectedSearch ? searchKeys : [:],
             existingToolResults: toolResults,
+            advisorPersona: advisorPersona,
             runtimeRunID: runID, progress: progress, modelProgress: modelProgress,
             searchInput: followUpPlans.first?.functionContext?.inputItems(results: toolResults, finalPrompt: answerPrompt)
         )
@@ -673,6 +681,7 @@ struct AIAnalysisAgent: Sendable {
             toolResultsJSON: toolResultsJSON
         )
         result.localToolCallCount = localToolCallCount
+        result.memoryCandidates = advisorPersona.autoExtractMemory ? payload.memoryCandidates : []
         AIAgentRuntimeDiagnostics.event(
             "agent_follow_up_finished",
             runID: runID,
@@ -692,10 +701,12 @@ struct AIAnalysisAgent: Sendable {
         searchConfiguration: SearchConfiguration,
         searchKeys: [SearchProviderOption: String],
         existingToolResults: [AIWebSearchToolResult],
+        advisorPersona: AIAdvisorPersonaSettings = .default,
         runtimeRunID: UUID,
         progress: AIFollowUpProgressHandler?, modelProgress: LLMWebSearchProgressHandler?,
         searchInput: [AIJSONValue]? = nil
     ) async throws -> (completion: LLMCompletionResult, localToolCallCount: Int, rounds: Int, extraSearchResults: [AIWebSearchToolResult]) {
+        let followUpSystemPrompt = AIAnalysisPromptText.styledSystem(AIAnalysisPromptText.followUpSystem, persona: advisorPersona)
         var items: [AIJSONValue] = searchInput ?? [.object(["role": .string("user"), "content": .string(prompt)])]
         var seenIDs = Set<String>()
         var localToolCache: [String: String] = [:]
@@ -717,7 +728,7 @@ struct AIAnalysisAgent: Sendable {
                 choice: canCallTools ? nil : .string("none")
             )
             let completion = try await llm.completeJSONResult(
-                systemPrompt: AIAnalysisPromptText.followUpSystem, userPrompt: prompt,
+                systemPrompt: followUpSystemPrompt, userPrompt: prompt,
                 configuration: requestConfiguration, apiKey: apiKey, webSearchEnabled: false,
                 reasoningEffort: .low, webSearchProgress: modelProgress
             )
@@ -769,7 +780,8 @@ struct AIAnalysisAgent: Sendable {
                     localCount += 1
                     do {
                         let request = try AIPortfolioToolRequest(call: call)
-                        let cacheKey = "\(request.tool.rawValue)|\(request.query)|\(request.offset)|\(request.limit)|\(request.positionRefs.joined(separator: ","))|\(request.period)|\(request.days)"
+                        let rebalanceKey = request.rebalanceChanges.map { "\($0.asset):\($0.deltaAmountCNY ?? -999999):\($0.targetWeightPct ?? -1)" }.joined(separator: ";")
+                        let cacheKey = "\(request.tool.rawValue)|\(request.query)|\(request.offset)|\(request.limit)|\(request.positionRefs.joined(separator: ","))|\(request.period)|\(request.days)|\(request.asset)|\(request.groupBy)|\(rebalanceKey)"
                         if let cached = localToolCache[cacheKey] {
                             output = cached
                         } else {
@@ -1435,6 +1447,7 @@ struct AIAnalysisAgent: Sendable {
         configuration: AIProviderConfiguration,
         apiKey: String,
         webSearchEnabled: Bool,
+        advisorPersona: AIAdvisorPersonaSettings = .default,
         progress: AIAnalysisProgressHandler? = nil,
         searchContext: AISearchFunctionContext? = nil
     ) async throws -> AIReportPayloadResult {
@@ -1465,7 +1478,7 @@ struct AIAnalysisAgent: Sendable {
         let completion: LLMCompletionResult
         do {
             completion = try await llm.completeJSONResult(
-                systemPrompt: AIAnalysisPromptText.reportSystem,
+                systemPrompt: AIAnalysisPromptText.styledSystem(AIAnalysisPromptText.reportSystem, persona: advisorPersona),
                 userPrompt: reportPrompt,
                 configuration: reportConfiguration,
                 apiKey: apiKey,
@@ -1714,6 +1727,9 @@ struct AIAnalysisAgent: Sendable {
                 riskProfileVersion: context.riskProfileVersion,
                 riskLevel: context.riskProfileConfigured ? context.riskLevel : nil,
                 baseCurrency: DisplayCurrency.cny.rawValue,
+                investmentHorizon: context.investmentHorizon,
+                investmentExperience: context.investmentExperience,
+                drawdownTolerance: context.drawdownTolerance,
                 thresholds: AIRiskThresholds(
                     maxSinglePositionPct: context.positionLimit,
                     maxCryptoAllocationPct: context.cryptoLimit,
@@ -1734,7 +1750,23 @@ struct AIAnalysisAgent: Sendable {
             ),
             rebalanceContext: rebalanceContext(from: evaluation, positions: positionContexts),
             previousReport: previousReportContext(from: previousReport),
-            riskFlags: riskFlags
+            riskFlags: riskFlags,
+            investorMemory: context.memoryItems.isEmpty
+                ? nil
+                : context.memoryItems.prefix(AIMemoryPolicy.maximumItems).map {
+                    AIMemoryContextItem(category: $0.category.rawValue, content: $0.content, relatedAsset: $0.relatedAsset)
+                },
+            domainBreakdown: {
+                guard let dist = context.investmentDistribution else { return nil }
+                let items = InvestmentDistributionEngine.resolvedItems(positions: positions, cache: dist)
+                guard !items.isEmpty else { return nil }
+                return items.map {
+                    AIAllocationContext(
+                        code: outputLanguage == .english ? $0.domain.titleEnglish : $0.domain.titleChinese,
+                        allocationPct: ($0.percentage * 100).rounded() / 100
+                    )
+                }
+            }()
         )
     }
 
@@ -2979,6 +3011,7 @@ struct AIAnalysisHarness {
                 configuration: request.llmConfiguration,
                 apiKey: preflight.llmKey,
                 webSearchEnabled: false,
+                advisorPersona: request.storeContext.advisorPersona,
                 progress: request.progress,
                 searchContext: toolPlan.functionContext
             )
@@ -3244,6 +3277,7 @@ private struct AIReportWriterNode {
         configuration: AIProviderConfiguration,
         apiKey: String,
         webSearchEnabled: Bool,
+        advisorPersona: AIAdvisorPersonaSettings = .default,
         progress: AIAnalysisProgressHandler?,
         searchContext: AISearchFunctionContext? = nil
     ) async throws -> AIReportPayloadResult {
@@ -3254,6 +3288,7 @@ private struct AIReportWriterNode {
             configuration: configuration,
             apiKey: apiKey,
             webSearchEnabled: webSearchEnabled,
+            advisorPersona: advisorPersona,
             progress: progress,
             searchContext: searchContext
         )
@@ -4007,9 +4042,15 @@ struct AIAnalysisStoreContext {
     let cryptoLimit: Double
     let foreignCurrencyLimit: Double
     let liquidityMinimum: Double
+    let investmentHorizon: String?
+    let investmentExperience: String?
+    let drawdownTolerance: String?
     let riskConstraintEvaluation: RiskConstraintEvaluation
     let positionPerformance: [Position.ID: AIPositionPerformanceContext]
     let hasReconciliationHistory: Bool
+    let advisorPersona: AIAdvisorPersonaSettings
+    let memoryItems: [AIMemoryItem]
+    let investmentDistribution: AIInvestmentDistribution?
 
     init(
         displayCurrency: DisplayCurrency,
@@ -4023,9 +4064,15 @@ struct AIAnalysisStoreContext {
         cryptoLimit: Double,
         foreignCurrencyLimit: Double,
         liquidityMinimum: Double,
+        investmentHorizon: String? = nil,
+        investmentExperience: String? = nil,
+        drawdownTolerance: String? = nil,
         riskConstraintEvaluation: RiskConstraintEvaluation,
         positionPerformance: [Position.ID: AIPositionPerformanceContext] = [:],
-        hasReconciliationHistory: Bool = false
+        hasReconciliationHistory: Bool = false,
+        advisorPersona: AIAdvisorPersonaSettings = .default,
+        memoryItems: [AIMemoryItem] = [],
+        investmentDistribution: AIInvestmentDistribution? = nil
     ) {
         self.displayCurrency = displayCurrency
         self.convertedTotalValue = convertedTotalValue
@@ -4038,9 +4085,15 @@ struct AIAnalysisStoreContext {
         self.cryptoLimit = cryptoLimit
         self.foreignCurrencyLimit = foreignCurrencyLimit
         self.liquidityMinimum = liquidityMinimum
+        self.investmentHorizon = investmentHorizon
+        self.investmentExperience = investmentExperience
+        self.drawdownTolerance = drawdownTolerance
         self.riskConstraintEvaluation = riskConstraintEvaluation
         self.positionPerformance = positionPerformance
         self.hasReconciliationHistory = hasReconciliationHistory
+        self.advisorPersona = advisorPersona
+        self.memoryItems = memoryItems
+        self.investmentDistribution = investmentDistribution
     }
 }
 
@@ -4254,10 +4307,12 @@ struct LLMInvestmentProfileDimensionPayload: Decodable {
 struct LLMFollowUpPayload: Decodable {
     let answer: String
     let limitations: [String]
+    let memoryCandidates: [AIMemoryCandidate]
 
     enum CodingKeys: String, CodingKey {
         case answer
         case limitations
+        case memoryCandidates = "memory_candidates"
     }
 
     init(from decoder: Decoder) throws {
@@ -4272,10 +4327,12 @@ struct LLMFollowUpPayload: Decodable {
         } else {
             limitations = try container.decodeIfPresent([String].self, forKey: .limitations) ?? []
         }
+        memoryCandidates = (try? container.decodeIfPresent([AIMemoryCandidate].self, forKey: .memoryCandidates)) ?? []
     }
 
-    init(answer: String, limitations: [String]) {
+    init(answer: String, limitations: [String], memoryCandidates: [AIMemoryCandidate] = []) {
         self.answer = answer
         self.limitations = limitations
+        self.memoryCandidates = memoryCandidates
     }
 }

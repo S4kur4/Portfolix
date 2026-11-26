@@ -728,6 +728,9 @@ final class PortfolioStore {
     var positionLimit = 30.0
     var foreignCurrencyLimit = 50.0
     var liquidityMinimum = 10.0
+    var riskInvestmentHorizon = ""
+    var riskInvestmentExperience = ""
+    var riskDrawdownTolerance = ""
     var persistenceErrorMessage: String?
     var backgroundUpdatesEnabled: Bool {
         didSet {
@@ -811,6 +814,15 @@ final class PortfolioStore {
     var aiAnalysisRun = AIAnalysisRun()
     var aiAnalysisReport: AIAnalysisReport?
     private(set) var aiAnalysisChatItems: [AIReportChatItem] = []
+    private(set) var aiChatThreads: [AIChatThread] = []
+    private(set) var activeAIChatThreadID: UUID?
+    var aiAdvisorPersona: AIAdvisorPersonaSettings = .default {
+        didSet {
+            persistAIAdvisorPersona()
+        }
+    }
+    private(set) var aiMemoryItems: [AIMemoryItem] = []
+    private(set) var aiMemorySummary: String = ""
     private(set) var isAnsweringAIAnalysisFollowUp = false
     private(set) var aiAnalysisFollowUpProgress: AIFollowUpProgress?
     private(set) var aiAnalysisActivityLines: [AIAgentActivityLine] = []
@@ -1036,13 +1048,16 @@ final class PortfolioStore {
         derivedMetrics = PortfolioDerivedMetrics(positions: positions)
         mcpReadAccessEnabled = (try? activeRepository?.appSetting(for: MCPAccess.settingKey)) == "true"
         loadRiskProfileSettings(from: activeRepository)
+        loadAIAdvisorPersona(from: activeRepository)
+        aiMemoryItems = (try? activeRepository?.fetchAIMemoryItems()) ?? []
+        loadAIMemorySummary(from: activeRepository)
         let latestReport = (try? activeRepository?.fetchLatestAIAnalysisReport())
             ?? (usesLegacyAIReportCache ? Self.savedAIAnalysisReport() : nil)
         aiAnalysisReport = latestReport.flatMap { report in
             report.generatedAt >= savedChatRetentionPeriod.cutoffDate() ? report : nil
         }
         removePersistedAIAnalysisReportIfExpired(cutoff: savedChatRetentionPeriod.cutoffDate())
-        aiAnalysisChatItems = loadedChatItems
+        bootstrapAIChatThreads(loadedChatItems: loadedChatItems, cutoff: savedChatRetentionPeriod.cutoffDate())
         // Reuse only historical asset exposure evidence; the retired radar scores are never requested.
         investmentProfileExposureCache = usesLegacyAIReportCache ? Self.savedAIInvestmentProfile()?.assetExposures ?? [] : []
         if let json = try? activeRepository?.appSetting(for: InvestmentDistributionEngine.cacheKey),
@@ -1792,6 +1807,8 @@ final class PortfolioStore {
         }
         try positionRepository?.deleteAllAIAnalysisContent()
         aiAnalysisChatItems = []
+        aiChatThreads = []
+        activeAIChatThreadID = nil
         aiAnalysisReport = nil
         aiAnalysisRun = AIAnalysisRun()
         aiAnalysisFollowUpProgress = nil
@@ -1799,6 +1816,274 @@ final class PortfolioStore {
         aiAnalysisActivitySteps = []
         if usesLegacyAIReportCache { UserDefaults.standard.removeObject(forKey: Self.latestAIReportDefaultsKey) }
         lastAIAnalysisRetentionPruneDay = Calendar.current.startOfDay(for: .now)
+    }
+
+    // MARK: - Phase 2: Multi-Thread Chat, Persona & Memory Management
+
+    func startNewAIChatThread() {
+        guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else { return }
+        // If the current conversation already has no interaction, reuse it instead of creating empty duplicates.
+        guard !aiAnalysisChatItems.isEmpty else { return }
+        // If an empty thread already exists, switch to it instead of spawning another empty thread.
+        if let existingEmpty = aiChatThreads.first(where: { $0.messageCount == 0 }) {
+            activeAIChatThreadID = existingEmpty.id
+            aiAnalysisChatItems = []
+            return
+        }
+        let now = Date()
+        let thread = AIChatThread(
+            title: AIChatThreadTitlePolicy.defaultTitle(language: appLanguage),
+            createdAt: now,
+            updatedAt: now,
+            messageCount: 0
+        )
+        aiChatThreads.insert(thread, at: 0)
+        activeAIChatThreadID = thread.id
+        aiAnalysisChatItems = []
+        do {
+            try positionRepository?.upsertAIChatThread(thread)
+        } catch {
+            persistenceErrorMessage = "新建对话失败：\(error.localizedDescription)"
+        }
+    }
+
+    func selectAIChatThread(id: UUID) {
+        guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else { return }
+        guard id != activeAIChatThreadID, aiChatThreads.contains(where: { $0.id == id }) else { return }
+        activeAIChatThreadID = id
+        let cutoff = aiChatRetentionPeriod.cutoffDate()
+        let items = (try? positionRepository?.fetchAIAnalysisChatItems(since: cutoff, threadID: id)) ?? []
+        aiAnalysisChatItems = items.map { $0.migratingLegacyPromptText() }
+    }
+
+    func deleteAIChatThread(id: UUID) {
+        guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else { return }
+        do {
+            try positionRepository?.deleteAIChatThread(id: id)
+            aiChatThreads.removeAll { $0.id == id }
+            if activeAIChatThreadID == id {
+                if let next = aiChatThreads.first {
+                    activeAIChatThreadID = next.id
+                    let cutoff = aiChatRetentionPeriod.cutoffDate()
+                    aiAnalysisChatItems = ((try? positionRepository?.fetchAIAnalysisChatItems(since: cutoff, threadID: next.id)) ?? [])
+                        .map { $0.migratingLegacyPromptText() }
+                } else {
+                    activeAIChatThreadID = nil
+                    aiAnalysisChatItems = []
+                }
+            }
+        } catch {
+            persistenceErrorMessage = "删除对话失败：\(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func addAIMemoryItem(
+        category: AIMemoryCategory,
+        content: String,
+        relatedAsset: String? = nil,
+        source: AIMemorySource = .manual
+    ) -> AIMemoryItem? {
+        guard let item = AIMemoryPolicy.validatedItem(
+            category: category,
+            content: content,
+            relatedAsset: relatedAsset,
+            source: source
+        ) else { return nil }
+        let merged = AIMemoryPolicy.merge(existing: aiMemoryItems, incoming: [item])
+        guard let added = merged.newlyAdded.first else { return nil }
+        aiMemoryItems = merged.merged
+        do {
+            try positionRepository?.upsertAIMemoryItem(added)
+        } catch {
+            persistenceErrorMessage = "保存投研记忆失败：\(error.localizedDescription)"
+        }
+        syncAIMemorySummaryFromItems()
+        return added
+    }
+
+    func setAIMemoryEnabled(_ enabled: Bool) {
+        var updated = aiAdvisorPersona
+        updated.autoExtractMemory = enabled
+        aiAdvisorPersona = updated
+        if !enabled {
+            clearAllAIMemoryItems()
+        }
+    }
+
+    func saveAIMemorySummary(_ rawSummary: String) {
+        let sanitized = AIMemoryPolicy.sanitizedSummary(rawSummary)
+        aiMemorySummary = sanitized
+        persistAppSetting(key: Self.aiMemorySummarySettingKey, value: sanitized)
+        let parsedItems = AIMemoryPolicy.items(fromSummary: sanitized)
+        aiMemoryItems = parsedItems
+        do {
+            try positionRepository?.deleteAllAIMemoryItems()
+            for item in parsedItems {
+                try positionRepository?.upsertAIMemoryItem(item)
+            }
+        } catch {
+            persistenceErrorMessage = "保存投研记忆失败：\(error.localizedDescription)"
+        }
+    }
+
+    func updateAIMemoryItem(
+        id: UUID,
+        category: AIMemoryCategory,
+        content: String,
+        relatedAsset: String?
+    ) {
+        guard let index = aiMemoryItems.firstIndex(where: { $0.id == id }),
+              let validated = AIMemoryPolicy.validatedItem(
+                  category: category,
+                  content: content,
+                  relatedAsset: relatedAsset,
+                  source: aiMemoryItems[index].source
+              )
+        else { return }
+        let updated = AIMemoryItem(
+            id: id,
+            category: validated.category,
+            content: validated.content,
+            relatedAsset: validated.relatedAsset,
+            source: aiMemoryItems[index].source,
+            createdAt: aiMemoryItems[index].createdAt,
+            updatedAt: .now
+        )
+        aiMemoryItems[index] = updated
+        do {
+            try positionRepository?.upsertAIMemoryItem(updated)
+        } catch {
+            persistenceErrorMessage = "更新投研记忆失败：\(error.localizedDescription)"
+        }
+        syncAIMemorySummaryFromItems()
+    }
+
+    func deleteAIMemoryItem(id: UUID) {
+        aiMemoryItems.removeAll { $0.id == id }
+        for index in aiAnalysisChatItems.indices {
+            if var extracted = aiAnalysisChatItems[index].extractedMemories,
+               extracted.contains(where: { $0.id == id })
+            {
+                extracted.removeAll { $0.id == id }
+                aiAnalysisChatItems[index].extractedMemories = extracted.isEmpty ? nil : extracted
+                try? positionRepository?.upsertAIAnalysisChatItem(aiAnalysisChatItems[index], threadID: activeAIChatThreadID)
+            }
+        }
+        do {
+            try positionRepository?.deleteAIMemoryItem(id: id)
+        } catch {
+            persistenceErrorMessage = "删除投研记忆失败：\(error.localizedDescription)"
+        }
+        syncAIMemorySummaryFromItems()
+    }
+
+    func clearAllAIMemoryItems() {
+        aiMemoryItems = []
+        aiMemorySummary = ""
+        persistAppSetting(key: Self.aiMemorySummarySettingKey, value: "")
+        for index in aiAnalysisChatItems.indices where aiAnalysisChatItems[index].extractedMemories != nil {
+            aiAnalysisChatItems[index].extractedMemories = nil
+            try? positionRepository?.upsertAIAnalysisChatItem(aiAnalysisChatItems[index], threadID: activeAIChatThreadID)
+        }
+        do {
+            try positionRepository?.deleteAllAIMemoryItems()
+        } catch {
+            persistenceErrorMessage = "清空投研记忆失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func applyExtractedAIMemories(_ candidates: [AIMemoryCandidate]) -> [AIMemoryItem] {
+        guard aiAdvisorPersona.autoExtractMemory, !candidates.isEmpty else { return [] }
+        let validated = AIMemoryPolicy.validatedCandidates(candidates)
+        guard !validated.isEmpty else { return [] }
+        let result = AIMemoryPolicy.merge(existing: aiMemoryItems, incoming: validated)
+        guard !result.newlyAdded.isEmpty else { return [] }
+        aiMemoryItems = result.merged
+        for item in result.newlyAdded {
+            try? positionRepository?.upsertAIMemoryItem(item)
+        }
+        // Append newly extracted memories into the user-visible summary cleanly.
+        let newLines = result.newlyAdded.map { item -> String in
+            if let asset = item.relatedAsset, !asset.isEmpty {
+                return "- [\(asset)] \(item.content)"
+            }
+            return "- \(item.content)"
+        }.joined(separator: "\n")
+        let combined = aiMemorySummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? newLines
+            : "\(aiMemorySummary)\n\(newLines)"
+        aiMemorySummary = AIMemoryPolicy.sanitizedSummary(combined)
+        persistAppSetting(key: Self.aiMemorySummarySettingKey, value: aiMemorySummary)
+        return result.newlyAdded
+    }
+
+    private static let aiAdvisorPersonaSettingKey = "ai_advisor_persona_v1"
+    private static let aiMemorySummarySettingKey = "ai_memory_summary_v1"
+
+    private func loadAIMemorySummary(from repository: PositionRepository?) {
+        if let stored = try? repository?.appSetting(for: Self.aiMemorySummarySettingKey),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            aiMemorySummary = AIMemoryPolicy.sanitizedSummary(stored)
+        } else {
+            aiMemorySummary = AIMemoryPolicy.renderedSummary(from: aiMemoryItems)
+        }
+    }
+
+    private func syncAIMemorySummaryFromItems() {
+        aiMemorySummary = AIMemoryPolicy.renderedSummary(from: aiMemoryItems)
+        persistAppSetting(key: Self.aiMemorySummarySettingKey, value: aiMemorySummary)
+    }
+
+    private func loadAIAdvisorPersona(from repository: PositionRepository?) {
+        guard let json = try? repository?.appSetting(for: Self.aiAdvisorPersonaSettingKey),
+              let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(AIAdvisorPersonaSettings.self, from: data)
+        else { return }
+        aiAdvisorPersona = decoded
+    }
+
+    private func persistAIAdvisorPersona() {
+        guard let data = try? JSONEncoder().encode(aiAdvisorPersona),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        persistAppSetting(key: Self.aiAdvisorPersonaSettingKey, value: json)
+    }
+
+    private func bootstrapAIChatThreads(loadedChatItems: [AIReportChatItem], cutoff: Date) {
+        guard let repository = positionRepository else {
+            aiAnalysisChatItems = loadedChatItems
+            return
+        }
+        var storedThreads = (try? repository.fetchAIChatThreads(since: cutoff)) ?? []
+        let hasOrphans = loadedChatItems.contains { $0.threadID == nil }
+        if hasOrphans {
+            let orphanItems = loadedChatItems.filter { $0.threadID == nil }
+            let firstUser = orphanItems.first(where: { $0.kind == .user })?.text
+            let title = firstUser.map { AIChatThreadTitlePolicy.autoTitle(from: $0, language: appLanguage) }
+                ?? AIChatThreadTitlePolicy.legacyDefaultTitle(language: appLanguage)
+            let createdAt = orphanItems.first?.createdAt ?? .now
+            let updatedAt = orphanItems.last?.createdAt ?? createdAt
+            let legacyThread = AIChatThread(
+                title: title,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                messageCount: orphanItems.count
+            )
+            try? repository.upsertAIChatThread(legacyThread)
+            try? repository.assignOrphanChatMessages(to: legacyThread.id)
+            storedThreads = (try? repository.fetchAIChatThreads(since: cutoff)) ?? [legacyThread]
+        }
+        aiChatThreads = storedThreads
+        if let latest = storedThreads.first {
+            activeAIChatThreadID = latest.id
+            let threadItems = (try? repository.fetchAIAnalysisChatItems(since: cutoff, threadID: latest.id)) ?? []
+            aiAnalysisChatItems = threadItems.map { $0.migratingLegacyPromptText() }
+        } else {
+            activeAIChatThreadID = nil
+            aiAnalysisChatItems = loadedChatItems
+        }
     }
 
     func submitAIAnalysisFollowUp(_ question: String) {
@@ -1851,6 +2136,7 @@ final class PortfolioStore {
                     "has_run_snapshot": String(answer.runSnapshot != nil),
                 ]
             )
+            let extractedMemories = answer.didFail ? [] : applyExtractedAIMemories(answer.memoryCandidates)
             appendAIAnalysisChatItem(
                 .assistant(
                     answer.text,
@@ -1858,7 +2144,8 @@ final class PortfolioStore {
                     citations: answer.citations,
                     modelUsage: answer.modelUsage,
                     activitySteps: finishedSteps,
-                    retryQuestion: answer.didFail ? trimmed : nil
+                    retryQuestion: answer.didFail ? trimmed : nil,
+                    extractedMemories: extractedMemories
                 ),
                 runtimeRunID: runtimeRunID
             )
@@ -1945,7 +2232,7 @@ final class PortfolioStore {
         _ question: String,
         chatHistory: [AIReportChatItem],
         runtimeRunID: UUID
-    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?, modelUsage: AIModelUsageSummary?, didFail: Bool) {
+    ) async -> (text: String, citations: [AIMessageCitation], runSnapshot: AIReportChatItem.FollowUpRunSnapshot?, modelUsage: AIModelUsageSummary?, didFail: Bool, memoryCandidates: [AIMemoryCandidate]) {
         refreshProviderCredentialState()
         let responseAppLanguage: AppLanguage = AIResponseLanguage.detecting(from: question) == .english
             ? .english
@@ -1957,11 +2244,12 @@ final class PortfolioStore {
                 [],
                 nil,
                 AIModelUsageSummary(kind: "follow_up", calls: []),
-                false
+                false,
+                []
             )
         }
         if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []), false)
+            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []), false, [])
         }
 
         do {
@@ -1979,6 +2267,8 @@ final class PortfolioStore {
                 },
                 llmConfiguration: aiConfiguration,
                 searchConfiguration: searchConfiguration,
+                advisorPersona: aiAdvisorPersona,
+                memoryItems: aiMemoryItems,
                 runtimeRunID: runtimeRunID,
                 progress: { [weak self] progress in
                     await MainActor.run {
@@ -1994,7 +2284,7 @@ final class PortfolioStore {
                 }
             )
             recordAIModelUsage(result.modelUsage)
-            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result), nil, false)
+            return (result.answer, result.citations, AIReportChatItem.FollowUpRunSnapshot(result: result), nil, false, result.memoryCandidates)
         } catch {
             if let failure = error as? AIModelRunFailure { recordAIModelUsage(failure.usage) }
             let stage: String
@@ -2018,7 +2308,8 @@ final class PortfolioStore {
                 (error as? AIModelRunFailure)?.usage
                     ?? (error as? AIAnalysisPipelineError)?.modelUsage
                     ?? AIModelUsageSummary(kind: "follow_up", calls: []),
-                true
+                true,
+                []
             )
         }
     }
@@ -2125,7 +2416,9 @@ final class PortfolioStore {
         }
         let now = Date()
         let context = await makeAIFollowUpPortfolioContext(asOf: now)
-        let performance = request.tool == .performance ? await loadAIPositionPerformance(asOf: now) : [:]
+        let performance = (request.tool == .performance || request.tool == .holdingDetail)
+            ? await loadAIPositionPerformance(asOf: now)
+            : [:]
         guard activeFollowUpRequestID == runtimeRunID, !Task.isCancelled else {
             return AIPortfolioDataToolExecutor.error("request_cancelled")
         }
@@ -2133,7 +2426,10 @@ final class PortfolioStore {
             positions: positions, portfolioContext: context, performance: performance,
             riskContext: makeAIStoreContext(positionPerformance: performance), report: aiAnalysisReport,
             history: snapshotHistory, dailyProfit: dailyProfitHistory, closures: positionClosures, trades: positionTrades,
-            openings: positionOpeningBalances, reconciliations: positionReconciliations, asOf: now
+            openings: positionOpeningBalances, reconciliations: positionReconciliations,
+            investmentDistribution: aiInvestmentDistribution,
+            memoryItems: aiMemoryItems,
+            asOf: now
         ))
     }
 
@@ -2175,7 +2471,10 @@ final class PortfolioStore {
         positionLimit: Double,
         cryptoLimit: Double,
         foreignCurrencyLimit: Double,
-        liquidityMinimum: Double
+        liquidityMinimum: Double,
+        investmentHorizon: String? = nil,
+        investmentExperience: String? = nil,
+        drawdownTolerance: String? = nil
     ) {
         self.riskLevel = riskLevel
         riskProfileConfigured = true
@@ -2183,6 +2482,9 @@ final class PortfolioStore {
         self.cryptoLimit = cryptoLimit
         self.foreignCurrencyLimit = foreignCurrencyLimit
         self.liquidityMinimum = liquidityMinimum
+        if let investmentHorizon { self.riskInvestmentHorizon = investmentHorizon }
+        if let investmentExperience { self.riskInvestmentExperience = investmentExperience }
+        if let drawdownTolerance { self.riskDrawdownTolerance = drawdownTolerance }
         saveRiskThresholdVersion()
     }
 
@@ -2689,9 +2991,15 @@ final class PortfolioStore {
             cryptoLimit: cryptoLimit,
             foreignCurrencyLimit: foreignCurrencyLimit,
             liquidityMinimum: liquidityMinimum,
+            investmentHorizon: riskInvestmentHorizon.isEmpty ? nil : riskInvestmentHorizon,
+            investmentExperience: riskInvestmentExperience.isEmpty ? nil : riskInvestmentExperience,
+            drawdownTolerance: riskDrawdownTolerance.isEmpty ? nil : riskDrawdownTolerance,
             riskConstraintEvaluation: riskConstraintEvaluation,
             positionPerformance: positionPerformance,
-            hasReconciliationHistory: !positionReconciliations.isEmpty
+            hasReconciliationHistory: !positionReconciliations.isEmpty,
+            advisorPersona: aiAdvisorPersona,
+            memoryItems: aiMemoryItems,
+            investmentDistribution: aiInvestmentDistribution
         )
     }
 
@@ -2751,14 +3059,51 @@ final class PortfolioStore {
             )
         }
 
+        // Ensure an active conversation thread exists and auto-title it from the first user prompt.
+        var targetThreadID = item.threadID ?? activeAIChatThreadID
+        if targetThreadID == nil {
+            let title: String
+            if item.kind == .user, let text = item.text {
+                title = AIChatThreadTitlePolicy.autoTitle(from: text, language: appLanguage)
+            } else {
+                title = AIChatThreadTitlePolicy.defaultTitle(language: appLanguage)
+            }
+            let thread = AIChatThread(title: title, createdAt: item.createdAt, updatedAt: item.createdAt, messageCount: 0)
+            aiChatThreads.insert(thread, at: 0)
+            activeAIChatThreadID = thread.id
+            targetThreadID = thread.id
+            try? positionRepository?.upsertAIChatThread(thread)
+        }
+
+        var stampedItem = item
+        stampedItem.threadID = targetThreadID
+
         var updatedItems = aiAnalysisChatItems
-        if let index = updatedItems.firstIndex(where: { $0.id == item.id }) {
-            updatedItems[index] = item
+        if let index = updatedItems.firstIndex(where: { $0.id == stampedItem.id }) {
+            updatedItems[index] = stampedItem
         } else {
-            updatedItems.append(item)
+            updatedItems.append(stampedItem)
             updatedItems.sort { $0.createdAt < $1.createdAt }
         }
         aiAnalysisChatItems = updatedItems
+
+        if let threadID = targetThreadID,
+           let threadIdx = aiChatThreads.firstIndex(where: { $0.id == threadID })
+        {
+            var thread = aiChatThreads[threadIdx]
+            let defaultTitles = [
+                AIChatThreadTitlePolicy.defaultTitle(language: .chinese),
+                AIChatThreadTitlePolicy.defaultTitle(language: .english),
+            ]
+            if stampedItem.kind == .user, let text = stampedItem.text, defaultTitles.contains(thread.title) {
+                thread.title = AIChatThreadTitlePolicy.autoTitle(from: text, language: appLanguage)
+            }
+            thread.updatedAt = max(thread.updatedAt, stampedItem.createdAt)
+            thread.messageCount = updatedItems.count
+            aiChatThreads.remove(at: threadIdx)
+            aiChatThreads.insert(thread, at: 0)
+            try? positionRepository?.upsertAIChatThread(thread)
+        }
 
         if let runtimeRunID {
             AIAgentRuntimeDiagnostics.event(
@@ -2771,7 +3116,7 @@ final class PortfolioStore {
             if let runtimeRunID {
                 AIAgentRuntimeDiagnostics.event("chat_persistence_started", runID: runtimeRunID)
             }
-            try positionRepository?.upsertAIAnalysisChatItem(item)
+            try positionRepository?.upsertAIAnalysisChatItem(stampedItem, threadID: targetThreadID)
             if let runtimeRunID {
                 AIAgentRuntimeDiagnostics.event("chat_persistence_finished", runID: runtimeRunID)
             }
@@ -3620,6 +3965,15 @@ final class PortfolioStore {
                let limit = Self.doubleSetting(value) {
                 liquidityMinimum = limit
             }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.investmentHorizonKey), !value.isEmpty {
+                riskInvestmentHorizon = value
+            }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.investmentExperienceKey), !value.isEmpty {
+                riskInvestmentExperience = value
+            }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.drawdownToleranceKey), !value.isEmpty {
+                riskDrawdownTolerance = value
+            }
             if let value = try repository.appSetting(for: Self.riskProfileUpdatedAtSettingKey),
                let date = Self.isoDateFormatter.date(from: value) {
                 riskProfileUpdatedAt = date
@@ -3637,6 +3991,15 @@ final class PortfolioStore {
         persistAppSetting(key: Self.riskCryptoLimitSettingKey, value: Self.stableSettingNumber(cryptoLimit))
         persistAppSetting(key: Self.riskForeignCurrencyLimitSettingKey, value: Self.stableSettingNumber(foreignCurrencyLimit))
         persistAppSetting(key: Self.riskLiquidityMinimumSettingKey, value: Self.stableSettingNumber(liquidityMinimum))
+        if !riskInvestmentHorizon.isEmpty {
+            persistAppSetting(key: RiskProfilePersistence.investmentHorizonKey, value: riskInvestmentHorizon)
+        }
+        if !riskInvestmentExperience.isEmpty {
+            persistAppSetting(key: RiskProfilePersistence.investmentExperienceKey, value: riskInvestmentExperience)
+        }
+        if !riskDrawdownTolerance.isEmpty {
+            persistAppSetting(key: RiskProfilePersistence.drawdownToleranceKey, value: riskDrawdownTolerance)
+        }
         persistAppSetting(key: Self.riskProfileUpdatedAtSettingKey, value: Self.isoDateFormatter.string(from: riskProfileUpdatedAt))
     }
 

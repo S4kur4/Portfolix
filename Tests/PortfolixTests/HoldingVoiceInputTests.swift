@@ -59,6 +59,12 @@ struct HoldingVoiceInputTests {
         snapshot.levels = Array(snapshot.levels.dropLast(visibleCount))
             + Array(repeating: 0, count: visibleCount)
         #expect(!snapshot.hasVisibleSignal(for: 120))
+        #expect(snapshot.liveEnergy == 0)
+
+        var active = HoldingVoiceWaveformSnapshot.empty()
+        active.levels[active.levels.count - 1] = 0.8
+        #expect(active.liveEnergy > 0.5)
+        #expect(active.liveEnergy <= 1)
     }
 
     @Test(arguments: [

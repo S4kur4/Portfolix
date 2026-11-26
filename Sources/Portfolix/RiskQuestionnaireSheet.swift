@@ -146,7 +146,10 @@ struct RiskQuestionnaireSheet: View {
             positionLimit: thresholdValue(selection: singlePosition, customValue: customSinglePosition, fallback: 30),
             cryptoLimit: thresholdValue(selection: crypto, customValue: customCrypto, fallback: 15),
             foreignCurrencyLimit: thresholdValue(selection: foreignCurrency, customValue: customForeignCurrency, fallback: 50),
-            liquidityMinimum: thresholdValue(selection: liquidAssets, customValue: customLiquidAssets, fallback: 10)
+            liquidityMinimum: thresholdValue(selection: liquidAssets, customValue: customLiquidAssets, fallback: 10),
+            investmentHorizon: investmentHorizon,
+            investmentExperience: investmentExperience,
+            drawdownTolerance: drawdown
         )
     }
 
@@ -189,6 +192,15 @@ struct RiskQuestionnaireSheet: View {
             volatilityResponse = "观察并复核"
         }
 
+        if !store.riskInvestmentHorizon.isEmpty {
+            investmentHorizon = store.riskInvestmentHorizon
+        }
+        if !store.riskInvestmentExperience.isEmpty {
+            investmentExperience = store.riskInvestmentExperience
+        }
+        if !store.riskDrawdownTolerance.isEmpty {
+            drawdown = store.riskDrawdownTolerance
+        }
         (singlePosition, customSinglePosition) = thresholdSelection(for: store.positionLimit, options: singleOptions)
         (crypto, customCrypto) = thresholdSelection(for: store.cryptoLimit, options: cryptoOptions)
         (foreignCurrency, customForeignCurrency) = thresholdSelection(for: store.foreignCurrencyLimit, options: foreignOptions)

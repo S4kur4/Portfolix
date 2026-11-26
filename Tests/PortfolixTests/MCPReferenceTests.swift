@@ -30,6 +30,15 @@ struct MCPReferenceTests {
         #expect(server["args"] == nil)
         #expect(!buddy.contains("\n\n"))
         #expect(server["env"] == nil)
+        #expect(MCPAccess.Client.antigravity.title == "Antigravity")
+        #expect(MCPAccess.Client.antigravity.configurationFormat == "JSON")
+        #expect(MCPAccess.Client.antigravity.documentationURL.absoluteString == "https://antigravity.google/docs/mcp")
+        #expect(MCPAccess.connectionCommand(for: .antigravity, executableURL: longExecutable) == nil)
+        let antigravity = try MCPAccess.configuration(for: .antigravity, executableURL: longExecutable)
+        let antigravityJSON = try #require(try JSONSerialization.jsonObject(with: Data(antigravity.utf8)) as? [String: Any])
+        let antigravityServer = try #require((antigravityJSON["mcpServers"] as? [String: [String: Any]])?["portfolix"])
+        #expect(antigravityServer["command"] as? String == longExecutable.path)
+        #expect(antigravityServer["type"] == nil)
         for client in MCPAccess.Client.allCases {
             #expect(client.documentationURL.scheme == "https")
         }

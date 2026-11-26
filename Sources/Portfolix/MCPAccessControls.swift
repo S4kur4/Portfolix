@@ -135,6 +135,7 @@ struct MCPConnectionSheet: View {
         case .codex: "~/.codex/config.toml"
         case .claudeCode: text("Claude Code 用户级 MCP 设置", "Claude Code user-scoped MCP settings")
         case .claudeDesktop: "~/Library/Application Support/Claude/claude_desktop_config.json"
+        case .antigravity: "~/.gemini/config/mcp_config.json"
         case .deepSeekHarness: text("所用配置层的 cordis.patch.yml", "cordis.patch.yml in your active configuration layer")
         case .workBuddy: text("WorkBuddy 自定义 MCP 的 mcp.json", "mcp.json in WorkBuddy custom MCP settings")
         }

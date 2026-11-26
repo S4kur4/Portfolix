@@ -4,13 +4,14 @@ public enum MCPAccess {
     public static let settingKey = "mcp_read_access_enabled"
 
     public enum Client: String, CaseIterable, Sendable {
-        case codex, claudeCode, claudeDesktop, deepSeekHarness, workBuddy
+        case codex, claudeCode, claudeDesktop, antigravity, deepSeekHarness, workBuddy
 
         public var title: String {
             switch self {
             case .codex: "ChatGPT / Codex"
             case .claudeCode: "Claude Code"
             case .claudeDesktop: "Claude Desktop"
+            case .antigravity: "Antigravity"
             case .deepSeekHarness: "DeepSeek Harness"
             case .workBuddy: "WorkBuddy"
             }
@@ -29,6 +30,7 @@ public enum MCPAccess {
             case .codex: "https://learn.chatgpt.com/docs/extend/mcp"
             case .claudeCode: "https://code.claude.com/docs/en/mcp"
             case .claudeDesktop: "https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop"
+            case .antigravity: "https://antigravity.google/docs/mcp"
             case .deepSeekHarness: "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md"
             case .workBuddy: "https://open.workbuddy.cn/docs/connector"
             }
@@ -46,7 +48,7 @@ public enum MCPAccess {
         switch client {
         case .codex: return "codex mcp add portfolix -- \(command)"
         case .claudeCode: return "claude mcp add --transport stdio --scope user portfolix -- \(command)"
-        case .claudeDesktop, .deepSeekHarness, .workBuddy: return nil
+        case .claudeDesktop, .antigravity, .deepSeekHarness, .workBuddy: return nil
         }
     }
 
