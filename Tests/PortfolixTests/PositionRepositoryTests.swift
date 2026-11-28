@@ -1685,26 +1685,29 @@ struct PositionRepositoryTests {
         )
 
         store.positionLimit = 70
+        store.riskAssetLimit = 65
         store.cryptoLimit = 40
         store.foreignCurrencyLimit = 40
         store.liquidityMinimum = 5
         let passing = store.riskConstraintEvaluation
         #expect(passing.largestPositionName == "大型基金")
         #expect(Int(passing.largestPositionPercent.rounded()) == 60)
+        #expect(Int(passing.highVolatilityAllocationPercent.rounded()) == 30)
         #expect(Int(passing.cryptoAllocationPercent.rounded()) == 30)
         #expect(Int(passing.cashAllocationPercent.rounded()) == 10)
-        #expect(passing.passedCount == 4)
+        #expect(passing.passedCount == 5)
         #expect(passing.breachCount == 0)
         #expect(passing.matchScore == 100)
         #expect(!passing.shouldSuggestReview)
 
         store.positionLimit = 30
+        store.riskAssetLimit = 20
         store.cryptoLimit = 15
         store.liquidityMinimum = 20
         let breached = store.riskConstraintEvaluation
         #expect(breached.passedCount == 1)
-        #expect(breached.breachCount == 3)
-        #expect(breached.matchScore == 25)
+        #expect(breached.breachCount == 4)
+        #expect(breached.matchScore == 20)
         #expect(breached.shouldSuggestReview)
     }
 

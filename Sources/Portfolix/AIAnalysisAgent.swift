@@ -722,9 +722,16 @@ struct AIAnalysisAgent: Sendable {
         for round in 0...AIFunctionCallPolicy.maximumRounds {
             try Task.checkCancellation()
             let canCallTools = round < AIFunctionCallPolicy.maximumRounds && totalToolCount < AIFunctionCallPolicy.maximumCalls
+            var roundItems = items
+            if !canCallTools && round > 0 {
+                roundItems.append(.object([
+                    "role": .string("user"),
+                    "content": .string("工具调用已完成，本轮请勿再调用任何工具或输出任何 DSML/XML 工具调用标签。请直接基于已获取的本地持仓、风险偏好与联网资料，以清晰自然的语言完整回答用户的原问题。"),
+                ]))
+            }
             let requestConfiguration = configuration.forStage("follow_up_answer").withFunctions(
                 canCallTools ? availableDefinitions : [],
-                inputItems: round == 0 && searchInput == nil ? nil : items,
+                inputItems: round == 0 && searchInput == nil ? nil : roundItems,
                 choice: canCallTools ? nil : .string("none")
             )
             let completion = try await llm.completeJSONResult(
@@ -732,7 +739,26 @@ struct AIAnalysisAgent: Sendable {
                 configuration: requestConfiguration, apiKey: apiKey, webSearchEnabled: false,
                 reasoningEffort: .low, webSearchProgress: modelProgress
             )
-            guard !completion.functionCalls.isEmpty else {
+            if completion.functionCalls.isEmpty {
+                if AIFollowUpResponseParser.containsLeakedToolCallMarkup(completion.content) {
+                    // Recover immediately while full tool outputs are still in context.
+                    var recoveryItems = items
+                    recoveryItems.append(.object([
+                        "role": .string("user"),
+                        "content": .string("上一条输出包含了未执行的内部工具调用标签（如 DSML/invoke），无法直接展示给用户。禁止再输出任何工具调用标签或函数参数，请直接依据上面已经拿到的持仓、风险护栏和搜索结果，用自然语言给出完整的投资分析与建议。"),
+                    ]))
+                    let recoveryConfig = configuration.forStage("follow_up_answer").withFunctions(
+                        [],
+                        inputItems: recoveryItems,
+                        choice: .string("none")
+                    )
+                    let recovered = try await llm.completeJSONResult(
+                        systemPrompt: followUpSystemPrompt, userPrompt: prompt,
+                        configuration: recoveryConfig, apiKey: apiKey, webSearchEnabled: false,
+                        reasoningEffort: .low, webSearchProgress: modelProgress
+                    )
+                    return (recovered, localCount, round + 1, extraSearchResults)
+                }
                 return (completion, localCount, round, extraSearchResults)
             }
             guard canCallTools, completion.functionCalls.count <= AIFunctionCallPolicy.maximumCalls - totalToolCount else {
@@ -1736,12 +1762,14 @@ struct AIAnalysisAgent: Sendable {
                 status: context.riskProfileConfigured ? "configured" : "unconfigured",
                 riskProfileVersion: context.riskProfileVersion,
                 riskLevel: context.riskProfileConfigured ? context.riskLevel : nil,
-                baseCurrency: DisplayCurrency.cny.rawValue,
+                baseCurrency: evaluation.baseCurrency.rawValue,
+                investmentGoal: context.investmentGoal,
                 investmentHorizon: context.investmentHorizon,
                 investmentExperience: context.investmentExperience,
                 drawdownTolerance: context.drawdownTolerance,
                 thresholds: AIRiskThresholds(
                     maxSinglePositionPct: context.positionLimit,
+                    maxHighVolatilityPct: context.riskAssetLimit,
                     maxCryptoAllocationPct: context.cryptoLimit,
                     maxNonBaseCurrencyPct: context.foreignCurrencyLimit,
                     minLiquidAssetsPct: context.liquidityMinimum
@@ -1788,7 +1816,9 @@ struct AIAnalysisAgent: Sendable {
         outputLanguage: AIResponseLanguage = .simplifiedChinese
     ) -> AIAnalysisReport {
         let evaluation = context.riskConstraintEvaluation
-        let topPosition = positions.max { $0.marketValueCNY < $1.marketValueCNY }
+        let topPosition = positions
+            .filter { $0.category != .cash }
+            .max { $0.marketValueCNY < $1.marketValueCNY }
         let riskItems = riskFlags(from: evaluation, positions: []).map {
             AIReportRiskItem(
                 severity: $0.severity,
@@ -1857,8 +1887,12 @@ struct AIAnalysisAgent: Sendable {
 
     private static func fallbackRiskTitle(code: String, language: AIResponseLanguage) -> String {
         switch code {
+        case "PROFILE_DRAWDOWN_LIMIT":
+            localizedAIText("当前组合回撤超过容忍上限", "Current portfolio drawdown exceeds the configured tolerance", language: language)
         case "PROFILE_SINGLE_POSITION_LIMIT":
-            localizedAIText("单一持仓比例超过设定上限", "A single holding exceeds the configured limit", language: language)
+            localizedAIText("单一非现金持仓比例超过设定上限", "A single non-cash holding exceeds the configured limit", language: language)
+        case "PROFILE_HIGH_VOLATILITY_LIMIT":
+            localizedAIText("股票与加密资产总敞口超过设定上限", "Combined stocks and crypto exposure exceeds the configured limit", language: language)
         case "PROFILE_CRYPTO_LIMIT":
             localizedAIText("加密资产比例超过设定上限", "Crypto allocation exceeds the configured limit", language: language)
         case "PROFILE_NON_BASE_CURRENCY_LIMIT":
@@ -2522,10 +2556,19 @@ struct AIAnalysisAgent: Sendable {
 
     private static func riskFlags(from evaluation: RiskConstraintEvaluation, positions: [AIPositionContext]) -> [AIRiskFlag] {
         guard evaluation.hasPositions else { return [] }
-        let largestRef = positions.first?.positionRef
+        let largestRef = positions.first { $0.assetType != AssetCategory.cash.aiCode }?.positionRef
         var flags: [AIRiskFlag] = []
+        if let currentDrawdown = evaluation.currentDrawdownPercent,
+           let maxDrawdown = evaluation.maxDrawdownLimit,
+           currentDrawdown > maxDrawdown {
+            flags.append(AIRiskFlag(code: "PROFILE_DRAWDOWN_LIMIT", severity: "warning", relatedRefs: [], metricValue: currentDrawdown, threshold: maxDrawdown, unit: "percent"))
+        }
         if evaluation.largestPositionPercent > evaluation.positionLimit {
             flags.append(AIRiskFlag(code: "PROFILE_SINGLE_POSITION_LIMIT", severity: "warning", relatedRefs: largestRef.map { [$0] } ?? [], metricValue: evaluation.largestPositionPercent, threshold: evaluation.positionLimit, unit: "percent"))
+        }
+        if let riskAssetLimit = evaluation.riskAssetLimit,
+           evaluation.highVolatilityAllocationPercent > riskAssetLimit {
+            flags.append(AIRiskFlag(code: "PROFILE_HIGH_VOLATILITY_LIMIT", severity: "warning", relatedRefs: [], metricValue: evaluation.highVolatilityAllocationPercent, threshold: riskAssetLimit, unit: "percent"))
         }
         if evaluation.cryptoAllocationPercent > evaluation.cryptoLimit {
             flags.append(AIRiskFlag(code: "PROFILE_CRYPTO_LIMIT", severity: "warning", relatedRefs: [], metricValue: evaluation.cryptoAllocationPercent, threshold: evaluation.cryptoLimit, unit: "percent"))
@@ -2544,18 +2587,47 @@ struct AIAnalysisAgent: Sendable {
             return AIRebalanceContext(mode: "portfolio_advisory", guidance: "可基于可用证据提出投资组合优化与交易建议；明确区分事实、推导、假设与不确定性", signals: [])
         }
 
-        let largest = positions.first
+        let largest = positions.first { $0.assetType != AssetCategory.cash.aiCode }
         var signals: [AIRebalanceSignal] = []
+        if let currentDrawdown = evaluation.currentDrawdownPercent,
+           let maxDrawdown = evaluation.maxDrawdownLimit,
+           currentDrawdown > maxDrawdown {
+            signals.append(
+                AIRebalanceSignal(
+                    code: "drawdown_above_profile",
+                    severity: "warning",
+                    title: "当前组合回撤超出容忍护栏",
+                    detail: "当前组合回撤为 \(formatPercent(Decimal(currentDrawdown / 100)))，高于用户设置的 \(formatPercent(Decimal(maxDrawdown / 100)))",
+                    relatedRefs: [],
+                    metricValue: currentDrawdown,
+                    threshold: maxDrawdown
+                )
+            )
+        }
         if evaluation.largestPositionPercent > evaluation.positionLimit {
             signals.append(
                 AIRebalanceSignal(
                     code: "single_position_above_profile",
                     severity: "warning",
-                    title: "单一持仓高于风险档案阈值",
-                    detail: "最大持仓占比为 \(formatPercent(Decimal(evaluation.largestPositionPercent / 100)))，高于用户设置的 \(formatPercent(Decimal(evaluation.positionLimit / 100)))",
+                    title: "单一非现金持仓高于风险档案阈值",
+                    detail: "最大非现金持仓占比为 \(formatPercent(Decimal(evaluation.largestPositionPercent / 100)))，高于用户设置的 \(formatPercent(Decimal(evaluation.positionLimit / 100)))",
                     relatedRefs: largest.map { [$0.positionRef] } ?? [],
                     metricValue: evaluation.largestPositionPercent,
                     threshold: evaluation.positionLimit
+                )
+            )
+        }
+        if let riskAssetLimit = evaluation.riskAssetLimit,
+           evaluation.highVolatilityAllocationPercent > riskAssetLimit {
+            signals.append(
+                AIRebalanceSignal(
+                    code: "high_volatility_above_profile",
+                    severity: "warning",
+                    title: "股票与加密资产总敞口高于风险档案阈值",
+                    detail: "股票与加密资产合计占比为 \(formatPercent(Decimal(evaluation.highVolatilityAllocationPercent / 100)))，高于用户设置的 \(formatPercent(Decimal(riskAssetLimit / 100)))",
+                    relatedRefs: [],
+                    metricValue: evaluation.highVolatilityAllocationPercent,
+                    threshold: riskAssetLimit
                 )
             )
         }
@@ -3804,6 +3876,9 @@ enum AIFollowUpGuardrail {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AIFollowUpResponseError.emptyAnswer }
         guard trimmed.count <= maximumAnswerCharacters else { throw AIFollowUpResponseError.answerTooLong }
+        guard !AIFollowUpResponseParser.containsLeakedToolCallMarkup(trimmed) else {
+            throw AIFollowUpResponseError.invalidStructure
+        }
         try validateAnswerCompleteness(trimmed)
         try AIInformationSecurityGuardrail.validateGeneratedText(trimmed)
         return trimmed
@@ -3997,6 +4072,8 @@ struct AIAnalysisStoreContext {
     let cryptoLimit: Double
     let foreignCurrencyLimit: Double
     let liquidityMinimum: Double
+    let riskAssetLimit: Double?
+    let investmentGoal: String?
     let investmentHorizon: String?
     let investmentExperience: String?
     let drawdownTolerance: String?
@@ -4019,6 +4096,8 @@ struct AIAnalysisStoreContext {
         cryptoLimit: Double,
         foreignCurrencyLimit: Double,
         liquidityMinimum: Double,
+        riskAssetLimit: Double? = nil,
+        investmentGoal: String? = nil,
         investmentHorizon: String? = nil,
         investmentExperience: String? = nil,
         drawdownTolerance: String? = nil,
@@ -4040,6 +4119,8 @@ struct AIAnalysisStoreContext {
         self.cryptoLimit = cryptoLimit
         self.foreignCurrencyLimit = foreignCurrencyLimit
         self.liquidityMinimum = liquidityMinimum
+        self.riskAssetLimit = riskAssetLimit
+        self.investmentGoal = investmentGoal
         self.investmentHorizon = investmentHorizon
         self.investmentExperience = investmentExperience
         self.drawdownTolerance = drawdownTolerance

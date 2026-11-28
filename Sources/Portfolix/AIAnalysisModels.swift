@@ -1533,6 +1533,7 @@ struct AIRiskProfileContext: Encodable {
     let riskProfileVersion: Int
     let riskLevel: String?
     let baseCurrency: String
+    let investmentGoal: String?
     let investmentHorizon: String?
     let investmentExperience: String?
     let drawdownTolerance: String?
@@ -1543,6 +1544,7 @@ struct AIRiskProfileContext: Encodable {
         riskProfileVersion: Int,
         riskLevel: String?,
         baseCurrency: String,
+        investmentGoal: String? = nil,
         investmentHorizon: String? = nil,
         investmentExperience: String? = nil,
         drawdownTolerance: String? = nil,
@@ -1552,6 +1554,7 @@ struct AIRiskProfileContext: Encodable {
         self.riskProfileVersion = riskProfileVersion
         self.riskLevel = riskLevel
         self.baseCurrency = baseCurrency
+        self.investmentGoal = investmentGoal
         self.investmentHorizon = investmentHorizon
         self.investmentExperience = investmentExperience
         self.drawdownTolerance = drawdownTolerance
@@ -1561,9 +1564,24 @@ struct AIRiskProfileContext: Encodable {
 
 struct AIRiskThresholds: Encodable {
     let maxSinglePositionPct: Double?
+    let maxHighVolatilityPct: Double?
     let maxCryptoAllocationPct: Double?
     let maxNonBaseCurrencyPct: Double?
     let minLiquidAssetsPct: Double?
+
+    init(
+        maxSinglePositionPct: Double?,
+        maxHighVolatilityPct: Double? = nil,
+        maxCryptoAllocationPct: Double?,
+        maxNonBaseCurrencyPct: Double?,
+        minLiquidAssetsPct: Double?
+    ) {
+        self.maxSinglePositionPct = maxSinglePositionPct
+        self.maxHighVolatilityPct = maxHighVolatilityPct
+        self.maxCryptoAllocationPct = maxCryptoAllocationPct
+        self.maxNonBaseCurrencyPct = maxNonBaseCurrencyPct
+        self.minLiquidAssetsPct = minLiquidAssetsPct
+    }
 }
 
 struct AIScoreContext: Encodable {

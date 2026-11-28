@@ -182,6 +182,15 @@ enum AssetCategory: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    var isHighVolatility: Bool {
+        switch self {
+        case .cnStock, .bStock, .hkStock, .usStock, .crypto:
+            true
+        case .fund, .cash:
+            false
+        }
+    }
+
     func title(language: AppLanguage) -> String {
         if language == .english {
             switch self {
@@ -576,14 +585,89 @@ struct RiskConstraintEvaluation {
     let cryptoLimit: Double
     let foreignCurrencyLimit: Double
     let liquidityMinimum: Double
+    let totalValueCNY: Double
+    let baseCurrency: DisplayCurrency
+    let highVolatilityAllocationPercent: Double
+    let riskAssetLimit: Double?
+    let currentDrawdownPercent: Double?
+    let historicalMaxDrawdownPercent: Double?
+    let maxDrawdownLimit: Double?
+
+    init(
+        largestPositionName: String?,
+        largestPositionPercent: Double,
+        cryptoAllocationPercent: Double,
+        nonCNYAllocationPercent: Double,
+        cashAllocationPercent: Double,
+        positionLimit: Double,
+        cryptoLimit: Double,
+        foreignCurrencyLimit: Double,
+        liquidityMinimum: Double,
+        totalValueCNY: Double = 0,
+        baseCurrency: DisplayCurrency = .cny,
+        highVolatilityAllocationPercent: Double = 0,
+        riskAssetLimit: Double? = nil,
+        currentDrawdownPercent: Double? = nil,
+        historicalMaxDrawdownPercent: Double? = nil,
+        maxDrawdownLimit: Double? = nil
+    ) {
+        self.largestPositionName = largestPositionName
+        self.largestPositionPercent = largestPositionPercent
+        self.cryptoAllocationPercent = cryptoAllocationPercent
+        self.nonCNYAllocationPercent = nonCNYAllocationPercent
+        self.cashAllocationPercent = cashAllocationPercent
+        self.positionLimit = positionLimit
+        self.cryptoLimit = cryptoLimit
+        self.foreignCurrencyLimit = foreignCurrencyLimit
+        self.liquidityMinimum = liquidityMinimum
+        self.totalValueCNY = totalValueCNY
+        self.baseCurrency = baseCurrency
+        self.highVolatilityAllocationPercent = highVolatilityAllocationPercent
+        self.riskAssetLimit = riskAssetLimit
+        self.currentDrawdownPercent = currentDrawdownPercent
+        self.historicalMaxDrawdownPercent = historicalMaxDrawdownPercent
+        self.maxDrawdownLimit = maxDrawdownLimit
+    }
+
+    var isDrawdownPassing: Bool? {
+        guard let currentDrawdownPercent, let maxDrawdownLimit else { return nil }
+        return currentDrawdownPercent <= maxDrawdownLimit
+    }
+
+    var isPositionLimitPassing: Bool {
+        largestPositionPercent <= positionLimit
+    }
+
+    var isRiskAssetLimitPassing: Bool? {
+        guard let riskAssetLimit else { return nil }
+        return highVolatilityAllocationPercent <= riskAssetLimit
+    }
+
+    var isCryptoLimitPassing: Bool {
+        cryptoAllocationPercent <= cryptoLimit
+    }
+
+    var isForeignCurrencyLimitPassing: Bool {
+        nonCNYAllocationPercent <= foreignCurrencyLimit
+    }
+
+    var isLiquidityMinimumPassing: Bool {
+        cashAllocationPercent >= liquidityMinimum
+    }
 
     var results: [Bool] {
-        [
-            largestPositionPercent <= positionLimit,
-            cryptoAllocationPercent <= cryptoLimit,
-            nonCNYAllocationPercent <= foreignCurrencyLimit,
-            cashAllocationPercent >= liquidityMinimum,
-        ]
+        var checks: [Bool] = []
+        if let drawdownPass = isDrawdownPassing {
+            checks.append(drawdownPass)
+        }
+        checks.append(isPositionLimitPassing)
+        if let riskAssetPass = isRiskAssetLimitPassing {
+            checks.append(riskAssetPass)
+        }
+        checks.append(isCryptoLimitPassing)
+        checks.append(isForeignCurrencyLimitPassing)
+        checks.append(isLiquidityMinimumPassing)
+        return checks
     }
 
     var constraintCount: Int {
@@ -598,17 +682,104 @@ struct RiskConstraintEvaluation {
         constraintCount - passedCount
     }
 
+    var severities: [RiskGuardrailSeverity] {
+        guard hasPositions else { return [] }
+        var items: [RiskGuardrailSeverity] = []
+        if let maxDrawdownLimit {
+            let sev = RiskGuardrailSeverity.evaluate(
+                actual: currentDrawdownPercent,
+                limit: maxDrawdownLimit,
+                isMinimum: false
+            )
+            if sev != .noData { items.append(sev) }
+        }
+        items.append(RiskGuardrailSeverity.evaluate(actual: largestPositionPercent, limit: positionLimit, isMinimum: false))
+        if let riskAssetLimit {
+            items.append(RiskGuardrailSeverity.evaluate(actual: highVolatilityAllocationPercent, limit: riskAssetLimit, isMinimum: false))
+        }
+        items.append(RiskGuardrailSeverity.evaluate(actual: cryptoAllocationPercent, limit: cryptoLimit, isMinimum: false))
+        items.append(RiskGuardrailSeverity.evaluate(actual: nonCNYAllocationPercent, limit: foreignCurrencyLimit, isMinimum: false))
+        items.append(RiskGuardrailSeverity.evaluate(actual: cashAllocationPercent, limit: liquidityMinimum, isMinimum: true))
+        return items
+    }
+
+    var approachingCount: Int {
+        severities.count { $0 == .approaching }
+    }
+
+    var normalCount: Int {
+        severities.count { $0 == .normal }
+    }
+
     var matchScore: Double? {
-        guard hasPositions else { return nil }
+        guard hasPositions, constraintCount > 0 else { return nil }
         return Double(passedCount) / Double(constraintCount) * 100
     }
 
     var hasPositions: Bool {
-        largestPositionName != nil
+        totalValueCNY > 0 || largestPositionName != nil
     }
 
     var shouldSuggestReview: Bool {
-        breachCount >= 2
+        breachCount >= 1
+    }
+
+    func deviationAmountCNY(forPercentDelta delta: Double) -> Decimal {
+        guard totalValueCNY > 0, delta.isFinite else { return 0 }
+        return Decimal(totalValueCNY * abs(delta) / 100)
+    }
+
+    func breachedLabels(language: AppLanguage) -> [String] {
+        var labels: [String] = []
+        if let currentDrawdownPercent, let maxDrawdownLimit, currentDrawdownPercent > maxDrawdownLimit {
+            let excess = currentDrawdownPercent - maxDrawdownLimit
+            labels.append(localizedText(
+                "回撤超限 +\(String(format: "%.1f", excess))%",
+                "Drawdown +\(String(format: "%.1f", excess))%",
+                language: language
+            ))
+        }
+        if largestPositionPercent > positionLimit {
+            let excess = largestPositionPercent - positionLimit
+            labels.append(localizedText(
+                "单仓超限 +\(String(format: "%.1f", excess))%",
+                "Single asset +\(String(format: "%.1f", excess))%",
+                language: language
+            ))
+        }
+        if let riskAssetLimit, highVolatilityAllocationPercent > riskAssetLimit {
+            let excess = highVolatilityAllocationPercent - riskAssetLimit
+            labels.append(localizedText(
+                "股币敞口超限 +\(String(format: "%.1f", excess))%",
+                "Stocks & crypto +\(String(format: "%.1f", excess))%",
+                language: language
+            ))
+        }
+        if cryptoAllocationPercent > cryptoLimit {
+            let excess = cryptoAllocationPercent - cryptoLimit
+            labels.append(localizedText(
+                "加密超限 +\(String(format: "%.1f", excess))%",
+                "Crypto +\(String(format: "%.1f", excess))%",
+                language: language
+            ))
+        }
+        if nonCNYAllocationPercent > foreignCurrencyLimit {
+            let excess = nonCNYAllocationPercent - foreignCurrencyLimit
+            labels.append(localizedText(
+                "外币超限 +\(String(format: "%.1f", excess))%",
+                "Non-\(baseCurrency.rawValue) +\(String(format: "%.1f", excess))%",
+                language: language
+            ))
+        }
+        if cashAllocationPercent < liquidityMinimum {
+            let deficit = liquidityMinimum - cashAllocationPercent
+            labels.append(localizedText(
+                "现金不足 -\(String(format: "%.1f", deficit))%",
+                "Cash -\(String(format: "%.1f", deficit))%",
+                language: language
+            ))
+        }
+        return labels
     }
 
     static func evaluate(
@@ -616,10 +787,17 @@ struct RiskConstraintEvaluation {
         positionLimit: Double,
         cryptoLimit: Double,
         foreignCurrencyLimit: Double,
-        liquidityMinimum: Double
+        liquidityMinimum: Double,
+        baseCurrency: DisplayCurrency = .cny,
+        riskAssetLimit: Double? = nil,
+        currentDrawdownPercent: Double? = nil,
+        historicalMaxDrawdownPercent: Double? = nil,
+        maxDrawdownLimit: Double? = nil
     ) -> RiskConstraintEvaluation {
         let totalValue = positions.reduce(0) { $0 + $1.marketValueCNY.doubleValue }
-        let largestPosition = positions.max { $0.marketValueCNY < $1.marketValueCNY }
+        let largestNonCash = positions
+            .filter { $0.category != .cash }
+            .max { $0.marketValueCNY < $1.marketValueCNY }
 
         func allocationPercent(where predicate: (Position) -> Bool) -> Double {
             guard totalValue > 0 else { return 0 }
@@ -628,15 +806,22 @@ struct RiskConstraintEvaluation {
         }
 
         return RiskConstraintEvaluation(
-            largestPositionName: largestPosition?.name,
-            largestPositionPercent: totalValue > 0 ? (largestPosition?.marketValueCNY.doubleValue ?? 0) / totalValue * 100 : 0,
+            largestPositionName: largestNonCash?.name,
+            largestPositionPercent: totalValue > 0 ? (largestNonCash?.marketValueCNY.doubleValue ?? 0) / totalValue * 100 : 0,
             cryptoAllocationPercent: allocationPercent { $0.category == .crypto },
-            nonCNYAllocationPercent: allocationPercent { $0.quoteCurrency != .cny },
+            nonCNYAllocationPercent: allocationPercent { $0.quoteCurrency != baseCurrency },
             cashAllocationPercent: allocationPercent { $0.category == .cash },
             positionLimit: positionLimit,
             cryptoLimit: cryptoLimit,
             foreignCurrencyLimit: foreignCurrencyLimit,
-            liquidityMinimum: liquidityMinimum
+            liquidityMinimum: liquidityMinimum,
+            totalValueCNY: totalValue,
+            baseCurrency: baseCurrency,
+            highVolatilityAllocationPercent: allocationPercent { $0.category.isHighVolatility },
+            riskAssetLimit: riskAssetLimit,
+            currentDrawdownPercent: currentDrawdownPercent,
+            historicalMaxDrawdownPercent: historicalMaxDrawdownPercent,
+            maxDrawdownLimit: maxDrawdownLimit
         )
     }
 }
@@ -722,11 +907,16 @@ final class PortfolioStore {
     }
     var cryptoLimit = 15.0
     var positionLimit = 30.0
+    var riskAssetLimit = 65.0
     var foreignCurrencyLimit = 50.0
     var liquidityMinimum = 10.0
+    var riskInvestmentGoal = ""
     var riskInvestmentHorizon = ""
     var riskInvestmentExperience = ""
     var riskDrawdownTolerance = ""
+    var riskReviewCadenceMonths = 6
+    var unsavedRiskProfileDraft: RiskProfileDraft? = nil
+    var pendingSidebarSelection: SidebarSection? = nil
     var persistenceErrorMessage: String?
     var backgroundUpdatesEnabled: Bool {
         didSet {
@@ -1180,13 +1370,71 @@ final class PortfolioStore {
         }
     }
 
+    var currentPortfolioDrawdownMetrics: (currentPercent: Double?, historicalMaxPercent: Double?) {
+        guard !snapshotHistory.isEmpty else { return (nil, nil) }
+        let data = PerformanceRiskChartData(
+            snapshots: snapshotHistory,
+            dailyProfit: [],
+            range: .all,
+            calendar: .current,
+            now: .now
+        )
+        guard !data.points.isEmpty else { return (nil, nil) }
+        let current = abs(min(0, data.summary.currentDrawdownRate))
+        let maxRate = data.summary.maxDrawdownRate.map { abs(min(0, $0)) }
+        return (current.isFinite ? current : nil, maxRate.flatMap { $0.isFinite ? $0 : nil })
+    }
+
+    var currentRiskProfileDraft: RiskProfileDraft {
+        let tier = RiskProfileTier(rawOrDefault: riskLevel)
+        let fallbackDrawdown = tier.recommendedGuardrails.maxDrawdownLimit
+        return RiskProfileDraft(
+            tier: tier,
+            investmentGoal: RiskInvestmentGoal(rawOrDefault: riskInvestmentGoal),
+            investmentHorizon: RiskInvestmentHorizon(rawOrDefault: riskInvestmentHorizon),
+            investmentExperience: RiskInvestmentExperience(rawOrDefault: riskInvestmentExperience),
+            reviewCadence: RiskReviewCadence(monthsOrDefault: riskReviewCadenceMonths),
+            maxDrawdownLimit: RiskProfileDraft.parseDrawdownTolerance(riskDrawdownTolerance, fallback: fallbackDrawdown),
+            positionLimit: positionLimit,
+            riskAssetLimit: riskAssetLimit,
+            cryptoLimit: cryptoLimit,
+            foreignCurrencyLimit: foreignCurrencyLimit,
+            liquidityMinimum: liquidityMinimum
+        )
+    }
+
+    func evaluateRiskConstraints(for draft: RiskProfileDraft) -> RiskConstraintEvaluation {
+        let drawdown = currentPortfolioDrawdownMetrics
+        return RiskConstraintEvaluation.evaluate(
+            positions: positions,
+            positionLimit: draft.positionLimit,
+            cryptoLimit: draft.cryptoLimit,
+            foreignCurrencyLimit: draft.foreignCurrencyLimit,
+            liquidityMinimum: draft.liquidityMinimum,
+            baseCurrency: .cny,
+            riskAssetLimit: draft.riskAssetLimit,
+            currentDrawdownPercent: drawdown.currentPercent,
+            historicalMaxDrawdownPercent: drawdown.historicalMaxPercent,
+            maxDrawdownLimit: draft.maxDrawdownLimit
+        )
+    }
+
     var riskConstraintEvaluation: RiskConstraintEvaluation {
-        RiskConstraintEvaluation.evaluate(
+        let drawdown = currentPortfolioDrawdownMetrics
+        let maxDrawdown = riskDrawdownTolerance.isEmpty
+            ? nil
+            : RiskProfileDraft.parseDrawdownTolerance(riskDrawdownTolerance)
+        return RiskConstraintEvaluation.evaluate(
             positions: positions,
             positionLimit: positionLimit,
             cryptoLimit: cryptoLimit,
             foreignCurrencyLimit: foreignCurrencyLimit,
-            liquidityMinimum: liquidityMinimum
+            liquidityMinimum: liquidityMinimum,
+            baseCurrency: .cny,
+            riskAssetLimit: riskAssetLimit,
+            currentDrawdownPercent: drawdown.currentPercent,
+            historicalMaxDrawdownPercent: drawdown.historicalMaxPercent,
+            maxDrawdownLimit: maxDrawdown
         )
     }
 
@@ -1206,7 +1454,13 @@ final class PortfolioStore {
             cryptoLimit: Self.stableSettingNumber(cryptoLimit),
             foreignCurrencyLimit: Self.stableSettingNumber(foreignCurrencyLimit),
             liquidityMinimum: Self.stableSettingNumber(liquidityMinimum),
-            updatedAt: Self.isoDateFormatter.string(from: riskProfileUpdatedAt)
+            updatedAt: Self.isoDateFormatter.string(from: riskProfileUpdatedAt),
+            riskAssetLimit: Self.stableSettingNumber(riskAssetLimit),
+            investmentGoal: riskInvestmentGoal.isEmpty ? nil : riskInvestmentGoal,
+            investmentHorizon: riskInvestmentHorizon.isEmpty ? nil : riskInvestmentHorizon,
+            investmentExperience: riskInvestmentExperience.isEmpty ? nil : riskInvestmentExperience,
+            drawdownTolerance: riskDrawdownTolerance.isEmpty ? nil : riskDrawdownTolerance,
+            reviewCadenceMonths: riskReviewCadenceMonths
         )
         let payload = try positionRepository.exportDataPayload(riskProfile: riskProfile)
         return try PortfolixDataPackageService.write(payload: payload, to: url)
@@ -2460,6 +2714,75 @@ final class PortfolioStore {
         persistRiskProfileSettings()
     }
 
+    func saveRiskProfile(_ draft: RiskProfileDraft, now: Date = .now) {
+        riskLevel = draft.tier.rawValue
+        riskProfileConfigured = true
+        positionLimit = min(max(draft.positionLimit, 0), 100)
+        riskAssetLimit = min(max(draft.riskAssetLimit, 0), 100)
+        cryptoLimit = min(max(draft.cryptoLimit, 0), 100)
+        foreignCurrencyLimit = min(max(draft.foreignCurrencyLimit, 0), 100)
+        liquidityMinimum = min(max(draft.liquidityMinimum, 0), 100)
+        riskInvestmentGoal = draft.investmentGoal.rawValue
+        riskInvestmentHorizon = draft.investmentHorizon.rawValue
+        riskInvestmentExperience = draft.investmentExperience.rawValue
+        riskDrawdownTolerance = draft.drawdownToleranceLabel
+        riskReviewCadenceMonths = draft.reviewCadence.rawValue
+        unsavedRiskProfileDraft = nil
+        saveRiskThresholdVersion(now: now)
+    }
+
+    func requestSidebarNavigation(to target: SidebarSection) {
+        guard selection != target else { return }
+        if selection == .riskProfile, unsavedRiskProfileDraft != nil {
+            pendingSidebarSelection = target
+            return
+        }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selection = target
+        }
+    }
+
+    func saveUnsavedRiskProfileAndContinueNavigation() {
+        if let draft = unsavedRiskProfileDraft {
+            saveRiskProfile(draft)
+        }
+        let target = pendingSidebarSelection
+        pendingSidebarSelection = nil
+        if let target {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                selection = target
+            }
+        }
+    }
+
+    func discardUnsavedRiskProfileAndContinueNavigation() {
+        unsavedRiskProfileDraft = nil
+        let target = pendingSidebarSelection
+        pendingSidebarSelection = nil
+        if let target {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                selection = target
+            }
+        }
+    }
+
+    func cancelPendingSidebarNavigation() {
+        pendingSidebarSelection = nil
+    }
+
+    func openAIReviewForRiskProfile(prompt: String) {
+        selection = .report
+        guard aiConfiguration.isEnabled, !isAnsweringAIAnalysisFollowUp else { return }
+        startNewAIChatThread()
+        submitAIAnalysisFollowUp(prompt)
+    }
+
     func applyRiskQuestionnaire(
         riskLevel: String,
         positionLimit: Double,
@@ -2468,17 +2791,23 @@ final class PortfolioStore {
         liquidityMinimum: Double,
         investmentHorizon: String? = nil,
         investmentExperience: String? = nil,
-        drawdownTolerance: String? = nil
+        drawdownTolerance: String? = nil,
+        riskAssetLimit: Double? = nil,
+        investmentGoal: String? = nil,
+        reviewCadenceMonths: Int? = nil
     ) {
         self.riskLevel = riskLevel
         riskProfileConfigured = true
         self.positionLimit = positionLimit
+        if let riskAssetLimit { self.riskAssetLimit = riskAssetLimit }
         self.cryptoLimit = cryptoLimit
         self.foreignCurrencyLimit = foreignCurrencyLimit
         self.liquidityMinimum = liquidityMinimum
+        if let investmentGoal { self.riskInvestmentGoal = investmentGoal }
         if let investmentHorizon { self.riskInvestmentHorizon = investmentHorizon }
         if let investmentExperience { self.riskInvestmentExperience = investmentExperience }
         if let drawdownTolerance { self.riskDrawdownTolerance = drawdownTolerance }
+        if let reviewCadenceMonths { self.riskReviewCadenceMonths = reviewCadenceMonths }
         saveRiskThresholdVersion()
     }
 
@@ -2985,6 +3314,8 @@ final class PortfolioStore {
             cryptoLimit: cryptoLimit,
             foreignCurrencyLimit: foreignCurrencyLimit,
             liquidityMinimum: liquidityMinimum,
+            riskAssetLimit: riskAssetLimit,
+            investmentGoal: riskInvestmentGoal.isEmpty ? nil : riskInvestmentGoal,
             investmentHorizon: riskInvestmentHorizon.isEmpty ? nil : riskInvestmentHorizon,
             investmentExperience: riskInvestmentExperience.isEmpty ? nil : riskInvestmentExperience,
             drawdownTolerance: riskDrawdownTolerance.isEmpty ? nil : riskDrawdownTolerance,
@@ -3923,6 +4254,14 @@ final class PortfolioStore {
     private func loadRiskProfileSettings(from repository: PositionRepository?) {
         guard let repository else { return }
         do {
+            // Reset optional extended fields before reloading so importing a legacy backup never leaves stale values.
+            riskAssetLimit = 65.0
+            riskInvestmentGoal = ""
+            riskInvestmentHorizon = ""
+            riskInvestmentExperience = ""
+            riskDrawdownTolerance = ""
+            riskReviewCadenceMonths = 6
+
             if let value = try repository.appSetting(for: Self.riskProfileConfiguredSettingKey),
                let configured = Self.boolSetting(value) {
                 riskProfileConfigured = configured
@@ -3940,6 +4279,10 @@ final class PortfolioStore {
                let limit = Self.doubleSetting(value) {
                 positionLimit = limit
             }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.riskAssetLimitKey),
+               let limit = Self.doubleSetting(value) {
+                riskAssetLimit = limit
+            }
             if let value = try repository.appSetting(for: Self.riskCryptoLimitSettingKey),
                let limit = Self.doubleSetting(value) {
                 cryptoLimit = limit
@@ -3952,6 +4295,9 @@ final class PortfolioStore {
                let limit = Self.doubleSetting(value) {
                 liquidityMinimum = limit
             }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.investmentGoalKey), !value.isEmpty {
+                riskInvestmentGoal = value
+            }
             if let value = try repository.appSetting(for: RiskProfilePersistence.investmentHorizonKey), !value.isEmpty {
                 riskInvestmentHorizon = value
             }
@@ -3960,6 +4306,10 @@ final class PortfolioStore {
             }
             if let value = try repository.appSetting(for: RiskProfilePersistence.drawdownToleranceKey), !value.isEmpty {
                 riskDrawdownTolerance = value
+            }
+            if let value = try repository.appSetting(for: RiskProfilePersistence.reviewCadenceMonthsKey),
+               let months = Int(value), (1...60).contains(months) {
+                riskReviewCadenceMonths = months
             }
             if let value = try repository.appSetting(for: Self.riskProfileUpdatedAtSettingKey),
                let date = Self.isoDateFormatter.date(from: value) {
@@ -3975,9 +4325,13 @@ final class PortfolioStore {
         persistAppSetting(key: Self.riskProfileConfiguredSettingKey, value: riskProfileConfigured ? "true" : "false")
         persistAppSetting(key: Self.riskProfileVersionSettingKey, value: String(riskProfileVersion))
         persistAppSetting(key: Self.riskPositionLimitSettingKey, value: Self.stableSettingNumber(positionLimit))
+        persistAppSetting(key: RiskProfilePersistence.riskAssetLimitKey, value: Self.stableSettingNumber(riskAssetLimit))
         persistAppSetting(key: Self.riskCryptoLimitSettingKey, value: Self.stableSettingNumber(cryptoLimit))
         persistAppSetting(key: Self.riskForeignCurrencyLimitSettingKey, value: Self.stableSettingNumber(foreignCurrencyLimit))
         persistAppSetting(key: Self.riskLiquidityMinimumSettingKey, value: Self.stableSettingNumber(liquidityMinimum))
+        if !riskInvestmentGoal.isEmpty {
+            persistAppSetting(key: RiskProfilePersistence.investmentGoalKey, value: riskInvestmentGoal)
+        }
         if !riskInvestmentHorizon.isEmpty {
             persistAppSetting(key: RiskProfilePersistence.investmentHorizonKey, value: riskInvestmentHorizon)
         }
@@ -3987,6 +4341,7 @@ final class PortfolioStore {
         if !riskDrawdownTolerance.isEmpty {
             persistAppSetting(key: RiskProfilePersistence.drawdownToleranceKey, value: riskDrawdownTolerance)
         }
+        persistAppSetting(key: RiskProfilePersistence.reviewCadenceMonthsKey, value: String(riskReviewCadenceMonths))
         persistAppSetting(key: Self.riskProfileUpdatedAtSettingKey, value: Self.isoDateFormatter.string(from: riskProfileUpdatedAt))
     }
 

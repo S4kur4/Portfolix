@@ -8,12 +8,15 @@ enum RiskProfilePersistence {
     static let configuredKey = "risk_profile_configured"
     static let versionKey = "risk_profile_version"
     static let positionLimitKey = "risk_position_limit"
+    static let riskAssetLimitKey = "risk_asset_limit"
     static let cryptoLimitKey = "risk_crypto_limit"
     static let foreignCurrencyLimitKey = "risk_foreign_currency_limit"
     static let liquidityMinimumKey = "risk_liquidity_minimum"
+    static let investmentGoalKey = "risk_profile_goal"
     static let investmentHorizonKey = "risk_profile_horizon"
     static let investmentExperienceKey = "risk_profile_experience"
     static let drawdownToleranceKey = "risk_profile_drawdown"
+    static let reviewCadenceMonthsKey = "risk_profile_review_cadence_months"
     static let updatedAtKey = "risk_profile_updated_at"
 }
 
@@ -106,6 +109,12 @@ enum PortfolixDataPackage {
         let foreignCurrencyLimit: String
         let liquidityMinimum: String
         let updatedAt: String
+        var riskAssetLimit: String? = nil
+        var investmentGoal: String? = nil
+        var investmentHorizon: String? = nil
+        var investmentExperience: String? = nil
+        var drawdownTolerance: String? = nil
+        var reviewCadenceMonths: Int? = nil
     }
 
     struct Holding: Codable, Equatable, Sendable {
@@ -611,9 +620,29 @@ enum PortfolixDataPackageService {
                 throw PortfolixDataPackageError.invalidPackage("risk_profile.version 无效")
             }
             try validatePercentage(riskProfile.positionLimit, field: "risk_profile.position_limit")
+            if let riskAssetLimit = riskProfile.riskAssetLimit {
+                try validatePercentage(riskAssetLimit, field: "risk_profile.risk_asset_limit")
+            }
             try validatePercentage(riskProfile.cryptoLimit, field: "risk_profile.crypto_limit")
             try validatePercentage(riskProfile.foreignCurrencyLimit, field: "risk_profile.foreign_currency_limit")
             try validatePercentage(riskProfile.liquidityMinimum, field: "risk_profile.liquidity_minimum")
+            if let goal = riskProfile.investmentGoal {
+                try validateText(goal, field: "risk_profile.investment_goal", maximumLength: 64)
+            }
+            if let horizon = riskProfile.investmentHorizon {
+                try validateText(horizon, field: "risk_profile.investment_horizon", maximumLength: 64)
+            }
+            if let experience = riskProfile.investmentExperience {
+                try validateText(experience, field: "risk_profile.investment_experience", maximumLength: 64)
+            }
+            if let drawdown = riskProfile.drawdownTolerance {
+                try validateText(drawdown, field: "risk_profile.drawdown_tolerance", maximumLength: 32)
+            }
+            if let cadence = riskProfile.reviewCadenceMonths {
+                guard (1...60).contains(cadence) else {
+                    throw PortfolixDataPackageError.invalidPackage("risk_profile.review_cadence_months 无效")
+                }
+            }
             try validateTimestamp(riskProfile.updatedAt, field: "risk_profile.updated_at")
         }
         let closures = payload.closedHoldings ?? []

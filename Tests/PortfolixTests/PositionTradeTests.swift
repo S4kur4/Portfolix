@@ -850,7 +850,7 @@ struct PositionTradeTests {
                     ("add-existing", AnyView(PositionEditorSheet(presentation: .init(position: holding)).environment(store)), CGSize(width: 620, height: 780)),
                     ("add-cash", AnyView(PositionEditorSheet(presentation: .init(position: cash)).environment(store)), CGSize(width: 620, height: 620)),
                     ("cash", AnyView(CashReductionSheet(position: cash).environment(store)), CGSize(width: 620, height: 460)),
-                    ("risk", AnyView(RiskQuestionnaireSheet().environment(store)), CGSize(width: 640, height: 680)),
+                    ("risk", AnyView(RiskProfileView().environment(store).frame(width: 960, height: 760)), CGSize(width: 960, height: 760)),
                     ("model-settings", AnyView(LLMConfigurationSheet().environment(store)), CGSize(width: 560, height: 420)),
                     ("search-settings", AnyView(SearchConfigurationSheet().environment(store)), CGSize(width: 560, height: 620)),
                     ("holdings", AnyView(PositionsView().environment(store).frame(width: 960, height: 640)), CGSize(width: 960, height: 640))]

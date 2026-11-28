@@ -8,6 +8,9 @@ enum AIFollowUpResponseParser {
     private static let answerMarker = try! NSRegularExpression(pattern: #"(?im)^[\t ]*<answer(?=[\s>]|$)"#)
     private static let limitationsMarker = try! NSRegularExpression(pattern: #"(?im)(?:^[\t ]*|(?<=[。.!?！？])[\t ]*)<limitations(?=[\s>]|$)"#)
     private static let orphanClosingMarker = try! NSRegularExpression(pattern: #"(?im)^[\t ]*</(?:answer|limitations)(?=[\s>]|$)"#)
+    private static let leakedToolCallMarkup = try! NSRegularExpression(
+        pattern: #"(?is)<\s*/?\s*(?:(?:\|\s*\||｜)\s*DSML\s*(?:\|\s*\||｜)\s*(?:function_calls|calls|invoke|parameter)|(?:tool_call|function_call|function_calls|invoke)\b)"#
+    )
 
     private enum Result {
         case value(LLMFollowUpPayload)
@@ -38,12 +41,19 @@ enum AIFollowUpResponseParser {
             : "这条回复暂时无法显示，请重新提问。")
     }
 
+    static func containsLeakedToolCallMarkup(_ text: String) -> Bool {
+        guard text.utf8.count <= maximumInputBytes else { return true }
+        let range = NSRange(text.startIndex..., in: text)
+        return leakedToolCallMarkup.firstMatch(in: text, range: range) != nil
+    }
+
     static func containsResponseEnvelope(_ text: String) -> Bool {
         guard text.utf8.count <= maximumInputBytes else { return true }
         let range = NSRange(text.startIndex..., in: text)
         if answerMarker.firstMatch(in: text, range: range) != nil
             || limitationsMarker.firstMatch(in: text, range: range) != nil
-            || orphanClosingMarker.firstMatch(in: text, range: range) != nil { return true }
+            || orphanClosingMarker.firstMatch(in: text, range: range) != nil
+            || leakedToolCallMarkup.firstMatch(in: text, range: range) != nil { return true }
         return objectSpans(in: text)?.contains { startsWithEnvelopeKey(text[$0.range]) } ?? true
     }
 
@@ -52,6 +62,11 @@ enum AIFollowUpResponseParser {
             return .invalid(readablePrefix: nil)
         }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let leakedMatch = leakedToolCallMarkup.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let leakedRange = Range(leakedMatch.range, in: text) {
+            let prefix = String(text[..<leakedRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .invalid(readablePrefix: prefix.isEmpty ? nil : readablePrefix(prefix, depth: depth + 1))
+        }
         let decoder = JSONDecoder()
         if text.hasPrefix("{"),
            let payload = try? decoder.decode(LLMFollowUpPayload.self, from: Data(text.utf8)) {

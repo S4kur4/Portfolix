@@ -124,7 +124,7 @@ enum AIPortfolioDataTool: String, CaseIterable, Sendable {
       properties = [:]
       required = []
       description =
-        "Read-only: whether risk preferences are configured, current allocation limits (single position, crypto, foreign currency, minimum cash) and current breach evaluation. Passing limits does not guarantee safety or returns."
+        "Read-only: whether risk preferences are configured, investor profile (goal, horizon, experience, drawdown tolerance), all 6 guardrail limits (max drawdown vs current/historical drawdown, single non-cash asset, stocks & crypto high-volatility cap, crypto, non-base currency, minimum cash) and current breach evaluation. Passing limits does not guarantee safety or returns."
     case .history:
       properties = [
         "days": Self.integer(1, 90, description: "Number of recent calendar days to return (1 to 90, default 30).")
@@ -704,17 +704,23 @@ enum AIPortfolioDataToolExecutor {
       result["data"] =
         [
           "configured": context.riskProfileConfigured, "risk_level": context.riskLevel,
+          "investment_goal": context.investmentGoal ?? NSNull(),
           "investment_horizon": context.investmentHorizon ?? NSNull(),
           "investment_experience": context.investmentExperience ?? NSNull(),
           "drawdown_tolerance": context.drawdownTolerance ?? NSNull(),
+          "base_currency": evaluation.baseCurrency.rawValue,
           "single_position_limit_pct": rounded(context.positionLimit),
+          "high_volatility_limit_pct": context.riskAssetLimit.map { rounded($0) } ?? NSNull(),
           "crypto_limit_pct": rounded(context.cryptoLimit),
           "foreign_currency_limit_pct": rounded(context.foreignCurrencyLimit),
           "liquidity_minimum_pct": rounded(context.liquidityMinimum),
           "largest_position_pct": rounded(evaluation.largestPositionPercent),
+          "high_volatility_allocation_pct": rounded(evaluation.highVolatilityAllocationPercent),
           "crypto_allocation_pct": rounded(evaluation.cryptoAllocationPercent),
           "non_cny_allocation_pct": rounded(evaluation.nonCNYAllocationPercent),
           "cash_allocation_pct": rounded(evaluation.cashAllocationPercent),
+          "current_drawdown_pct": evaluation.currentDrawdownPercent.map { rounded($0) } ?? NSNull(),
+          "historical_max_drawdown_pct": evaluation.historicalMaxDrawdownPercent.map { rounded($0) } ?? NSNull(),
           "breach_count": evaluation.breachCount,
         ] as [String: Any]
       result["limitation"] = "Constraint fit does not measure investment safety or future returns."

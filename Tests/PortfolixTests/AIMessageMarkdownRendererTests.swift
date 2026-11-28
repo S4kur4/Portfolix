@@ -151,6 +151,12 @@ struct AIMessageMarkdownRendererTests {
         let bodyStyle = try #require(result.attribute(.paragraphStyle, at: range("正文段落", in: result).location, effectiveRange: nil) as? NSParagraphStyle)
         #expect(bodyStyle.lineSpacing == AIMessageMarkdownRenderer.bodyLineSpacing)
         #expect(bodyStyle.paragraphSpacing == AIMessageMarkdownRenderer.bodyParagraphSpacing)
+
+        // Blank separator lines between Markdown blocks are compacted rather than taking full 13pt line height.
+        let nsString = result.string as NSString
+        let blankLineIndex = nsString.range(of: "\n\n").location + 1
+        let blankStyle = try #require(result.attribute(.paragraphStyle, at: blankLineIndex, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(blankStyle.maximumLineHeight == AIMessageMarkdownRenderer.blankParagraphHeight)
     }
 
     @Test

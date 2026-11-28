@@ -136,12 +136,7 @@ struct SidebarView: View {
     }
 
     private func select(_ item: SidebarSection) {
-        guard store.selection != item else { return }
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            store.selection = item
-        }
+        store.requestSidebarNavigation(to: item)
     }
 }
 

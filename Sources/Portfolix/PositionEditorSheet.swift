@@ -203,9 +203,13 @@ struct PositionEditorSheet: View {
 
                     if !locksAssetIdentity, !isManualAssetEntry {
                         HStack(spacing: PortfolixSpacing.sm) {
-                            Label(sheetText("类别与币种已按行情源自动匹配", "Asset class and currency are matched automatically"), systemImage: "lock.fill")
-                                .font(PortfolixTypography.caption)
-                                .foregroundStyle(PortfolixTheme.secondary)
+                            PortfolixInlineStatusLabel(
+                                title: sheetText("类别与币种已按行情源自动匹配", "Asset class and currency are matched automatically"),
+                                symbol: "lock.fill",
+                                color: PortfolixTheme.secondary,
+                                font: PortfolixTypography.caption,
+                                symbolSize: 10
+                            )
 
                             Spacer()
 

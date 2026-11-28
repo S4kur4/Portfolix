@@ -557,14 +557,17 @@ enum AIRebalanceSimulator {
             return copy
         }
 
+        let baseCurrency = riskContext?.riskConstraintEvaluation.baseCurrency ?? .cny
+
         func metrics(
             values: [Position.ID: Double],
             extraCash: Double,
             total: Double
-        ) -> (largestSinglePct: Double, cryptoPct: Double, nonCNYPct: Double, cashPct: Double) {
+        ) -> (largestSinglePct: Double, highVolatilityPct: Double, cryptoPct: Double, nonCNYPct: Double, cashPct: Double) {
             var largest = 0.0
+            var highVolatility = 0.0
             var crypto = 0.0
-            var nonCNY = 0.0
+            var nonBase = 0.0
             var cash = extraCash
             for (id, value) in values {
                 guard let pos = positionsByID[id], value > 0 else { continue }
@@ -572,11 +575,14 @@ enum AIRebalanceSimulator {
                 if pos.category != .cash {
                     largest = max(largest, pct)
                 }
+                if pos.category.isHighVolatility {
+                    highVolatility += value
+                }
                 if pos.category == .crypto {
                     crypto += value
                 }
-                if pos.quoteCurrency != .cny {
-                    nonCNY += value
+                if pos.quoteCurrency != baseCurrency {
+                    nonBase += value
                 }
                 if pos.category == .cash {
                     cash += value
@@ -584,8 +590,9 @@ enum AIRebalanceSimulator {
             }
             return (
                 largestSinglePct: rounded(largest),
+                highVolatilityPct: rounded(highVolatility / total * 100),
                 cryptoPct: rounded(crypto / total * 100),
-                nonCNYPct: rounded(nonCNY / total * 100),
+                nonCNYPct: rounded(nonBase / total * 100),
                 cashPct: rounded(cash / total * 100)
             )
         }
@@ -596,9 +603,12 @@ enum AIRebalanceSimulator {
 
         var constraintComparison: [String: Any] = ["configured": false]
         if let ctx = riskContext {
-            func breaches(for m: (largestSinglePct: Double, cryptoPct: Double, nonCNYPct: Double, cashPct: Double)) -> [String] {
+            func breaches(for m: (largestSinglePct: Double, highVolatilityPct: Double, cryptoPct: Double, nonCNYPct: Double, cashPct: Double)) -> [String] {
                 var list: [String] = []
                 if m.largestSinglePct > ctx.positionLimit { list.append("single_position_limit") }
+                if let riskAssetLimit = ctx.riskAssetLimit, m.highVolatilityPct > riskAssetLimit {
+                    list.append("high_volatility_limit")
+                }
                 if m.cryptoPct > ctx.cryptoLimit { list.append("crypto_limit") }
                 if m.nonCNYPct > ctx.foreignCurrencyLimit { list.append("foreign_currency_limit") }
                 if m.cashPct < ctx.liquidityMinimum { list.append("liquidity_minimum") }
@@ -606,14 +616,19 @@ enum AIRebalanceSimulator {
             }
             let beforeBreaches = breaches(for: beforeMetrics)
             let afterBreaches = breaches(for: afterMetrics)
+            var limitsDict: [String: Any] = [
+                "single_position_limit_pct": rounded(ctx.positionLimit),
+                "crypto_limit_pct": rounded(ctx.cryptoLimit),
+                "foreign_currency_limit_pct": rounded(ctx.foreignCurrencyLimit),
+                "liquidity_minimum_pct": rounded(ctx.liquidityMinimum),
+            ]
+            if let riskAssetLimit = ctx.riskAssetLimit {
+                limitsDict["high_volatility_limit_pct"] = rounded(riskAssetLimit)
+            }
             constraintComparison = [
                 "configured": ctx.riskProfileConfigured,
-                "limits": [
-                    "single_position_limit_pct": rounded(ctx.positionLimit),
-                    "crypto_limit_pct": rounded(ctx.cryptoLimit),
-                    "foreign_currency_limit_pct": rounded(ctx.foreignCurrencyLimit),
-                    "liquidity_minimum_pct": rounded(ctx.liquidityMinimum),
-                ],
+                "base_currency": baseCurrency.rawValue,
+                "limits": limitsDict,
                 "before_breaches": beforeBreaches,
                 "after_breaches": afterBreaches,
                 "resolved_breaches": beforeBreaches.filter { !afterBreaches.contains($0) },
@@ -634,12 +649,14 @@ enum AIRebalanceSimulator {
             "unresolved_assets": unresolvedAssets,
             "before_metrics": [
                 "largest_single_position_pct": beforeMetrics.largestSinglePct,
+                "high_volatility_allocation_pct": beforeMetrics.highVolatilityPct,
                 "crypto_allocation_pct": beforeMetrics.cryptoPct,
                 "non_cny_allocation_pct": beforeMetrics.nonCNYPct,
                 "cash_allocation_pct": beforeMetrics.cashPct,
             ],
             "after_metrics": [
                 "largest_single_position_pct": afterMetrics.largestSinglePct,
+                "high_volatility_allocation_pct": afterMetrics.highVolatilityPct,
                 "crypto_allocation_pct": afterMetrics.cryptoPct,
                 "non_cny_allocation_pct": afterMetrics.nonCNYPct,
                 "cash_allocation_pct": afterMetrics.cashPct,

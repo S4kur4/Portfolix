@@ -10,10 +10,11 @@ enum AIMessageMarkdownRenderer {
     private static let quotePrefix = try! NSRegularExpression(pattern: #"(?m)^>[ \t]?(?=\S)"#)
     private static let underlineTags = try! NSRegularExpression(pattern: #"</?u>"#, options: .caseInsensitive)
 
-    static let bodyLineSpacing: CGFloat = 5
-    static let bodyParagraphSpacing: CGFloat = 8
-    static let listLineSpacing: CGFloat = 4.5
-    static let listParagraphSpacing: CGFloat = 4
+    static let bodyLineSpacing: CGFloat = 4.5
+    static let bodyParagraphSpacing: CGFloat = 5
+    static let listLineSpacing: CGFloat = 4
+    static let listParagraphSpacing: CGFloat = 3
+    static let blankParagraphHeight: CGFloat = 4
 
     static func render(_ text: String, citations: [AIMessageCitation] = [], citationColor: NSColor) -> NSAttributedString {
         let sanitized = AIUserFacingTextSanitizer.sanitize(text, citations: citations)
@@ -44,6 +45,7 @@ enum AIMessageMarkdownRenderer {
         decorateLists(result, lists: lists)
         decorateQuotes(result, quotes: quotes, accentColor: citationColor)
         decorateHeadings(result, headings: headings)
+        compactBlankParagraphs(result)
         for (marker, citation, url) in markers {
             let range = (result.string as NSString).range(of: marker)
             guard range.location != NSNotFound else { continue }
@@ -186,9 +188,9 @@ enum AIMessageMarkdownRenderer {
             let fontSize: CGFloat = heading.level == 2 ? 15 : 13
             let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
             let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 4
-            paragraph.paragraphSpacingBefore = paragraphRange.location == 0 ? 0 : (heading.level == 2 ? 10 : 8)
-            paragraph.paragraphSpacing = 4
+            paragraph.lineSpacing = 3.5
+            paragraph.paragraphSpacingBefore = paragraphRange.location == 0 ? 0 : (heading.level == 2 ? 6 : 4)
+            paragraph.paragraphSpacing = 2
             text.addAttributes([
                 .font: font,
                 .foregroundColor: NSColor.labelColor,
@@ -255,6 +257,34 @@ enum AIMessageMarkdownRenderer {
             paragraph.tabStops = [NSTextTab(textAlignment: .left, location: textIndent)]
             let paragraphRange = (text.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 1))
             text.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
+        }
+    }
+
+    /// Compacts literal blank lines (`\n\n`) so Markdown paragraph breaks stay crisp (~9 pt)
+    /// instead of stacking a full 13 pt empty line plus paragraph spacing, while keeping
+    /// the underlying plain string intact for copy/paste.
+    private static func compactBlankParagraphs(_ text: NSMutableAttributedString) {
+        let string = text.string as NSString
+        guard string.length > 0 else { return }
+        let compactStyle = NSMutableParagraphStyle()
+        compactStyle.minimumLineHeight = blankParagraphHeight
+        compactStyle.maximumLineHeight = blankParagraphHeight
+        compactStyle.lineSpacing = 0
+        compactStyle.paragraphSpacing = 0
+        compactStyle.paragraphSpacingBefore = 0
+        let compactFont = NSFont.systemFont(ofSize: blankParagraphHeight)
+
+        var location = 0
+        while location < string.length {
+            let paragraphRange = string.paragraphRange(for: NSRange(location: location, length: 0))
+            let content = string.substring(with: paragraphRange)
+            if content.allSatisfy({ $0 == "\n" || $0 == "\r" || $0 == " " || $0 == "\t" }) {
+                text.addAttributes([
+                    .font: compactFont,
+                    .paragraphStyle: compactStyle,
+                ], range: paragraphRange)
+            }
+            location = NSMaxRange(paragraphRange)
         }
     }
 }

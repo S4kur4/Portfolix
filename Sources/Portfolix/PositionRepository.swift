@@ -493,6 +493,11 @@ final class PositionRepository {
                 try setAppSetting(key: RiskProfilePersistence.levelKey, value: riskProfile.level)
                 try setAppSetting(key: RiskProfilePersistence.versionKey, value: String(riskProfile.version))
                 try setAppSetting(key: RiskProfilePersistence.positionLimitKey, value: riskProfile.positionLimit)
+                if let riskAssetLimit = riskProfile.riskAssetLimit {
+                    try setAppSetting(key: RiskProfilePersistence.riskAssetLimitKey, value: riskAssetLimit)
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.riskAssetLimitKey)
+                }
                 try setAppSetting(key: RiskProfilePersistence.cryptoLimitKey, value: riskProfile.cryptoLimit)
                 try setAppSetting(
                     key: RiskProfilePersistence.foreignCurrencyLimitKey,
@@ -502,6 +507,31 @@ final class PositionRepository {
                     key: RiskProfilePersistence.liquidityMinimumKey,
                     value: riskProfile.liquidityMinimum
                 )
+                if let goal = riskProfile.investmentGoal {
+                    try setAppSetting(key: RiskProfilePersistence.investmentGoalKey, value: goal)
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.investmentGoalKey)
+                }
+                if let horizon = riskProfile.investmentHorizon {
+                    try setAppSetting(key: RiskProfilePersistence.investmentHorizonKey, value: horizon)
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.investmentHorizonKey)
+                }
+                if let experience = riskProfile.investmentExperience {
+                    try setAppSetting(key: RiskProfilePersistence.investmentExperienceKey, value: experience)
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.investmentExperienceKey)
+                }
+                if let drawdown = riskProfile.drawdownTolerance {
+                    try setAppSetting(key: RiskProfilePersistence.drawdownToleranceKey, value: drawdown)
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.drawdownToleranceKey)
+                }
+                if let cadence = riskProfile.reviewCadenceMonths {
+                    try setAppSetting(key: RiskProfilePersistence.reviewCadenceMonthsKey, value: String(cadence))
+                } else {
+                    try deleteAppSetting(key: RiskProfilePersistence.reviewCadenceMonthsKey)
+                }
                 try setAppSetting(key: RiskProfilePersistence.updatedAtKey, value: riskProfile.updatedAt)
             }
             // Imported balances are user data, even when their symbols match the examples.
@@ -1037,11 +1067,23 @@ final class PositionRepository {
         let configured = try appSetting(for: RiskProfilePersistence.configuredKey) == "true"
         let level = try appSetting(for: RiskProfilePersistence.levelKey) ?? "未配置"
         let version = try appSetting(for: RiskProfilePersistence.versionKey).flatMap(Int.init) ?? 0
-        let positionLimit = try appSetting(for: RiskProfilePersistence.positionLimitKey) ?? "30"
-        let cryptoLimit = try appSetting(for: RiskProfilePersistence.cryptoLimitKey) ?? "15"
-        let foreignCurrencyLimit = try appSetting(for: RiskProfilePersistence.foreignCurrencyLimitKey) ?? "50"
-        let liquidityMinimum = try appSetting(for: RiskProfilePersistence.liquidityMinimumKey) ?? "10"
-        let updatedAt = try appSetting(for: RiskProfilePersistence.updatedAtKey) ?? Self.timestamp()
+        func nonEmptySetting(_ key: String) throws -> String? {
+            guard let raw = try appSetting(for: key) else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        let positionLimit = try nonEmptySetting(RiskProfilePersistence.positionLimitKey) ?? "30"
+        let riskAssetLimit = try nonEmptySetting(RiskProfilePersistence.riskAssetLimitKey)
+        let cryptoLimit = try nonEmptySetting(RiskProfilePersistence.cryptoLimitKey) ?? "15"
+        let foreignCurrencyLimit = try nonEmptySetting(RiskProfilePersistence.foreignCurrencyLimitKey) ?? "50"
+        let liquidityMinimum = try nonEmptySetting(RiskProfilePersistence.liquidityMinimumKey) ?? "10"
+        let investmentGoal = try nonEmptySetting(RiskProfilePersistence.investmentGoalKey)
+        let investmentHorizon = try nonEmptySetting(RiskProfilePersistence.investmentHorizonKey)
+        let investmentExperience = try nonEmptySetting(RiskProfilePersistence.investmentExperienceKey)
+        let drawdownTolerance = try nonEmptySetting(RiskProfilePersistence.drawdownToleranceKey)
+        let reviewCadenceMonths = try nonEmptySetting(RiskProfilePersistence.reviewCadenceMonthsKey).flatMap(Int.init)
+        let updatedAt = try nonEmptySetting(RiskProfilePersistence.updatedAtKey) ?? Self.timestamp()
         return PortfolixDataPackage.RiskProfile(
             configured: configured,
             level: level,
@@ -1050,7 +1092,13 @@ final class PositionRepository {
             cryptoLimit: cryptoLimit,
             foreignCurrencyLimit: foreignCurrencyLimit,
             liquidityMinimum: liquidityMinimum,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            riskAssetLimit: riskAssetLimit,
+            investmentGoal: investmentGoal,
+            investmentHorizon: investmentHorizon,
+            investmentExperience: investmentExperience,
+            drawdownTolerance: drawdownTolerance,
+            reviewCadenceMonths: reviewCadenceMonths
         )
     }
 

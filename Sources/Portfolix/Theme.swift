@@ -574,6 +574,7 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
     var optionSymbol: ((Value) -> String)? = nil
     var optionAttributedTitle: ((Value) -> AttributedString)? = nil
     var width: CGFloat? = nil
+    var fillsWidth: Bool = false
     var height: CGFloat = PortfolixLayout.glassControlHeight
     @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focusedOption: Value?
@@ -599,7 +600,7 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, optionSymbol == nil ? PortfolixSpacing.md : PortfolixSpacing.sm)
-                    .frame(maxWidth: width == nil ? nil : .infinity)
+                    .frame(maxWidth: (width != nil || fillsWidth) ? .infinity : nil)
                     .frame(height: height - PortfolixLayout.controlSelectionInset * 2)
                     .contentShape(Rectangle())
                 }
@@ -624,8 +625,9 @@ struct PortfolixGlassSegmentedPicker<Value: Hashable>: View {
             cornerRadius: PortfolixRadius.compact - PortfolixLayout.controlSelectionInset)
         .padding(PortfolixLayout.controlSelectionInset)
         .frame(width: width)
+        .frame(maxWidth: fillsWidth ? .infinity : nil)
         .portfolixGlassControl(height: height)
-        .fixedSize(horizontal: width == nil, vertical: true)
+        .fixedSize(horizontal: width == nil && !fillsWidth, vertical: true)
         .opacity(isEnabled ? 1 : 0.58)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
@@ -657,6 +659,7 @@ struct PortfolixGlassMenuPicker<Value: Hashable>: View {
     let optionTitle: (Value) -> String
     var selectionTitle: String? = nil
     var height: CGFloat = PortfolixLayout.glassControlHeight
+    var fillsWidth: Bool = false
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -671,17 +674,24 @@ struct PortfolixGlassMenuPicker<Value: Hashable>: View {
         } label: {
             HStack(spacing: PortfolixSpacing.sm) {
                 Text(selectionTitle ?? optionTitle(selection))
-                    .fixedSize(horizontal: true, vertical: false)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: !fillsWidth, vertical: false)
+                if fillsWidth {
+                    Spacer(minLength: PortfolixSpacing.xs)
+                }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(PortfolixTheme.secondary)
             }
             .font(PortfolixTypography.captionEmphasis)
-            .padding(.horizontal, PortfolixSpacing.sm)
+            .padding(.horizontal, fillsWidth ? PortfolixSpacing.md : PortfolixSpacing.sm)
+            .frame(maxWidth: fillsWidth ? .infinity : nil)
             .portfolixGlassControl(height: height)
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .frame(maxWidth: fillsWidth ? .infinity : nil)
+        .fixedSize(horizontal: !fillsWidth, vertical: true)
         .opacity(isEnabled ? 1 : 0.58)
         .accessibilityLabel(title)
         .accessibilityValue(selectionTitle ?? optionTitle(selection))
@@ -821,6 +831,26 @@ extension PerformanceColorScheme {
         title += up
         title += down
         return title
+    }
+}
+
+struct PortfolixInlineStatusLabel: View {
+    let title: String
+    let symbol: String
+    var color: Color = PortfolixTheme.secondary
+    var font: Font = PortfolixTypography.captionEmphasis
+    var symbolSize: CGFloat = 11
+
+    var body: some View {
+        HStack(spacing: PortfolixSpacing.xs) {
+            Image(systemName: symbol)
+                .font(.system(size: symbolSize, weight: .semibold))
+            Text(title)
+                .font(font)
+        }
+        .foregroundStyle(color)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 

@@ -105,6 +105,26 @@ struct RootView: View {
         } message: {
             Text(store.persistenceErrorMessage ?? "")
         }
+        .alert(
+            localizedText("有未保存的风险偏好修改", "Unsaved Risk Profile Changes", language: store.appLanguage),
+            isPresented: unsavedRiskNavigationAlertPresented
+        ) {
+            Button(localizedText("保存并离开", "Save & Leave", language: store.appLanguage)) {
+                store.saveUnsavedRiskProfileAndContinueNavigation()
+            }
+            Button(localizedText("放弃修改", "Discard Changes", language: store.appLanguage), role: .destructive) {
+                store.discardUnsavedRiskProfileAndContinueNavigation()
+            }
+            Button(localizedText("继续编辑", "Keep Editing", language: store.appLanguage), role: .cancel) {
+                store.cancelPendingSidebarNavigation()
+            }
+        } message: {
+            Text(localizedText(
+                "当前风险偏好仍有未保存的调整。离开前是否先保存配置？",
+                "You have unsaved changes to your risk profile. Would you like to save them before leaving?",
+                language: store.appLanguage
+            ))
+        }
         .task {
             await store.refreshPricesOnLaunchIfNeeded()
         }
@@ -139,7 +159,7 @@ struct RootView: View {
         case .report:
             AIReportView()
         case .riskProfile:
-            RiskProfileView()
+            RiskProfileView(initialDraft: store.currentRiskProfileDraft)
         case .settings:
             SettingsView()
         }
@@ -205,6 +225,17 @@ struct RootView: View {
             set: { isPresented in
                 if !isPresented {
                     store.persistenceErrorMessage = nil
+                }
+            }
+        )
+    }
+
+    private var unsavedRiskNavigationAlertPresented: Binding<Bool> {
+        Binding(
+            get: { store.pendingSidebarSelection != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.cancelPendingSidebarNavigation()
                 }
             }
         )
