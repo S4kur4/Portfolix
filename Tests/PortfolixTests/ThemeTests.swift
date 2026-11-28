@@ -358,6 +358,7 @@ struct ThemeTests {
                 (PortfolixTheme.brandText, PortfolixTheme.surface, 4.5),
                 (PortfolixTheme.brandWashText, PortfolixTheme.brandWash, 4.5),
                 (PortfolixTheme.brandWashText, PortfolixTheme.brandWashStrong, 4.5),
+                (PortfolixTheme.text, PortfolixTheme.brandWashStrong, 4.5),
                 (PortfolixTheme.brandChart, PortfolixTheme.brandWash, 3.0),
                 (PortfolixTheme.borderStrong, PortfolixTheme.surface, 3.0),
                 (PortfolixTheme.text, PortfolixTheme.subtleFill, 4.5),
@@ -542,11 +543,13 @@ struct ThemeTests {
             (PortfolixTheme.brandText, 0x5E47C7, 0xB7A6FF),
             (PortfolixTheme.brandFocus, 0x6C54D9, 0x9B87FF),
             (PortfolixTheme.brandWash, 0xEFEBFD, 0x221E3A),
-            (PortfolixTheme.brandWashStrong, 0xE0D9FA, 0x2F2954),
+            (PortfolixTheme.brandWashStrong, 0xE0D9FA, 0x4C3E8A),
             (PortfolixTheme.brandWashText, 0x4C36B2, 0xC8BDFF),
             (PortfolixTheme.brandSolid, 0x5E47C7, 0x6E56CF),
             (PortfolixTheme.brandSolidInk, 0xFFFFFF, 0xFFFFFF),
             (PortfolixTheme.brandChart, 0x6C54D9, 0x9B87FF),
+            (PortfolixTheme.brandLogoStart, 0xB9A7FF, 0x9B87FF),
+            (PortfolixTheme.brandLogoEnd, 0x7C63F2, 0x6E56CF),
         ]
         appearance.performAsCurrentDrawingAppearance {
             for (color, light, dark) in pairs {
