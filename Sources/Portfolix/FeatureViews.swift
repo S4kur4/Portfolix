@@ -31,6 +31,11 @@ struct PositionsView: View {
                         }
                         .buttonStyle(QuietButtonStyle())
                         .disabled(reductionTarget == nil)
+                        .portfolixHelp(
+                            reductionTarget == nil
+                                ? localizedText("请先在列表中选中一条持仓", "Select a holding in the table first", language: store.appLanguage)
+                                : localizedText("校准选中持仓的实际份额与成本", "Reconcile the selected holding's actual quantity and cost", language: store.appLanguage)
+                        )
 
                         Button {
                             guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
@@ -44,6 +49,13 @@ struct PositionsView: View {
                         }
                         .buttonStyle(QuietButtonStyle())
                         .disabled(reductionTarget == nil)
+                        .portfolixHelp(
+                            reductionTarget == nil
+                                ? localizedText("请先在列表中选中一条持仓", "Select a holding in the table first", language: store.appLanguage)
+                                : (reductionTarget?.category == .cash
+                                    ? localizedText("记录选中现金账户的转出", "Record cash out from the selected cash account", language: store.appLanguage)
+                                    : localizedText("记录选中持仓的卖出交易", "Record a sale for the selected holding", language: store.appLanguage))
+                        )
 
                         Button {
                             store.presentNewPositionEditor()
@@ -199,7 +211,7 @@ struct PositionsView: View {
 
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { position in
                 VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
-                    Text(position.name)
+                    Text(position.localizedDisplayName(language: store.appLanguage))
                         .foregroundStyle(PositionTableForeground(color: PortfolixTheme.text))
                         .lineLimit(1)
                     Text(position.symbol)
@@ -274,9 +286,34 @@ struct PositionsView: View {
             }
             .width(min: 136, ideal: 160)
         }
-        .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark))
+        .tableStyle(.inset(alternatesRowBackgrounds: colorScheme != .dark && !positions.isEmpty))
         .scrollContentBackground(.hidden)
         .background(PortfolixTheme.surface)
+        .overlay {
+            if positions.isEmpty {
+                let hasQuery = !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                VStack(spacing: PortfolixSpacing.sm) {
+                    Image(systemName: hasQuery ? "magnifyingglass" : "tray")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(PortfolixTheme.tertiary)
+                    Text(
+                        hasQuery
+                            ? localizedText("未找到匹配的资产", "No matching holdings", language: store.appLanguage)
+                            : localizedText("暂无持仓", "No holdings yet", language: store.appLanguage)
+                    )
+                    .font(PortfolixTypography.body)
+                    .foregroundStyle(PortfolixTheme.secondary)
+                    if hasQuery {
+                        Button(localizedText("清除搜索", "Clear Search", language: store.appLanguage)) {
+                            store.searchText = ""
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .padding(.top, PortfolixSpacing.xs)
+                    }
+                }
+                .padding(PortfolixSpacing.xl)
+            }
+        }
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
@@ -350,7 +387,7 @@ struct PositionsView: View {
                 .alignment(.leading)
             TableColumn(localizedText("资产", "Asset", language: store.appLanguage)) { record in
                 VStack(alignment: .leading, spacing: 4) {
-                    activityText(record.name).lineLimit(1)
+                    activityText(PositionClosureMath.localizedCashName(record.name, currency: record.currency, language: store.appLanguage)).lineLimit(1)
                     activityText(record.symbol, color: PortfolixTheme.secondary).font(PortfolixTypography.caption)
                 }
             }.width(min: 96, ideal: 140)
@@ -361,11 +398,11 @@ struct PositionsView: View {
                 }.monospacedDigit()
             }.width(88)
             TableColumn(localizedText("类型", "Type", language: store.appLanguage)) {
-                activityText($0.needsOpeningReview ? localizedText("期初待核对", "Verify Opening", language: store.appLanguage) : ($0.reconciliation?.units == 0 ? localizedText("已清仓", "Closed", language: store.appLanguage) : $0.kind.title(language: store.appLanguage))).lineLimit(1)
+                activityText($0.needsOpeningReview ? localizedText("期初待核对", "Verify Opening", language: store.appLanguage) : ($0.reconciliation?.units == 0 ? localizedText("已清仓", "Closed", language: store.appLanguage) : $0.kindTitle(language: store.appLanguage))).lineLimit(1)
             }.width(76)
             TableColumn(localizedText("份额", "Quantity", language: store.appLanguage)) { activityText($0.needsOpeningReview ? "—" : $0.quantity).monospacedDigit() }.width(72)
             TableColumn(localizedText("成交均价", "Trade Price", language: store.appLanguage)) {
-                activityText($0.opening != nil || $0.reconciliation != nil || $0.kind == .withdraw ? "—" : formatMoney($0.price, currency: $0.currency)).monospacedDigit()
+                activityText($0.opening != nil || $0.reconciliation != nil || $0.kind == .withdraw ? "—" : formatUnitCost($0.price, currency: $0.currency)).monospacedDigit()
             }.width(96)
             TableColumn(localizedText("手续费", "Fees", language: store.appLanguage)) {
                 activityText($0.opening != nil || $0.reconciliation != nil || $0.kind == .withdraw ? "—" : formatMoney($0.fee, currency: $0.currency)).monospacedDigit()
@@ -426,9 +463,8 @@ struct PositionsView: View {
     }
 
     private var reductionTarget: Position? {
-        store.positions.first { $0.id == store.selectedPositionID }
-            ?? store.positions.first { $0.category != .cash }
-            ?? store.positions.first
+        guard let selectedID = store.selectedPositionID else { return nil }
+        return store.positions.first { $0.id == selectedID }
     }
 
     private func canRefresh(_ position: Position) -> Bool {
@@ -1222,9 +1258,9 @@ private struct AIReportFollowUpMessage: View {
     var body: some View {
         let resolvedCitations = uniqueCitations
         VStack(alignment: .leading, spacing: PortfolixSpacing.sm) {
-            if !activitySteps.isEmpty {
+            if !activitySteps.isEmpty, !(isFailure && !activitySteps.contains { $0.status == .completed }) {
                 AIReportUntimestampedAgentRow {
-                    AIReportResearchTraceDisclosure(steps: activitySteps, language: language)
+                    AIReportResearchTraceDisclosure(steps: activitySteps, isFailure: isFailure, language: language)
                 }
             }
 
@@ -2104,9 +2140,14 @@ private struct AIReportActivityStepRow: View {
 
 private struct AIReportResearchTraceDisclosure: View {
     let steps: [AIAgentActivityStep]
+    var isFailure = false
     let language: AppLanguage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isExpanded = false
+
+    private var hasFailure: Bool {
+        isFailure || steps.contains { $0.status == .failed }
+    }
 
     private var summaryText: String {
         let completed = steps.filter { $0.status == .completed }.count
@@ -2119,7 +2160,14 @@ private struct AIReportResearchTraceDisclosure: View {
         if webUsed {
             tags.append(localizedText("联网资料", "Web sources", language: language))
         }
-        let stepCount = localizedText("已完成 \(max(completed, steps.count)) 步投研", "\(max(completed, steps.count)) research steps", language: language)
+        let stepCount: String
+        if hasFailure {
+            stepCount = completed > 0
+                ? localizedText("投研未完成（已执行 \(completed) 步）", "Research incomplete (\(completed) steps)", language: language)
+                : localizedText("未能完成投研", "Research could not complete", language: language)
+        } else {
+            stepCount = localizedText("已完成 \(max(completed, steps.count)) 步投研", "\(max(completed, steps.count)) research steps", language: language)
+        }
         if tags.isEmpty { return stepCount }
         return "\(stepCount)（\(tags.joined(separator: " · "))）"
     }
@@ -2136,9 +2184,9 @@ private struct AIReportResearchTraceDisclosure: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: hasFailure ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(PortfolixTheme.gainText)
+                        .foregroundStyle(hasFailure ? PortfolixTheme.warnText : PortfolixTheme.gainText)
                     Text(summaryText)
                         .font(PortfolixTypography.caption)
                         .foregroundStyle(PortfolixTheme.tertiary)
@@ -2318,7 +2366,7 @@ private struct AIReportChatReport: View {
 
             if !activitySteps.isEmpty {
                 AIReportUntimestampedAgentRow {
-                    AIReportResearchTraceDisclosure(steps: activitySteps, language: language)
+                    AIReportResearchTraceDisclosure(steps: activitySteps, isFailure: run.usedFallback, language: language)
                 }
             }
 

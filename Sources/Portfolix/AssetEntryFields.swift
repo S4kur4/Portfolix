@@ -45,7 +45,12 @@ struct AssetAdditionCopy {
     }
 
     var resultingQuantityTitle: String {
-        if isCash { return text(isExistingAsset ? "增持后现金余额" : "添加后现金余额", "Cash After Addition") }
+        if isCash {
+            return text(
+                isExistingAsset ? "增持后该账户余额" : "新建账户余额",
+                isExistingAsset ? "Account Balance After Addition" : "New Account Balance"
+            )
+        }
         return text(isExistingAsset ? "增持后份额" : "添加后份额", "Quantity After Addition")
     }
 

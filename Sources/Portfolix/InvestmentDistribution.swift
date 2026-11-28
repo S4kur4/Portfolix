@@ -313,7 +313,7 @@ enum HoldingShareEngine {
         var groups: [HoldingShareGroup] = []
         for position in sorted where covered < threshold {
             groups.append(HoldingShareGroup(
-                id: "holding_\(position.id.uuidString)", name: position.name,
+                id: "holding_\(position.id.uuidString)", name: position.localizedDisplayName(language: language),
                 amountCNY: position.marketValueCNY,
                 percentage: (position.marketValueCNY / total * 100).doubleValue
             ))

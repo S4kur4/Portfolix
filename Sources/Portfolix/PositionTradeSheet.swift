@@ -41,7 +41,7 @@ struct PositionTradeSheet: View {
                     LabeledContent(text("资产", "Asset")) {
                         PortfolixGlassMenuPicker(title: text("资产", "Asset"), selection: $assetSelection,
                             options: store.positions.filter { $0.category != .cash }.map(\.id),
-                            optionTitle: { id in store.positions.first { $0.id == id }?.name ?? "—" })
+                            optionTitle: { id in store.positions.first { $0.id == id }?.localizedDisplayName(language: store.appLanguage) ?? "—" })
                     }
                     LabeledContent(text("当前份额", "Current Quantity"), value: PositionClosureMath.string(asset.quantity))
                     LabeledContent(text("计价币种", "Quote Currency"), value: asset.quoteCurrency.rawValue)
@@ -74,7 +74,7 @@ struct PositionTradeSheet: View {
                 Section {
                     LabeledContent(text("收款账户", "Deposit To")) {
                         PortfolixGlassMenuPicker(title: text("收款账户", "Deposit To"), selection: $cashSelection, options: cashIDs,
-                            optionTitle: { id in cashOptions.first { $0.id.uuidString == id }?.name
+                            optionTitle: { id in cashOptions.first { $0.id.uuidString == id }?.localizedDisplayName(language: store.appLanguage)
                                 ?? text("新建 \(asset.quoteCurrency.rawValue) 现金", "New \(asset.quoteCurrency.rawValue) Cash") })
                     }
                     LabeledContent(text("卖出后剩余份额", "Remaining Quantity")) {
@@ -174,15 +174,15 @@ struct PositionTradeDetailSheet: View {
             Divider().overlay(PortfolixTheme.border)
             Form {
                 Section {
-                    LabeledContent(text("资产", "Asset"), value: "\(record.asset.name) · \(record.asset.symbol)")
-                    LabeledContent(text("交易类型", "Type"), value: record.side.title(language: store.appLanguage))
-                    LabeledContent(text("成交时间", "Trade Time"), value: record.effectiveAt.flatMap { PositionClosureMath.isoDate($0) }.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? record.tradeDate)
+                    LabeledContent(text("资产", "Asset"), value: "\(PositionClosureMath.localizedCashName(record.asset.name, currency: record.currency, language: store.appLanguage)) · \(record.asset.symbol)")
+                    LabeledContent(text("交易类型", "Type"), value: record.sideTitle(language: store.appLanguage))
+                    LabeledContent(text("成交时间", "Trade Time"), value: PositionTransactionRow.formatTradeTime(record))
                     LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
                     LabeledContent(text("成交份额", "Quantity"), value: record.quantity)
-                    LabeledContent(text("成交均价", "Trade Price"), value: formatMoney(record.price, currency: record.currency))
+                    LabeledContent(text("成交均价", "Trade Price"), value: formatUnitCost(record.price, currency: record.currency))
                     LabeledContent(text("手续费", "Fees"), value: formatMoney(record.fee, currency: record.currency))
                     LabeledContent(record.side == .sell ? text("实际到账", "Proceeds") : text("增持总成本", "Added Cost"), value: formatMoney(record.amount, currency: record.currency))
-                    LabeledContent(text("资金来源 / 去向", "Funding / Destination"), value: record.cash?.name ?? text("外部增持", "External Funds"))
+                    LabeledContent(text("资金来源 / 去向", "Funding / Destination"), value: record.cash.map { PositionClosureMath.localizedCashName($0.name, currency: record.currency, language: store.appLanguage) } ?? text("外部增持", "External Funds"))
                     LabeledContent(text("已实现盈亏", "Realized P&L"), value: record.realizedProfit.map { formatSignedMoney($0, currency: record.currency) } ?? "—")
                 }
             }.portfolixSheetForm()

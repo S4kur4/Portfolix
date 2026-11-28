@@ -49,8 +49,8 @@ struct InvestmentCloudItem: Identifiable {
 
     init(position: Position, dailyProfitCNY: Decimal) {
         id = "daily_profit_\(position.id.uuidString)"
-        titleChinese = position.name
-        titleEnglish = position.name
+        titleChinese = position.localizedDisplayName(language: .chinese)
+        titleEnglish = position.localizedDisplayName(language: .english)
         amountCNY = dailyProfitCNY
         marketValueCNY = position.marketValueCNY
         let baseValue = position.marketValueCNY - dailyProfitCNY

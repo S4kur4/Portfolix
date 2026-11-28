@@ -313,6 +313,21 @@ struct Position: Identifiable, Sendable {
         totalCost / quoteCurrency.rateFromCNY
     }
 
+    /// Localizes system-generated default cash names ("现金 CNY" / "Cash CNY") while
+    /// preserving any custom user-entered asset name verbatim.
+    func localizedDisplayName(language: AppLanguage) -> String {
+        guard category == .cash,
+              symbol.caseInsensitiveCompare(quoteCurrency.rawValue) == .orderedSame else {
+            return name
+        }
+        let chineseDefault = PositionClosureMath.cashName(quoteCurrency, language: .chinese)
+        let englishDefault = PositionClosureMath.cashName(quoteCurrency, language: .english)
+        if name == chineseDefault || name == englishDefault {
+            return PositionClosureMath.cashName(quoteCurrency, language: language)
+        }
+        return name
+    }
+
     var relativeUpdateText: String {
         relativeUpdateText(now: .now, language: .chinese)
     }
@@ -924,6 +939,7 @@ final class PortfolioStore {
     private(set) var isDemoMode = false
     var demoModeActionPrompt: DemoModeActionPrompt?
     @ObservationIgnored private var isApplyingDemoModeState = false
+    @ObservationIgnored private var isRollingBackBackgroundUpdates = false
     @ObservationIgnored private var savedRealState: SavedRealPortfolioState?
     var persistenceErrorMessage: String?
 
@@ -957,7 +973,9 @@ final class PortfolioStore {
         didSet {
             UserDefaults.standard.set(backgroundUpdatesEnabled, forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             persistAutomaticPriceUpdateSetting(resetSchedule: backgroundUpdatesEnabled)
-            configureLoginItem()
+            if !isRollingBackBackgroundUpdates {
+                configureLoginItem()
+            }
         }
     }
     var automaticPriceUpdateFrequency: AutomaticPriceUpdateFrequency = .hourly {
@@ -2052,6 +2070,7 @@ final class PortfolioStore {
     }
 
     func investmentCloudDailyProfitItems(asOf date: Date) -> [InvestmentCloudItem] {
+        guard todayProfitIsAvailable(asOf: date) else { return [] }
         let open = InvestmentCloudEngine.dailyProfitItems(positions: positions.filter { todayProfitIsAvailable(for: $0, asOf: date) }) { todayProfitCNY(for: $0, asOf: date) }
         let closed = activePositionClosures.filter { $0.tradeDate == PositionClosureMath.day(date) }.compactMap { record -> InvestmentCloudItem? in
             guard let position = try? record.holding.position() else { return nil }
@@ -2785,16 +2804,16 @@ final class PortfolioStore {
         let report = aiAnalysisReport
         guard aiConfiguration.isEnabled else {
             return (
-                localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: responseAppLanguage),
+                localizedText("请先启用 AI 资产分析并配置 DeepSeek API Key。", "Enable AI Asset Analysis and configure a DeepSeek API Key first.", language: appLanguage),
                 [],
                 nil,
-                AIModelUsageSummary(kind: "follow_up", calls: []),
-                false,
+                nil,
+                true,
                 []
             )
         }
-        if let configurationMessage = aiAPIConfigurationMessage(language: responseAppLanguage) {
-            return (configurationMessage, [], nil, AIModelUsageSummary(kind: "follow_up", calls: []), false, [])
+        if let configurationMessage = aiAPIConfigurationMessage(language: appLanguage) {
+            return (configurationMessage, [], nil, nil, true, [])
         }
 
         do {
@@ -4155,12 +4174,29 @@ final class PortfolioStore {
                 )
             }
         } catch {
-            persistenceErrorMessage = localizedText(
-                "自动获取最新价格后台组件配置失败：\(error.localizedDescription)",
-                "Automatic price update background component configuration failed: \(error.localizedDescription)",
-                language: appLanguage
+            if action == .register || action == .reregister, backgroundUpdatesEnabled {
+                isRollingBackBackgroundUpdates = true
+                backgroundUpdatesEnabled = false
+                isRollingBackBackgroundUpdates = false
+            }
+            persistenceErrorMessage = Self.localizedLoginItemErrorMessage(for: error, language: appLanguage)
+        }
+    }
+
+    private static func localizedLoginItemErrorMessage(for error: Error, language: AppLanguage) -> String {
+        let nsError = error as NSError
+        if nsError.code == Int(EPERM) || nsError.code == Int(EACCES) {
+            return localizedText(
+                "自动获取最新价格需要在「系统设置 → 通用 → 登录项与扩展」中允许 Portfolix 的后台更新组件。",
+                "Allow Portfolix's background updater in System Settings > General > Login Items & Extensions to enable automatic price updates.",
+                language: language
             )
         }
+        return localizedText(
+            "未能启用后台自动获取最新价格。请确认应用位于「应用程序」文件夹，并在「系统设置 → 通用 → 登录项与扩展」中允许 Portfolix；你仍可随时手动刷新行情。",
+            "Unable to enable automatic background price updates. Make sure Portfolix is in Applications and allowed in System Settings > General > Login Items & Extensions. You can still refresh quotes manually at any time.",
+            language: language
+        )
     }
 
     private static func unregisterLoginItem(_ service: SMAppService) async throws {

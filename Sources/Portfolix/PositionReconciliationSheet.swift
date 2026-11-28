@@ -37,6 +37,7 @@ private struct PositionReconciliationForm: View {
     @State private var note = ""
     @State private var errorMessage: String?
     @State private var isSaving = false
+    @State private var isZeroClearConfirmationPresented = false
 
     private var isCash: Bool { position.category == .cash }
     private func text(_ cn: String, _ en: String) -> String { localizedText(cn, en, language: store.appLanguage) }
@@ -117,6 +118,23 @@ private struct PositionReconciliationForm: View {
         .frame(width: 620, height: isCash ? 580 : 760)
         .background { PortfolixSheetBackground() }
         .interactiveDismissDisabled(isSaving)
+        .alert(
+            text("确认清零该持仓？", "Clear this holding to zero?"),
+            isPresented: $isZeroClearConfirmationPresented
+        ) {
+            Button(text("取消", "Cancel"), role: .cancel) {}
+            Button(text("确认清零", "Clear to Zero"), role: .destructive) {
+                let window = NSApp.keyWindow
+                Task { await save(committing: window, confirmedZeroClear: true) }
+            }
+        } message: {
+            Text(
+                text(
+                    "将「\(position.localizedDisplayName(language: store.appLanguage))」的实际份额校准为 0 后，该持仓会从当前持仓列表移除；操作记录中仍保留本次校准，可随时撤销。",
+                    "Setting \(position.localizedDisplayName(language: store.appLanguage)) to 0 removes it from active holdings. The reconciliation record stays in Activity and can be reversed."
+                )
+            )
+        }
         .onAppear {
             quantity = PositionClosureMath.string(position.quantity)
             cost = position.costIsKnown ? PositionClosureMath.string(position.totalCost) : ""
@@ -135,7 +153,7 @@ private struct PositionReconciliationForm: View {
         }
     }
 
-    private func save(committing window: NSWindow?) async {
+    private func save(committing window: NSWindow?, confirmedZeroClear: Bool = false) async {
         guard !isSaving else { return }
         isSaving = true
         defer { isSaving = false }
@@ -145,6 +163,10 @@ private struct PositionReconciliationForm: View {
         }
         do {
             guard let units = PositionClosureMath.decimal(quantity), units >= 0 else { throw PositionTradeError.invalidInput }
+            if units == 0, position.quantity > 0, !confirmedZeroClear {
+                isZeroClearConfirmationPresented = true
+                return
+            }
             let total: Decimal?
             if isCash || units == 0 { total = isCash ? units : 0 }
             else if costKnown {

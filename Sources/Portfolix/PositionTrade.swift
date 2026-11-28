@@ -65,6 +65,14 @@ struct PositionTradeRecord: Codable, Equatable, Sendable, Identifiable {
     var cashDelta: Decimal { side.usesCashAccount ? (side == .buy ? -amount : amount) : 0 }
     var accountIDs: Set<String> { Set([asset.id, cash?.id].compactMap { $0 }) }
     var realizedProfit: Decimal? { side == .sell && asset.costKnown != false ? amount - cost : nil }
+    var isCashAsset: Bool { AssetCategory(rawValue: asset.category) == .cash }
+
+    func sideTitle(language: AppLanguage) -> String {
+        if isCashAsset && (side == .add || side == .buy) {
+            return localizedText("存入", "Deposit", language: language)
+        }
+        return side.title(language: language)
+    }
 
     func remapping(_ ids: [String: String]) -> Self {
         Self(id: id, sequence: sequence, side: side,
@@ -321,6 +329,21 @@ struct PositionTransactionRow: Identifiable {
     @MainActor var recordedClockText: String { recordedAt.map(Self.clockFormatter.string(from:)) ?? "—" }
     @MainActor var recordedTimeText: String { "\(recordedDateText) \(recordedClockText)" }
 
+    func kindTitle(language: AppLanguage) -> String {
+        if let trade {
+            return trade.sideTitle(language: language)
+        }
+        return kind.title(language: language)
+    }
+
+    @MainActor static func formatTradeTime(_ record: PositionTradeRecord) -> String {
+        guard let effectiveAt = record.effectiveAt,
+              let date = recordedDate(effectiveAt) else {
+            return record.tradeDate
+        }
+        return tradeTimeFormatter.string(from: date)
+    }
+
     private static let isoLock = NSLock()
     private nonisolated(unsafe) static let isoFractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -337,6 +360,7 @@ struct PositionTransactionRow: Identifiable {
 
     @MainActor private static let dayFormatter = formatter("yyyy-MM-dd")
     @MainActor private static let clockFormatter = formatter("HH:mm:ss")
+    @MainActor private static let tradeTimeFormatter = formatter("yyyy-MM-dd HH:mm")
     private static func formatter(_ format: String) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

@@ -22,10 +22,10 @@ struct PositionClosureDetailSheet: View {
                     LabeledContent(text("资产代码", "Symbol"), value: record.holding.symbol)
                     LabeledContent(text("记录时间", "Record Time"), value: PositionTransactionRow(record).recordedTimeText)
                     LabeledContent(text("清仓数量", "Quantity"), value: record.holding.quantity)
-                    LabeledContent(text("成交均价", "Average Sale Price"), value: money(record.executionPrice))
+                    LabeledContent(text("成交均价", "Average Sale Price"), value: formatUnitCost(PositionClosureMath.decimal(record.executionPrice) ?? 0, currency: record.currency))
                     LabeledContent(text("手续费", "Fees"), value: money(record.fees))
                     LabeledContent(text("实际到账金额", "Net Proceeds"), value: money(record.netProceeds))
-                    LabeledContent(text("资金去向", "Deposit To"), value: record.cashName)
+                    LabeledContent(text("资金去向", "Deposit To"), value: PositionClosureMath.localizedCashName(record.cashName, currency: record.currency, language: store.appLanguage))
                     LabeledContent(text("已实现盈亏", "Realized P&L")) {
                         Text(formatSignedMoney(record.realizedProfit, currency: record.currency))
                             .foregroundStyle(PortfolixTheme.performanceColor(for: record.realizedProfit, scheme: store.performanceColorScheme))

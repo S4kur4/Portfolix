@@ -215,6 +215,13 @@ enum PositionClosureMath {
         localizedText("现金 \(currency.rawValue)", "Cash \(currency.rawValue)", language: language)
     }
 
+    static func localizedCashName(_ rawName: String, currency: DisplayCurrency, language: AppLanguage) -> String {
+        if rawName == cashName(currency, language: .chinese) || rawName == cashName(currency, language: .english) {
+            return cashName(currency, language: language)
+        }
+        return rawName
+    }
+
     static func cashPosition(id: UUID = UUID(), currency: DisplayCurrency, quantity: Decimal, name: String, symbol: String? = nil) -> Position {
         Position(id: id, name: name, symbol: symbol ?? currency.rawValue, category: .cash,
             quoteCurrency: currency, quantity: quantity, totalCost: quantity, averageCost: 1,

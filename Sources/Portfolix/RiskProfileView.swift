@@ -1246,8 +1246,8 @@ private struct RiskGuardrailRow: View {
             let excess = actualValue - value
             if let deviationAmountText {
                 return localizedText(
-                    "超限 +\(String(format: "%.1f", excess))% · \(deviationAmountText)",
-                    "+\(String(format: "%.1f", excess))% over · \(deviationAmountText)",
+                    "超限 +\(String(format: "%.1f", excess))% · 超出\(deviationAmountText)",
+                    "+\(String(format: "%.1f", excess))% over · \(deviationAmountText) excess",
                     language: language
                 )
             }

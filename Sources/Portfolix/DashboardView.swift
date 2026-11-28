@@ -1906,19 +1906,21 @@ private struct CompactPositionRow: View {
         let convertedTodayProfit = store.converted(todayProfit)
         let todayProfitText = formattedTodayProfitText(todayProfit: todayProfit, converted: convertedTodayProfit)
 
+        let displayName = position.localizedDisplayName(language: store.appLanguage)
+
         HStack(spacing: PrimaryPositionColumnWidths.columnSpacing) {
             HStack(spacing: PortfolixSpacing.sm) {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(position.category.assetClass.pale)
                     .frame(width: 28, height: 28)
                     .overlay {
-                        Text(String(position.name.prefix(1)))
+                        Text(String(displayName.prefix(1)))
                             .font(PortfolixTypography.captionEmphasis)
                             .foregroundStyle(PortfolixTheme.classOnPale)
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(position.name)
+                    Text(displayName)
                         .font(PortfolixTypography.bodyEmphasis)
                         .foregroundStyle(PortfolixTheme.text)
                         .lineLimit(1)

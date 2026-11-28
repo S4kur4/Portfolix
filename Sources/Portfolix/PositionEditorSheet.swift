@@ -144,7 +144,7 @@ struct PositionEditorSheet: View {
             AssetEntryFieldLabel(
                 title: title,
                 isInvalid: shouldHighlight(field),
-                showsRequiredIndicator: !isLocked && field != .fees
+                showsRequiredIndicator: !isLocked && field != .fees && !(usesFixedCashPricing && field == .symbol)
             )
         }
     }
@@ -163,7 +163,7 @@ struct PositionEditorSheet: View {
                     PortfolixGlassMenuPicker(title: sheetText("资产", "Asset"), selection: $purchaseAssetID,
                         options: [""] + store.positions.map { $0.id.uuidString },
                         optionTitle: { id in
-                            store.positions.first { $0.id.uuidString == id }?.name
+                            store.positions.first { $0.id.uuidString == id }?.localizedDisplayName(language: language)
                                 ?? sheetText("新资产", "New Asset")
                         })
                 }
@@ -252,11 +252,16 @@ struct PositionEditorSheet: View {
                                 .font(PortfolixTypography.labelEmphasis)
                                 .foregroundStyle(PortfolixTheme.tertiary)
 
-                            ForEach(assetCandidates) { candidate in
-                                AssetCandidateButton(candidate: candidate, language: language) {
-                                    selectAssetCandidate(candidate)
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: PortfolixSpacing.xs) {
+                                    ForEach(assetCandidates) { candidate in
+                                        AssetCandidateButton(candidate: candidate, language: language) {
+                                            selectAssetCandidate(candidate)
+                                        }
+                                    }
                                 }
                             }
+                            .frame(maxHeight: 152)
                         }
                         .padding(.vertical, PortfolixSpacing.xs)
                     }
@@ -327,7 +332,7 @@ struct PositionEditorSheet: View {
                             LabeledContent(sheetText("资金来源", "Funding Source")) {
                                 PortfolixGlassMenuPicker(title: sheetText("资金来源", "Funding Source"), selection: $purchaseCashID,
                                     options: [""] + purchaseCashOptions.map { $0.id.uuidString },
-                                    optionTitle: { id in purchaseCashOptions.first { $0.id.uuidString == id }?.name ?? additionCopy.externalFundsTitle })
+                                    optionTitle: { id in purchaseCashOptions.first { $0.id.uuidString == id }?.localizedDisplayName(language: language) ?? additionCopy.externalFundsTitle })
                             }
                         }
                         LabeledContent(additionCopy.resultingQuantityTitle) {
@@ -352,8 +357,18 @@ struct PositionEditorSheet: View {
             .onDisappear {
                 assetLookupTask?.cancel()
             }
-            .onAppear { if usesFixedCashPricing { applyFixedCashPricing() } }
-            .onChange(of: costCurrency) { _, _ in purchaseCashID = "" }
+            .onAppear {
+                if usesFixedCashPricing {
+                    applyFixedCashPricing()
+                    autofillCashSymbolIfNeeded()
+                }
+            }
+            .onChange(of: costCurrency) { _, _ in
+                purchaseCashID = ""
+                if usesFixedCashPricing && !locksAssetIdentity {
+                    autofillCashSymbolIfNeeded(replacingDefaultCurrencyCode: true)
+                }
+            }
             .onChange(of: purchaseCashID) { _, _ in validationMessage = nil }
             .onChange(of: purchaseFees) { _, _ in validationMessage = nil }
 
@@ -392,14 +407,18 @@ struct PositionEditorSheet: View {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             fields.insert(.name)
         }
-        if symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !usesFixedCashPricing, symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             fields.insert(.symbol)
         }
         if decimalValue(quantity).map({ $0 > 0 }) != true {
             fields.insert(.quantity)
         }
-        if !usesFixedCashPricing, decimalValue(costValue).map({ $0 >= 0 }) != true {
-            fields.insert(.cost)
+        if !usesFixedCashPricing {
+            let requiresPositiveManualCost = isManualAssetEntry && !locksAssetIdentity
+            let costValid = decimalValue(costValue).map { requiresPositiveManualCost ? $0 > 0 : $0 >= 0 } == true
+            if !costValid {
+                fields.insert(.cost)
+            }
         }
         if !usesFixedCashPricing, PositionTradeInput.fees(purchaseFees).map({ $0 >= 0 }) != true {
             fields.insert(.fees)
@@ -472,6 +491,7 @@ struct PositionEditorSheet: View {
         }
         if usesFixedCashPricing {
             applyFixedCashPricing()
+            autofillCashSymbolIfNeeded()
         }
         guard
             canSave,
@@ -483,7 +503,10 @@ struct PositionEditorSheet: View {
             case .name: validationMessage = sheetText("请填写资产名称。", "Enter an asset name.")
             case .symbol: validationMessage = sheetText("请填写资产代码。", "Enter an asset code.")
             case .quantity: validationMessage = sheetText("\(additionCopy.quantityTitle)必须大于 0。", "Enter a quantity or amount greater than 0.")
-            case .cost: validationMessage = sheetText("成本须为 0 或正数。", "Cost must be zero or positive.")
+            case .cost:
+                validationMessage = (isManualAssetEntry && !locksAssetIdentity)
+                    ? sheetText("手动录入资产时，成本须大于 0。", "Cost must be greater than 0 for manual holdings.")
+                    : sheetText("成本须为 0 或正数。", "Cost must be zero or positive.")
             case .fees: validationMessage = sheetText("手续费须为 0 或正数。", "Fees must be zero or positive.")
             case nil: validationMessage = sheetText("资产类别或币种与数据源不一致，请重新选择资产。", "The asset type or currency does not match its data source. Select the asset again.")
             }
@@ -659,8 +682,36 @@ struct PositionEditorSheet: View {
         costCurrency = defaultCurrency(for: category)
         if usesFixedCashPricing {
             applyFixedCashPricing()
+            autofillCashSymbolIfNeeded(replacingDefaultCurrencyCode: true)
         }
         scheduleAssetSearch(for: preferredAssetLookupQuery)
+    }
+
+    private func autofillCashSymbolIfNeeded(replacingDefaultCurrencyCode: Bool = false) {
+        guard usesFixedCashPricing, !locksAssetIdentity else { return }
+        let trimmed = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isDefaultCurrencySymbol = DisplayCurrency.allCases.contains {
+            trimmed.caseInsensitiveCompare($0.rawValue) == .orderedSame
+                || trimmed.uppercased().hasPrefix("CASH-\($0.rawValue)")
+        }
+        guard trimmed.isEmpty || (replacingDefaultCurrencyCode && isDefaultCurrencySymbol) else { return }
+        let existingCashSymbols = Set(
+            store.positions
+                .filter { $0.category == .cash }
+                .map { $0.symbol.uppercased() }
+        )
+        let preferred = costCurrency.rawValue
+        if !existingCashSymbols.contains(preferred) {
+            symbol = preferred
+            return
+        }
+        var candidate = "CASH-\(preferred)"
+        var suffix = 2
+        while existingCashSymbols.contains(candidate) {
+            candidate = "CASH-\(preferred)-\(suffix)"
+            suffix += 1
+        }
+        symbol = candidate
     }
 
     private func applyFixedCashPricing() {
@@ -840,6 +891,7 @@ struct PositionEditorSheet: View {
         isManualAssetEntry = true
         if usesFixedCashPricing {
             applyFixedCashPricing()
+            autofillCashSymbolIfNeeded()
         }
     }
 
