@@ -3957,12 +3957,13 @@ struct SettingsView: View {
                         ),
                         helpPlacement: .trailing
                     ) {
-                        HStack(spacing: PortfolixSpacing.md) {
+                        HStack(spacing: PortfolixSpacing.sm) {
                             if store.isDemoMode {
-                                Text(settingsText("演示模式下不可导出", "Unavailable in Demo Mode"))
-                                    .font(PortfolixTypography.caption)
-                                    .foregroundStyle(PortfolixTheme.tertiary)
-                                    .lineLimit(1)
+                                PortfolixInlineStatusLabel(
+                                    title: settingsText("演示模式下不可导出", "Unavailable in Demo Mode"),
+                                    symbol: "minus.circle.fill",
+                                    color: PortfolixTheme.tertiary
+                                )
                             } else {
                                 DataTransferInlineStatusView(status: exportStatus)
                             }
@@ -3973,7 +3974,7 @@ struct SettingsView: View {
                     }
                     SettingsDivider()
                     SettingsRow(title: settingsText("恢复备份", "Restore Backup")) {
-                        HStack(spacing: PortfolixSpacing.md) {
+                        HStack(spacing: PortfolixSpacing.sm) {
                             DataTransferInlineStatusView(status: importStatus)
                             Button(settingsText("选择文件", "Choose File"), action: chooseDataImport)
                                 .buttonStyle(QuietButtonStyle())
