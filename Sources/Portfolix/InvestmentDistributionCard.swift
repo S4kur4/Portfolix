@@ -38,9 +38,9 @@ struct InvestmentCloudCard: View {
         let rawItems: [InvestmentCloudItem] = mode == .dailyProfit
             ? store.investmentCloudDailyProfitItems(asOf: date)
             : store.investmentDistributionItems.map(InvestmentCloudItem.init(distribution:))
-        let weight: (InvestmentCloudItem) -> Double = mode == .dailyProfit
-            ? { $0.marketValueCNY?.doubleValue ?? 0 }
-            : { $0.distributionPercentage ?? $0.areaWeight }
+        let weight: (InvestmentCloudItem) -> Double = {
+            InvestmentCloudEngine.displayWeight(for: $0, mode: mode)
+        }
         let prepared = InvestmentCloudEngine.displayItems(
             rawItems,
             minimumShare: 0.02,

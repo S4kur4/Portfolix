@@ -71,4 +71,80 @@ struct InvestmentCloudDisplayItemsTests {
 
         #expect(prepared.map(\.id) == ["value"])
     }
+
+    @Test func dailyProfitModeWeightsTilesByAbsoluteProfitMagnitudeRatherThanMarketValue() {
+        let largeBondTinyLoss = Position(
+            id: UUID(),
+            name: "中短债基金",
+            symbol: "000001",
+            category: .fund,
+            quoteCurrency: .cny,
+            quantity: 500_000,
+            totalCost: 500_000,
+            averageCost: 1,
+            latestPrice: 1,
+            marketValueCNY: 500_000,
+            profitRate: 0,
+            weeklyTrend: [],
+            source: "Fund",
+            quoteTime: "2026-11-27",
+            freshness: .updated
+        )
+        let smallEquityBigGain = Position(
+            id: UUID(),
+            name: "科技ETF",
+            symbol: "515000",
+            category: .fund,
+            quoteCurrency: .cny,
+            quantity: 10_000,
+            totalCost: 40_000,
+            averageCost: 4,
+            latestPrice: 5,
+            marketValueCNY: 50_000,
+            profitRate: 25,
+            weeklyTrend: [],
+            source: "Fund",
+            quoteTime: "2026-11-27",
+            freshness: .updated
+        )
+        let cryptoBigLoss = Position(
+            id: UUID(),
+            name: "BTC",
+            symbol: "BTC/USDT",
+            category: .crypto,
+            quoteCurrency: .usdt,
+            quantity: 0.2,
+            totalCost: 15_000,
+            averageCost: 75_000,
+            latestPrice: 70_000,
+            marketValueCNY: 100_000,
+            profitRate: -6.67,
+            weeklyTrend: [],
+            source: "OKX",
+            quoteTime: "2026-11-27",
+            freshness: .updated
+        )
+
+        let rawItems = [
+            InvestmentCloudItem(position: largeBondTinyLoss, dailyProfitCNY: Decimal(string: "-69.72")!),
+            InvestmentCloudItem(position: smallEquityBigGain, dailyProfitCNY: Decimal(string: "12500.00")!),
+            InvestmentCloudItem(position: cryptoBigLoss, dailyProfitCNY: Decimal(string: "-2382.39")!),
+        ]
+        let weight: (InvestmentCloudItem) -> Double = {
+            InvestmentCloudEngine.displayWeight(for: $0, mode: .dailyProfit)
+        }
+        let prepared = InvestmentCloudEngine.displayItems(
+            rawItems,
+            minimumShare: 0.02,
+            maximumItems: 12,
+            weight: weight
+        )
+
+        #expect(prepared.count == 3)
+        #expect(prepared[0].titleChinese == "科技ETF")
+        #expect(prepared[1].titleChinese == "BTC")
+        #expect(prepared[2].isAggregated == true)
+        #expect(weight(prepared[0]) > weight(prepared[1]))
+        #expect(weight(prepared[1]) > weight(prepared[2]))
+    }
 }

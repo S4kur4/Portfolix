@@ -104,6 +104,18 @@ struct InvestmentCloudItem: Identifiable {
 }
 
 enum InvestmentCloudEngine {
+    static func displayWeight(
+        for item: InvestmentCloudItem,
+        mode: InvestmentCloudMode
+    ) -> Double {
+        switch mode {
+        case .dailyProfit:
+            item.areaWeight
+        case .distribution:
+            item.distributionPercentage ?? item.areaWeight
+        }
+    }
+
     static func dailyProfitItems(
         positions: [Position], profitForPosition: (Position) -> Decimal
     ) -> [InvestmentCloudItem] {
