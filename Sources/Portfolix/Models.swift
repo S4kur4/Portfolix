@@ -871,6 +871,9 @@ final class PortfolioStore {
         didSet {
             UserDefaults.standard.set(appLanguage.rawValue, forKey: Self.appLanguageDefaultsKey)
             persistAppSetting(key: "app_language", value: appLanguage.rawValue)
+            if isDemoMode {
+                applyDemoDataset(language: appLanguage)
+            }
         }
     }
     var isRefreshing = false
@@ -898,6 +901,7 @@ final class PortfolioStore {
     var riskProfileVersion = 0
     var riskProfileUpdatedAt: Date = Date() {
         didSet {
+            guard !isApplyingDemoModeState else { return }
             UserDefaults.standard.set(riskProfileUpdatedAt, forKey: Self.riskProfileUpdatedAtDefaultsKey)
             persistAppSetting(
                 key: "risk_profile_updated_at",
@@ -917,7 +921,38 @@ final class PortfolioStore {
     var riskReviewCadenceMonths = 6
     var unsavedRiskProfileDraft: RiskProfileDraft? = nil
     var pendingSidebarSelection: SidebarSection? = nil
+    private(set) var isDemoMode = false
+    var demoModeActionPrompt: DemoModeActionPrompt?
+    @ObservationIgnored private var isApplyingDemoModeState = false
+    @ObservationIgnored private var savedRealState: SavedRealPortfolioState?
     var persistenceErrorMessage: String?
+
+    private struct SavedRealPortfolioState {
+        let positions: [Position]
+        let snapshotHistory: [PortfolioSnapshot]
+        let dailyProfitHistory: [DailyProfitPoint]
+        let positionClosures: [PositionClosureRecord]
+        let positionTrades: [PositionTradeRecord]
+        let positionOpeningBalances: [PositionOpeningBalanceRecord]
+        let starterPositionIDs: Set<UUID>
+        let positionReconciliations: [PositionReconciliationRecord]
+        let tradeProfitByDate: [String: [String: Decimal]]
+        let aiInvestmentDistribution: AIInvestmentDistribution?
+        let riskLevel: String
+        let riskProfileConfigured: Bool
+        let riskProfileVersion: Int
+        let riskProfileUpdatedAt: Date
+        let cryptoLimit: Double
+        let positionLimit: Double
+        let riskAssetLimit: Double
+        let foreignCurrencyLimit: Double
+        let liquidityMinimum: Double
+        let riskInvestmentGoal: String
+        let riskInvestmentHorizon: String
+        let riskInvestmentExperience: String
+        let riskDrawdownTolerance: String
+        let riskReviewCadenceMonths: Int
+    }
     var backgroundUpdatesEnabled: Bool {
         didSet {
             UserDefaults.standard.set(backgroundUpdatesEnabled, forKey: Self.backgroundUpdatesEnabledDefaultsKey)
@@ -1165,11 +1200,13 @@ final class PortfolioStore {
         credentialStore: ProviderCredentialStoring? = nil,
         aiAgent: AIAnalysisAgent? = nil,
         initialLanguage: AppLanguage? = nil,
-        marketDataProvider: any AssetMarketDataProviding = MarketDataAdapter.shared
+        marketDataProvider: any AssetMarketDataProviding = MarketDataAdapter.shared,
+        resolveInitialDemoMode: Bool? = nil
     ) {
         self.marketDataProvider = marketDataProvider
         usesLegacyAIReportCache = positionRepository == nil
         let managesSystemBackgroundUpdates = positionRepository == nil && !Self.shouldSkipLaunchRefresh
+        let shouldResolveInitialDemoMode = resolveInitialDemoMode ?? (positionRepository == nil)
         backgroundUpdatesEnabled = managesSystemBackgroundUpdates
             ? UserDefaults.standard.bool(forKey: Self.backgroundUpdatesEnabledDefaultsKey)
             : false
@@ -1184,12 +1221,12 @@ final class PortfolioStore {
         var loadedSnapshots: [PortfolioSnapshot] = []
         var loadedDailyProfitHistory: [DailyProfitPoint] = []
         var loadedChatItems: [AIReportChatItem] = []
+        var initialDemoModeEnabled = false
         do {
             let repository = try positionRepository ?? PositionRepository()
-            if positionRepository == nil {
-                try repository.initializeStarterPortfolioIfNeeded(language: resolvedLanguage)
-            } else {
-                try repository.migrateOpeningBalances()
+            try repository.migrateOpeningBalances()
+            if shouldResolveInitialDemoMode {
+                initialDemoModeEnabled = try repository.resolveInitialDemoModeEnabled()
             }
             positions = try repository.fetchPositions()
             loadedSnapshots = try repository.fetchPortfolioSnapshots()
@@ -1259,6 +1296,247 @@ final class PortfolioStore {
             persistAutomaticPriceUpdateSetting()
             configureLoginItem()
             observeBackgroundPriceUpdates()
+        }
+        if initialDemoModeEnabled {
+            enterDemoMode(persistSetting: false)
+        }
+    }
+
+    var hasRealLedgerData: Bool {
+        if let positionRepository, let hasData = try? positionRepository.hasRealLedgerData() {
+            return hasData
+        }
+        if isDemoMode {
+            return !(savedRealState?.positions.isEmpty ?? true)
+                || !(savedRealState?.snapshotHistory.isEmpty ?? true)
+        }
+        return !positions.isEmpty || !snapshotHistory.isEmpty
+    }
+
+    func setDemoModeEnabled(_ enabled: Bool) {
+        guard enabled != isDemoMode else { return }
+        if enabled {
+            enterDemoMode(persistSetting: true)
+        } else {
+            exitDemoMode(persistSetting: true)
+        }
+    }
+
+    @discardableResult
+    func requireLiveModeIfNeeded(for action: DemoModeBlockedAction) -> Bool {
+        guard isDemoMode else { return true }
+        let isEnglish = appLanguage == .english
+        let hasReal = hasRealLedgerData
+        let title = isEnglish ? "Demo Mode Is Active" : "当前处于演示模式"
+        let message: String
+        let confirmTitle: String
+        let followUp: DemoModeActionPrompt.FollowUp
+
+        switch action {
+        case .addAsset:
+            if hasReal {
+                message = isEnglish
+                    ? "You are viewing the built-in 30-day demo portfolio. Actions in Demo Mode never modify your real holdings. Turn off Demo Mode to add a real asset to your ledger."
+                    : "当前展示的是内置 30 天演示组合，演示模式下的操作不会修改你的真实资产。如需添加真实持仓，请先关闭演示模式。"
+            } else {
+                message = isEnglish
+                    ? "You are viewing the built-in 30-day demo portfolio. Actions in Demo Mode never modify your real ledger. Turn off Demo Mode to start recording your own holdings — charts and the P&L calendar will build from your first real entry."
+                    : "当前展示的是内置 30 天演示组合，操作不会修改真实账本。关闭演示模式后，即可开始记录你的真实资产（走势与盈亏日历将从首笔真实记录开始累积）。"
+            }
+            confirmTitle = isEnglish ? "Turn Off Demo & Add Asset" : "关闭演示模式并添加资产"
+            followUp = .openNewPositionEditor
+
+        case .modifyHolding:
+            message = isEnglish
+                ? "You are viewing the built-in 30-day demo portfolio. Demo holdings are read-only and never modify your real assets. Turn off Demo Mode to manage your own ledger."
+                : "当前展示的是内置 30 天演示组合，演示持仓仅用于浏览，不会修改你的真实资产。如需管理个人持仓，请先关闭演示模式。"
+            confirmTitle = isEnglish ? "Turn Off Demo Mode" : "关闭演示模式"
+            followUp = .none
+
+        case .saveRiskProfile:
+            message = isEnglish
+                ? "Adjustments in Demo Mode are for preview only and will not change your real risk profile. Turn off Demo Mode to save your own risk guardrails."
+                : "演示模式下的风险偏好调整仅用于实时预览，不会修改你的真实配置。如需保存个人护栏设置，请先关闭演示模式。"
+            confirmTitle = isEnglish ? "Turn Off Demo Mode" : "关闭演示模式"
+            followUp = .none
+
+        case .aiInsights:
+            message = isEnglish
+                ? "AI Insights is unavailable in Demo Mode so demo holdings do not pollute your real analysis history or memory. Turn off Demo Mode to analyze your own portfolio."
+                : "为避免演示持仓污染你的真实投研记录与长期记忆，演示模式下暂不支持发起 AI 投研。请先关闭演示模式。"
+            confirmTitle = isEnglish ? "Turn Off Demo Mode" : "关闭演示模式"
+            followUp = .none
+
+        case .refreshQuotes:
+            message = isEnglish
+                ? "Demo Mode uses a built-in 30-day simulated dataset and does not fetch live market quotes. Turn off Demo Mode to sync live prices for your real holdings."
+                : "当前处于演示模式，使用内置 30 天模拟行情，不会同步实时报价。关闭演示模式后将为你的真实持仓自动同步实时行情。"
+            confirmTitle = isEnglish ? "Turn Off Demo Mode" : "关闭演示模式"
+            followUp = .none
+        }
+
+        demoModeActionPrompt = DemoModeActionPrompt(
+            title: title,
+            message: message,
+            confirmTitle: confirmTitle,
+            followUp: followUp
+        )
+        return false
+    }
+
+    func confirmExitDemoModeAction() {
+        let followUp = demoModeActionPrompt?.followUp ?? .none
+        demoModeActionPrompt = nil
+        setDemoModeEnabled(false)
+        if followUp == .openNewPositionEditor {
+            positionEditorPresentation = PositionEditorPresentation(position: nil)
+        }
+    }
+
+    func dismissDemoModeActionPrompt() {
+        demoModeActionPrompt = nil
+    }
+
+    private func enterDemoMode(persistSetting: Bool) {
+        cancelInvestmentDistributionUpdate()
+        if savedRealState == nil {
+            savedRealState = SavedRealPortfolioState(
+                positions: positions,
+                snapshotHistory: snapshotHistory,
+                dailyProfitHistory: dailyProfitHistory,
+                positionClosures: positionClosures,
+                positionTrades: positionTrades,
+                positionOpeningBalances: positionOpeningBalances,
+                starterPositionIDs: starterPositionIDs,
+                positionReconciliations: positionReconciliations,
+                tradeProfitByDate: tradeProfitByDate,
+                aiInvestmentDistribution: aiInvestmentDistribution,
+                riskLevel: riskLevel,
+                riskProfileConfigured: riskProfileConfigured,
+                riskProfileVersion: riskProfileVersion,
+                riskProfileUpdatedAt: riskProfileUpdatedAt,
+                cryptoLimit: cryptoLimit,
+                positionLimit: positionLimit,
+                riskAssetLimit: riskAssetLimit,
+                foreignCurrencyLimit: foreignCurrencyLimit,
+                liquidityMinimum: liquidityMinimum,
+                riskInvestmentGoal: riskInvestmentGoal,
+                riskInvestmentHorizon: riskInvestmentHorizon,
+                riskInvestmentExperience: riskInvestmentExperience,
+                riskDrawdownTolerance: riskDrawdownTolerance,
+                riskReviewCadenceMonths: riskReviewCadenceMonths
+            )
+        }
+        isDemoMode = true
+        selectedPositionID = nil
+        unsavedRiskProfileDraft = nil
+        applyDemoDataset(language: appLanguage)
+        if persistSetting {
+            persistAppSetting(key: DemoPortfolio.enabledKey, value: "true")
+            if (try? positionRepository?.appSetting(for: DemoPortfolio.stateKey)) == "pending" {
+                persistAppSetting(key: DemoPortfolio.stateKey, value: "initialized")
+            }
+        }
+    }
+
+    private func applyDemoDataset(language: AppLanguage, now: Date = .now) {
+        let dataset = DemoPortfolio.build(language: language, now: now)
+        isApplyingDemoModeState = true
+        defer { isApplyingDemoModeState = false }
+        positions = dataset.positions
+        snapshotHistory = dataset.snapshotHistory
+        dailyProfitHistory = dataset.dailyProfitHistory
+        positionClosures = []
+        positionTrades = []
+        positionOpeningBalances = []
+        starterPositionIDs = []
+        positionReconciliations = []
+        tradeProfitByDate = [:]
+        aiInvestmentDistribution = nil
+        let draft = dataset.riskProfileDraft
+        riskLevel = draft.tier.rawValue
+        riskProfileConfigured = true
+        riskProfileVersion = 1
+        riskProfileUpdatedAt = dataset.riskProfileUpdatedAt
+        positionLimit = draft.positionLimit
+        riskAssetLimit = draft.riskAssetLimit
+        cryptoLimit = draft.cryptoLimit
+        foreignCurrencyLimit = draft.foreignCurrencyLimit
+        liquidityMinimum = draft.liquidityMinimum
+        riskInvestmentGoal = draft.investmentGoal.rawValue
+        riskInvestmentHorizon = draft.investmentHorizon.rawValue
+        riskInvestmentExperience = draft.investmentExperience.rawValue
+        riskDrawdownTolerance = draft.drawdownToleranceLabel
+        riskReviewCadenceMonths = draft.reviewCadence.rawValue
+    }
+
+    private func exitDemoMode(persistSetting: Bool) {
+        isDemoMode = false
+        selectedPositionID = nil
+        unsavedRiskProfileDraft = nil
+        if persistSetting {
+            persistAppSetting(key: DemoPortfolio.enabledKey, value: "false")
+            persistAppSetting(key: DemoPortfolio.stateKey, value: "completed")
+        }
+        restoreRealPortfolioState()
+    }
+
+    private func restoreRealPortfolioState() {
+        isApplyingDemoModeState = true
+        defer {
+            isApplyingDemoModeState = false
+            savedRealState = nil
+        }
+
+        if let positionRepository {
+            positions = (try? positionRepository.fetchPositions()) ?? []
+            snapshotHistory = (try? positionRepository.fetchPortfolioSnapshots()) ?? []
+            dailyProfitHistory = (try? positionRepository.fetchDailyProfitPoints()) ?? []
+            positionClosures = (try? positionRepository.fetchPositionClosures()) ?? []
+            positionTrades = (try? positionRepository.fetchPositionTrades()) ?? []
+            positionOpeningBalances = (try? positionRepository.fetchOpeningBalances()) ?? []
+            starterPositionIDs = (try? positionRepository.starterPositionIDs()) ?? []
+            tradeProfitByDate = (try? positionRepository.tradeDailyProfitAdjustments()) ?? [:]
+            positionReconciliations = (try? positionRepository.fetchReconciliations()) ?? []
+            if let json = try? positionRepository.appSetting(for: InvestmentDistributionEngine.cacheKey),
+               json.utf8.count <= 10_000_000, let data = json.data(using: .utf8) {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                aiInvestmentDistribution = try? decoder.decode(AIInvestmentDistribution.self, from: data)
+            } else {
+                aiInvestmentDistribution = nil
+            }
+            if let backup = savedRealState {
+                riskProfileUpdatedAt = backup.riskProfileUpdatedAt
+            } else {
+                riskProfileUpdatedAt = Self.savedRiskProfileUpdatedAt()
+            }
+            loadRiskProfileSettings(from: positionRepository)
+        } else if let backup = savedRealState {
+            positions = backup.positions
+            snapshotHistory = backup.snapshotHistory
+            dailyProfitHistory = backup.dailyProfitHistory
+            positionClosures = backup.positionClosures
+            positionTrades = backup.positionTrades
+            positionOpeningBalances = backup.positionOpeningBalances
+            starterPositionIDs = backup.starterPositionIDs
+            positionReconciliations = backup.positionReconciliations
+            tradeProfitByDate = backup.tradeProfitByDate
+            aiInvestmentDistribution = backup.aiInvestmentDistribution
+            riskLevel = backup.riskLevel
+            riskProfileConfigured = backup.riskProfileConfigured
+            riskProfileVersion = backup.riskProfileVersion
+            riskProfileUpdatedAt = backup.riskProfileUpdatedAt
+            cryptoLimit = backup.cryptoLimit
+            positionLimit = backup.positionLimit
+            riskAssetLimit = backup.riskAssetLimit
+            foreignCurrencyLimit = backup.foreignCurrencyLimit
+            liquidityMinimum = backup.liquidityMinimum
+            riskInvestmentGoal = backup.riskInvestmentGoal
+            riskInvestmentHorizon = backup.riskInvestmentHorizon
+            riskInvestmentExperience = backup.riskInvestmentExperience
+            riskDrawdownTolerance = backup.riskDrawdownTolerance
+            riskReviewCadenceMonths = backup.riskReviewCadenceMonths
         }
     }
 
@@ -1443,6 +1721,15 @@ final class PortfolioStore {
     }
 
     func exportFinancialData(to url: URL) throws -> PortfolixDataTransferSummary {
+        guard !isDemoMode else {
+            throw PositionRepositoryError.database(
+                localizedText(
+                    "演示模式下无法导出备份，请先在「设置 → 数据管理」中关闭演示模式。",
+                    "Backup export is unavailable in Demo Mode. Turn off Demo Mode in Settings → Data Management first.",
+                    language: appLanguage
+                )
+            )
+        }
         guard let positionRepository else {
             throw PositionRepositoryError.database("当前未连接到可用的本地数据库")
         }
@@ -1475,6 +1762,10 @@ final class PortfolioStore {
             throw PositionRepositoryError.database("当前未连接到可用的本地数据库")
         }
         let summary = try positionRepository.importDataPayload(preparedImport.payload)
+        isDemoMode = false
+        savedRealState = nil
+        selectedPositionID = nil
+        unsavedRiskProfileDraft = nil
         positions = try positionRepository.fetchPositions()
         positionClosures = try positionRepository.fetchPositionClosures()
         positionTrades = try positionRepository.fetchPositionTrades()
@@ -1493,10 +1784,12 @@ final class PortfolioStore {
     }
 
     func presentNewPositionEditor() {
+        guard requireLiveModeIfNeeded(for: .addAsset) else { return }
         positionEditorPresentation = PositionEditorPresentation(position: nil)
     }
 
     func presentPositionEditor(for positionID: Position.ID) {
+        guard requireLiveModeIfNeeded(for: .modifyHolding) else { return }
         guard let position = positions.first(where: { $0.id == positionID }) else { return }
         positionEditorPresentation = PositionEditorPresentation(position: position)
     }
@@ -1895,11 +2188,12 @@ final class PortfolioStore {
     }
 
     func refresh() {
+        guard requireLiveModeIfNeeded(for: .refreshQuotes) else { return }
         Task { await refreshLatestPrices() }
     }
 
     func refreshPricesOnLaunchIfNeeded() async {
-        guard !Self.shouldSkipLaunchRefresh, positionRepository != nil,
+        guard !isDemoMode, !Self.shouldSkipLaunchRefresh, positionRepository != nil,
               !hasRequestedLaunchPriceRefresh else { return }
         // Shared by all windows for this process, never persisted across launches.
         // Use the normal refresh path without changing any background schedule settings.
@@ -2024,6 +2318,7 @@ final class PortfolioStore {
     }
 
     func generateAIAnalysis(trigger: AIAnalysisTrigger = .manual) {
+        guard requireLiveModeIfNeeded(for: .aiInsights) else { return }
         guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else { return }
         if case .running = aiAnalysisRun.status { return }
         pruneAIAnalysisChatHistory()
@@ -2049,6 +2344,7 @@ final class PortfolioStore {
     }
 
     func clearAIAnalysisHistory() throws {
+        guard requireLiveModeIfNeeded(for: .aiInsights) else { return }
         guard !isAIAnalysisGenerationInFlight, !isAnsweringAIAnalysisFollowUp else {
             throw PositionRepositoryError.database("智能分析正在运行，请稍后再清空历史")
         }
@@ -2335,6 +2631,7 @@ final class PortfolioStore {
     }
 
     func submitAIAnalysisFollowUp(_ question: String) {
+        guard requireLiveModeIfNeeded(for: .aiInsights) else { return }
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAnsweringAIAnalysisFollowUp, !isAIAnalysisGenerationInFlight else { return }
         pruneAIAnalysisChatHistory()
@@ -2682,6 +2979,7 @@ final class PortfolioStore {
     }
 
     func refreshPosition(id: Position.ID) {
+        guard requireLiveModeIfNeeded(for: .refreshQuotes) else { return }
         guard !refreshingPositionIDs.contains(id),
               let position = positions.first(where: { $0.id == id }),
               MarketDataAdapter.supportsQuote(for: position) else { return }
@@ -2715,6 +3013,7 @@ final class PortfolioStore {
     }
 
     func saveRiskProfile(_ draft: RiskProfileDraft, now: Date = .now) {
+        guard requireLiveModeIfNeeded(for: .saveRiskProfile) else { return }
         riskLevel = draft.tier.rawValue
         riskProfileConfigured = true
         positionLimit = min(max(draft.positionLimit, 0), 100)
@@ -2733,7 +3032,9 @@ final class PortfolioStore {
 
     func requestSidebarNavigation(to target: SidebarSection) {
         guard selection != target else { return }
-        if selection == .riskProfile, unsavedRiskProfileDraft != nil {
+        if isDemoMode {
+            unsavedRiskProfileDraft = nil
+        } else if selection == .riskProfile, unsavedRiskProfileDraft != nil {
             pendingSidebarSelection = target
             return
         }
@@ -2777,6 +3078,7 @@ final class PortfolioStore {
     }
 
     func openAIReviewForRiskProfile(prompt: String) {
+        guard requireLiveModeIfNeeded(for: .aiInsights) else { return }
         selection = .report
         guard aiConfiguration.isEnabled, !isAnsweringAIAnalysisFollowUp else { return }
         startNewAIChatThread()
@@ -3596,6 +3898,14 @@ final class PortfolioStore {
     }
 
     var investmentDistributionItems: [InvestmentDistributionItem] {
+        if isDemoMode {
+            let demoAssets = DemoPortfolio.investmentDistributionAssets(for: positions)
+            return InvestmentDistributionEngine.items(
+                positions: positions,
+                assets: demoAssets,
+                usesUnclassifiedFallback: false
+            )
+        }
         let assets = usableInvestmentDistributionAssets
         return InvestmentDistributionEngine.items(positions: positions, assets: assets, usesUnclassifiedFallback: canAnalyzeInvestmentDistribution)
     }
@@ -3639,6 +3949,10 @@ final class PortfolioStore {
     }
 
     func refreshInvestmentDistributionIfNeeded(force: Bool = false) {
+        guard !isDemoMode else {
+            cancelInvestmentDistributionUpdate()
+            return
+        }
         scheduledDistributionRefresh?.cancel()
         scheduledDistributionRefresh = nil
         refreshProviderCredentialState()
@@ -3746,7 +4060,7 @@ final class PortfolioStore {
     }
 
     func synchronizePersistedMarketDataIfNeeded() {
-        guard let positionRepository, !isRefreshing else { return }
+        guard !isDemoMode, let positionRepository, !isRefreshing else { return }
         do {
             let persistedPositions = try positionRepository.fetchPositions()
             guard Self.marketDataFingerprint(persistedPositions) != Self.marketDataFingerprint(positions) else {

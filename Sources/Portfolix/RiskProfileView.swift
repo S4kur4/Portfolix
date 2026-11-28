@@ -110,6 +110,9 @@ struct RiskProfileView: View {
                 syncDraftFromStoreWithoutAnimation()
             }
         }
+        .onChange(of: store.isDemoMode) { _, _ in
+            syncDraftFromStoreWithoutAnimation()
+        }
         .onChange(of: draft) { _, newValue in
             guard hasLoadedDraft else { return }
             store.unsavedRiskProfileDraft = (newValue != savedDraft) ? newValue : nil
@@ -177,6 +180,7 @@ struct RiskProfileView: View {
 
             if store.aiConfiguration.isEnabled && evaluation.hasPositions {
                 Button {
+                    guard store.requireLiveModeIfNeeded(for: .aiInsights) else { return }
                     if isDirty || !store.riskProfileConfigured {
                         store.saveRiskProfile(draft)
                     }
@@ -221,6 +225,7 @@ struct RiskProfileView: View {
     }
 
     private func saveChanges() {
+        guard store.requireLiveModeIfNeeded(for: .saveRiskProfile) else { return }
         store.persistenceErrorMessage = nil
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             store.saveRiskProfile(draft)

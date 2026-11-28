@@ -125,6 +125,20 @@ struct RootView: View {
                 language: store.appLanguage
             ))
         }
+        .alert(
+            store.demoModeActionPrompt?.title ?? "",
+            isPresented: demoModePromptAlertPresented,
+            presenting: store.demoModeActionPrompt
+        ) { prompt in
+            Button(prompt.confirmTitle) {
+                store.confirmExitDemoModeAction()
+            }
+            Button(localizedText("继续浏览", "Cancel", language: store.appLanguage), role: .cancel) {
+                store.dismissDemoModeActionPrompt()
+            }
+        } message: { prompt in
+            Text(prompt.message)
+        }
         .task {
             await store.refreshPricesOnLaunchIfNeeded()
         }
@@ -236,6 +250,17 @@ struct RootView: View {
             set: { isPresented in
                 if !isPresented {
                     store.cancelPendingSidebarNavigation()
+                }
+            }
+        )
+    }
+
+    private var demoModePromptAlertPresented: Binding<Bool> {
+        Binding(
+            get: { store.demoModeActionPrompt != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.dismissDemoModeActionPrompt()
                 }
             }
         )

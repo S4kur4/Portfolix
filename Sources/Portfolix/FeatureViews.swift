@@ -23,13 +23,17 @@ struct PositionsView: View {
             PageHeader(title: localizedText("持仓明细", "Holdings", language: store.appLanguage)) {
                 HStack(spacing: PortfolixSpacing.sm) {
                     if !showsClosedPositions {
-                        Button { pendingReconciliation = reductionTarget } label: {
+                        Button {
+                            guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
+                            pendingReconciliation = reductionTarget
+                        } label: {
                             Label(localizedText("更新持仓", "Update Holding", language: store.appLanguage), systemImage: "equal.circle")
                         }
                         .buttonStyle(QuietButtonStyle())
                         .disabled(reductionTarget == nil)
 
                         Button {
+                            guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
                             guard let target = reductionTarget else { return }
                             if target.category == .cash { pendingCashReduction = target }
                             else { pendingClosure = target }
@@ -294,15 +298,24 @@ struct PositionsView: View {
                 }
 
                 if let position = store.positions.first(where: { $0.id == positionID }) {
-                    Button { pendingReconciliation = position } label: {
+                    Button {
+                        guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
+                        pendingReconciliation = position
+                    } label: {
                         Label(localizedText(position.category == .cash ? "更新余额" : "更新持仓", "Update Balance", language: store.appLanguage), systemImage: "equal.circle")
                     }
                     if position.category == .cash {
-                        Button { pendingCashReduction = position } label: {
+                        Button {
+                            guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
+                            pendingCashReduction = position
+                        } label: {
                             Label(localizedText("转出现金", "Cash Out", language: store.appLanguage), systemImage: "minus.circle")
                         }
                     } else {
-                        Button { pendingClosure = position } label: {
+                        Button {
+                            guard store.requireLiveModeIfNeeded(for: .modifyHolding) else { return }
+                            pendingClosure = position
+                        } label: {
                             Label(localizedText("卖出资产", "Sell Asset", language: store.appLanguage), systemImage: "arrow.down.right.circle")
                         }
                     }
@@ -1020,7 +1033,7 @@ private struct AIReportChatHeader: View {
         HStack(spacing: PortfolixSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(PortfolixTheme.brandGradient)
+                    .fill(PortfolixTheme.brandLogoGradient)
                 PortfolixBrandGlyph(size: 20)
             }
             .frame(width: 28, height: 28)
@@ -1133,7 +1146,7 @@ private struct AIReportAgentBubble<Content: View>: View {
         HStack(alignment: .top, spacing: PortfolixSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(PortfolixTheme.brandGradient)
+                    .fill(PortfolixTheme.brandLogoGradient)
                 PortfolixBrandGlyph(size: 20)
             }
                 .frame(width: 28, height: 28)
@@ -3907,13 +3920,33 @@ struct SettingsView: View {
                     ) { MCPAccessControls() }
                 }
 
-                SettingsSection(title: settingsText("数据备份", "Data Backup"), symbol: "externaldrive.badge.timemachine") {
+                SettingsSection(title: settingsText("数据管理", "Data Management"), symbol: "externaldrive.badge.timemachine") {
                     SettingsRow(title: settingsText("数据存储", "Data Storage")) {
                         PortfolixInlineStatusLabel(
                             title: settingsText("仅本地存储", "On this Mac only"),
                             symbol: "lock.shield.fill",
                             color: PortfolixTheme.gainText
                         )
+                    }
+                    SettingsDivider()
+                    SettingsRow(
+                        title: settingsText("演示模式", "Demo Mode"),
+                        helpText: settingsText(
+                            "开启后展示内置 30 天模拟组合用于体验与展示，不会修改你的真实账本数据。",
+                            "Shows a built-in 30-day simulated portfolio for exploration and demos without modifying your real ledger."
+                        ),
+                        helpPlacement: .trailing
+                    ) {
+                        Toggle(
+                            settingsText("演示模式", "Demo Mode"),
+                            isOn: Binding(
+                                get: { store.isDemoMode },
+                                set: { store.setDemoModeEnabled($0) }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityLabel(settingsText("演示模式", "Demo Mode"))
                     }
                     SettingsDivider()
                     SettingsRow(
@@ -3925,10 +3958,17 @@ struct SettingsView: View {
                         helpPlacement: .trailing
                     ) {
                         HStack(spacing: PortfolixSpacing.md) {
-                            DataTransferInlineStatusView(status: exportStatus)
+                            if store.isDemoMode {
+                                Text(settingsText("演示模式下不可导出", "Unavailable in Demo Mode"))
+                                    .font(PortfolixTypography.caption)
+                                    .foregroundStyle(PortfolixTheme.tertiary)
+                                    .lineLimit(1)
+                            } else {
+                                DataTransferInlineStatusView(status: exportStatus)
+                            }
                             Button(settingsText("导出备份", "Export Backup"), action: createDataExport)
                                 .buttonStyle(QuietButtonStyle())
-                                .disabled(exportStatus.isWorking)
+                                .disabled(store.isDemoMode || exportStatus.isWorking)
                         }
                     }
                     SettingsDivider()
@@ -4108,12 +4148,18 @@ struct SettingsView: View {
 
     private func importConfirmationMessage(_ summary: PortfolixDataTransferSummary) -> String {
         let counts = transferSummary(summary)
+        let demoNotice = store.isDemoMode
+            ? settingsText(
+                "确认导入后将自动关闭演示模式，并将备份写入你的个人账本。\n\n",
+                "Importing will turn off Demo Mode and restore this backup into your personal ledger.\n\n"
+            )
+            : ""
         let riskProfileNotice = summary.riskProfileIncluded
             ? settingsText("风险偏好将替换为备份中的设置。", "Risk preferences will be replaced with the settings in this backup.")
             : settingsText("此旧版备份不包含风险偏好，当前设置将保留。", "This legacy backup does not include risk preferences, so the current settings will be preserved.")
         return settingsText(
-            "\(counts)\n\n\(riskProfileNotice)同一资产或同一天的现有记录将被更新，其他现有数据不会删除。",
-            "\(counts)\n\n\(riskProfileNotice) Existing records for the same asset or date will be updated. Other existing data will not be deleted."
+            "\(demoNotice)\(counts)\n\n\(riskProfileNotice)同一资产或同一天的现有记录将被更新，其他现有数据不会删除。",
+            "\(demoNotice)\(counts)\n\n\(riskProfileNotice) Existing records for the same asset or date will be updated. Other existing data will not be deleted."
         )
     }
 

@@ -952,13 +952,14 @@ private struct PerformanceRiskCard: View {
                     .frame(maxHeight: .infinity)
 
                 HStack(alignment: .top, spacing: PortfolixSpacing.lg) {
+                    let hasMaxDrawdown = summary.maxDrawdownDate != nil && (data.points.count >= 2 || summary.maxDrawdownCNY != 0)
                     riskStatCell(
                         title: localizedText("最大回撤", "Max Drawdown", language: store.appLanguage),
-                        value: summary.maxDrawdownDate == nil ? "—" : moneyText(summary.maxDrawdownCNY),
-                        detail: maxDrawdownDetail(summary),
-                        color: summary.maxDrawdownDate == nil
-                            ? PortfolixTheme.tertiary
-                            : PortfolixTheme.performanceStatusText(for: Decimal(summary.maxDrawdownCNY), scheme: store.performanceColorScheme)
+                        value: hasMaxDrawdown ? moneyText(summary.maxDrawdownCNY) : "—",
+                        detail: hasMaxDrawdown ? maxDrawdownDetail(summary) : nil,
+                        color: hasMaxDrawdown
+                            ? PortfolixTheme.performanceStatusText(for: Decimal(summary.maxDrawdownCNY), scheme: store.performanceColorScheme)
+                            : PortfolixTheme.tertiary
                     )
                     riskStatCell(
                         title: localizedText("年化波动率", "Annualized Volatility", language: store.appLanguage),
@@ -2405,6 +2406,17 @@ private struct DailyProfitMonthCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .transition(.opacity)
+        } else if displayMode == .calendar {
+            Text(
+                store.dailyProfitHistory.isEmpty
+                    ? localizedText("次日同步后按日记录", "Tracked daily from next sync", language: store.appLanguage)
+                    : localizedText("该月暂无记录", "No records this month", language: store.appLanguage)
+            )
+            .font(PortfolixTypography.caption)
+            .foregroundStyle(PortfolixTheme.tertiary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .transition(.opacity)
         }
     }
 
@@ -2458,42 +2470,37 @@ private struct DailyProfitMonthCard: View {
             let rows = max((slots.count + 6) / 7, 1)
             let cellHeight = DailyProfitCalendarLayout.cellHeight(in: geometry.size.height, rows: rows)
 
-            if points.isEmpty {
-                DashboardEmptyState(title: emptyStateTitle)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            } else {
-                VStack(spacing: PortfolixLayout.dataTileSpacing) {
-                    LazyVGrid(columns: calendarColumns, spacing: 0) {
-                        ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
-                            Text(weekday)
-                                .font(PortfolixTypography.chartAxis)
-                                .foregroundStyle(PortfolixTheme.tertiary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: DailyProfitCalendarLayout.weekdayHeight)
-                        }
+            VStack(spacing: PortfolixLayout.dataTileSpacing) {
+                LazyVGrid(columns: calendarColumns, spacing: 0) {
+                    ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, weekday in
+                        Text(weekday)
+                            .font(PortfolixTypography.chartAxis)
+                            .foregroundStyle(PortfolixTheme.tertiary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: DailyProfitCalendarLayout.weekdayHeight)
                     }
+                }
 
-                    let todayStart = calendar.startOfDay(for: .now)
-                    LazyVGrid(columns: calendarColumns, spacing: PortfolixLayout.dataTileSpacing) {
-                        ForEach(slots) { slot in
-                            if let date = slot.date {
-                                calendarCell(for: date, height: cellHeight, todayStart: todayStart)
-                            } else {
-                                Color.clear
-                                    .frame(height: cellHeight)
-                            }
+                let todayStart = calendar.startOfDay(for: .now)
+                LazyVGrid(columns: calendarColumns, spacing: PortfolixLayout.dataTileSpacing) {
+                    ForEach(slots) { slot in
+                        if let date = slot.date {
+                            calendarCell(for: date, height: cellHeight, todayStart: todayStart)
+                        } else {
+                            Color.clear
+                                .frame(height: cellHeight)
                         }
                     }
                 }
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
-                .contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    switch phase {
-                    case let .active(location):
-                        updateHoveredDate(to: date(at: location, cellHeight: cellHeight, in: geometry.size, slots: slots))
-                    case .ended:
-                        hoveredDate = nil
-                    }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case let .active(location):
+                    updateHoveredDate(to: date(at: location, cellHeight: cellHeight, in: geometry.size, slots: slots))
+                case .ended:
+                    hoveredDate = nil
                 }
             }
         }
@@ -2697,8 +2704,8 @@ private struct DailyProfitMonthCard: View {
     private var emptyStateTitle: String {
         if store.dailyProfitHistory.isEmpty {
             return localizedText(
-                "首次同步行情后，将按日记录盈亏",
-                "Daily P&L begins after your first quote sync",
+                "次日同步行情后，将按日记录盈亏",
+                "Daily P&L starts recording from the next trading day",
                 language: store.appLanguage
             )
         }

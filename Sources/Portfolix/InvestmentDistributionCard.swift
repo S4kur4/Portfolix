@@ -3,52 +3,76 @@ import SwiftUI
 
 struct InvestmentCloudCard: View {
     @Environment(PortfolioStore.self) private var store
+    @State private var hasExplicitlySelectedDailyProfit = false
     var contentHeight: CGFloat = PortfolixLayout.dashboardHeroContentHeight
-    private var mode: InvestmentCloudMode { store.investmentCloudMode }
+
+    private func resolvedMode(asOf date: Date) -> InvestmentCloudMode {
+        guard store.investmentCloudMode == .dailyProfit else {
+            return store.investmentCloudMode
+        }
+        guard !hasExplicitlySelectedDailyProfit else {
+            return .dailyProfit
+        }
+        let hasDailyProfit = !store.investmentCloudDailyProfitItems(asOf: date).isEmpty
+        if !hasDailyProfit, !store.investmentDistributionItems.isEmpty {
+            return .distribution
+        }
+        return .dailyProfit
+    }
 
     var body: some View {
-        @Bindable var store = store
+        let initialMode = resolvedMode(asOf: .now)
+        let modeBinding = Binding<InvestmentCloudMode>(
+            get: { resolvedMode(asOf: .now) },
+            set: { newMode in
+                hasExplicitlySelectedDailyProfit = (newMode == .dailyProfit)
+                store.investmentCloudMode = newMode
+            }
+        )
 
         Panel {
             VStack(alignment: .leading, spacing: 0) {
                 InvestmentCloudHeader(
-                    mode: $store.investmentCloudMode, language: store.appLanguage,
+                    mode: modeBinding, language: store.appLanguage,
                     helpText: store.investmentDistributionHelpText,
-                    isUpdating: mode == .distribution && store.isUpdatingInvestmentDistribution
+                    isUpdating: initialMode == .distribution && store.isUpdatingInvestmentDistribution
                 )
                 Group {
-                    if mode == .dailyProfit {
+                    if store.investmentCloudMode == .dailyProfit {
                         TimelineView(.periodic(from: .now, by: 60)) { context in
-                            content(asOf: context.date)
+                            content(asOf: context.date, activeMode: resolvedMode(asOf: context.date))
                         }
                     } else {
-                        content(asOf: .now)
+                        content(asOf: .now, activeMode: .distribution)
                     }
                 }
                 .padding(.top, PortfolixSpacing.sm)
             }
             .frame(height: contentHeight, alignment: .topLeading)
         }
-        .task(id: mode == .distribution ? store.investmentDistributionRefreshID : "daily_profit") {
-            if mode == .distribution { store.refreshInvestmentDistributionIfNeeded() }
+        .onChange(of: store.isDemoMode) { _, _ in
+            hasExplicitlySelectedDailyProfit = false
+        }
+        .task(id: initialMode == .distribution ? store.investmentDistributionRefreshID : "daily_profit") {
+            if initialMode == .distribution { store.refreshInvestmentDistributionIfNeeded() }
         }
     }
 
-    @ViewBuilder private func content(asOf date: Date) -> some View {
-        let rawItems: [InvestmentCloudItem] = mode == .dailyProfit
+    @ViewBuilder private func content(asOf date: Date, activeMode: InvestmentCloudMode) -> some View {
+        let rawItems: [InvestmentCloudItem] = activeMode == .dailyProfit
             ? store.investmentCloudDailyProfitItems(asOf: date)
             : store.investmentDistributionItems.map(InvestmentCloudItem.init(distribution:))
         let weight: (InvestmentCloudItem) -> Double = {
-            InvestmentCloudEngine.displayWeight(for: $0, mode: mode)
+            InvestmentCloudEngine.displayWeight(for: $0, mode: activeMode)
         }
         let prepared = InvestmentCloudEngine.displayItems(
             rawItems,
             minimumShare: 0.02,
-            maximumItems: mode == .dailyProfit ? 12 : 8,
+            maximumItems: activeMode == .dailyProfit ? 12 : 8,
             weight: weight
         )
         if prepared.isEmpty {
-            Text(mode == .dailyProfit
+            Text(activeMode == .dailyProfit
                  ? localizedText("暂无今日盈亏", "No P&L for today", language: store.appLanguage)
                  : localizedText("暂无投资分布", "No investment distribution yet", language: store.appLanguage))
                 .font(PortfolixTypography.captionEmphasis)
@@ -59,12 +83,12 @@ struct InvestmentCloudCard: View {
                 items: prepared,
                 rawItems: rawItems,
                 weights: prepared.map(weight),
-                mode: mode,
+                mode: activeMode,
                 currency: store.displayCurrency,
                 language: store.appLanguage,
                 performanceColorScheme: store.performanceColorScheme
             )
-            .id(mode)
+            .id(activeMode)
         }
     }
 }

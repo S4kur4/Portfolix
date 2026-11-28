@@ -78,6 +78,7 @@ final class PositionRepository {
                 // Persist eligibility before the UI starts, including when a helper opens the file first.
                 if isNewDatabase && !hasExistingSchema {
                     try setAppSetting(key: StarterPortfolio.stateKey, value: "pending")
+                    try setAppSetting(key: DemoPortfolio.stateKey, value: "pending")
                 }
                 try execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
@@ -538,6 +539,8 @@ final class PositionRepository {
             let importedIDs = Set(importedIDMap.values.compactMap(UUID.init(uuidString:)))
             try saveStarterPositionIDs(starterPositionIDs().subtracting(importedIDs))
             try setAppSetting(key: StarterPortfolio.stateKey, value: "completed")
+            try setAppSetting(key: DemoPortfolio.stateKey, value: "completed")
+            try setAppSetting(key: DemoPortfolio.enabledKey, value: "false")
         }
 
         return PortfolixDataTransferSummary(
@@ -1791,6 +1794,54 @@ final class PositionRepository {
         defer { sqlite3_finalize(assetStatement) }
         try bind(positionID.uuidString, to: 1, in: assetStatement)
         try stepDone(assetStatement)
+    }
+
+    /// Returns whether the user's real SQLite ledger already contains any recorded holdings or history.
+    func hasRealLedgerData() throws -> Bool {
+        let statement = try prepare("""
+            SELECT 1 FROM assets UNION ALL SELECT 1 FROM position_revisions
+            UNION ALL SELECT 1 FROM portfolio_snapshots UNION ALL SELECT 1 FROM asset_price_snapshots
+            UNION ALL SELECT 1 FROM position_trades UNION ALL SELECT 1 FROM position_closures
+            UNION ALL SELECT 1 FROM position_opening_balances UNION ALL SELECT 1 FROM position_reconciliations
+            LIMIT 1
+            """)
+        defer { sqlite3_finalize(statement) }
+        let status = sqlite3_step(statement)
+        guard status == SQLITE_ROW || status == SQLITE_DONE else {
+            throw PositionRepositoryError.database(String(cString: sqlite3_errmsg(database)))
+        }
+        return status == SQLITE_ROW
+    }
+
+    /// Resolves whether Demo Mode should be active on app launch without ever writing demo rows into SQLite.
+    /// - Fresh brand-new installation with an empty ledger: enables Demo Mode by default.
+    /// - Empty ledger where Demo Mode was left enabled: keeps Demo Mode enabled across launches.
+    /// - Non-empty real ledger: always starts in live mode on cold launch so returning users never see stale demo data.
+    func resolveInitialDemoModeEnabled() throws -> Bool {
+        var shouldEnable = false
+        try transaction {
+            if try hasRealLedgerData() {
+                if try appSetting(for: DemoPortfolio.enabledKey) == "true" {
+                    try setAppSetting(key: DemoPortfolio.enabledKey, value: "false")
+                }
+                if try appSetting(for: DemoPortfolio.stateKey) == "pending" {
+                    try setAppSetting(key: DemoPortfolio.stateKey, value: "completed")
+                }
+                shouldEnable = false
+                return
+            }
+
+            let state = try appSetting(for: DemoPortfolio.stateKey)
+            if state == "pending" {
+                try setAppSetting(key: DemoPortfolio.stateKey, value: "initialized")
+                try setAppSetting(key: DemoPortfolio.enabledKey, value: "true")
+                try setAppSetting(key: StarterPortfolio.stateKey, value: "completed")
+                shouldEnable = true
+            } else {
+                shouldEnable = try appSetting(for: DemoPortfolio.enabledKey) == "true"
+            }
+        }
+        return shouldEnable
     }
 
     /// Called by the main app only. An empty existing ledger is never treated as a new installation.
